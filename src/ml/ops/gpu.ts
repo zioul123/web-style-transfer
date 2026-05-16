@@ -17,6 +17,21 @@ interface MseUniform {
 
 const WORKGROUP_SIZE = 64;
 
+function getSafeErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    try {
+      return error.message;
+    } catch {
+      return error.name;
+    }
+  }
+  try {
+    return String(error);
+  } catch {
+    return 'Unknown error';
+  }
+}
+
 class WebGPUOpsEngine {
   private devicePromise: Promise<GPUDevice> | null = null;
   private binaryPipelines = new Map<string, GPUComputePipeline>();
@@ -40,11 +55,10 @@ class WebGPUOpsEngine {
   private createBuffer(device: GPUDevice, data: Float32Array, usage: GPUBufferUsageFlags): GPUBuffer {
     const buffer = device.createBuffer({
       size: Math.max(4, data.byteLength),
-      usage,
-      mappedAtCreation: true
+      usage: usage | GPUBufferUsage.COPY_DST
     });
-    new Float32Array(buffer.getMappedRange()).set(data);
-    buffer.unmap();
+    const copy = new Float32Array(data);
+    device.queue.writeBuffer(buffer, 0, copy.buffer, copy.byteOffset, copy.byteLength);
     return buffer;
   }
 
@@ -70,7 +84,8 @@ class WebGPUOpsEngine {
     await device.queue.onSubmittedWorkDone();
     const validationError = await device.popErrorScope();
     if (validationError) {
-      throw new Error(`${label} failed: ${validationError.message}`);
+      const message = getSafeErrorMessage(validationError);
+      throw new Error(`${label} failed: ${message}`);
     }
   }
 
@@ -248,8 +263,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
     pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(Math.ceil(length / WORKGROUP_SIZE));
     pass.end();
-    device.queue.submit([encoder.finish()]);
-    await device.queue.onSubmittedWorkDone();
+    await this.submitAndValidate(device, encoder, 'clamp');
 
     const out = await this.readFloatArray(device, outBuffer, length);
     inBuffer.destroy(); outBuffer.destroy(); uniform.destroy();
@@ -349,7 +363,7 @@ async function withFallback<T>(operation: string, run: () => Promise<T>, fallbac
     lastExecutionMetaByOperation.set(operation, lastExecutionMeta);
     return result;
   } catch (error) {
-    lastExecutionMeta = { backend: 'cpu-fallback', operation, fallbackReason: String(error) };
+    lastExecutionMeta = { backend: 'cpu-fallback', operation, fallbackReason: getSafeErrorMessage(error) };
     lastExecutionMetaByOperation.set(operation, lastExecutionMeta);
     return fallback();
   }
