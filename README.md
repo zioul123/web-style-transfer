@@ -19,3 +19,7 @@ python python-reference/style-transfer.py
 ```
 
 This will generate a folder `./expt` with the outputs from style transfer.
+
+## WebGPU Port Planning
+
+See `docs/webgpu-style-transfer-plan.md` for a step-by-step breakdown of the minimal operations, lightweight manual backprop plan, and incremental verification tasks for the frontend WebGPU implementation.
