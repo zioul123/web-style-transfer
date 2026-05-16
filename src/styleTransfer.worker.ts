@@ -40,22 +40,25 @@ const initWebGpu = async (id: string): Promise<void> => {
 self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
   const payload = event.data
 
-  if (payload.type === 'ping') {
-    postResponse({ type: 'pong', id: payload.id, timestamp: Date.now() })
-    return
+  switch (payload.type) {
+    case 'ping': {
+      postResponse({ type: 'pong', id: payload.id, timestamp: Date.now() })
+      break
+    }
+    case 'init-webgpu': {
+      void initWebGpu(payload.id).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : 'Unknown worker error'
+        postResponse({ type: 'error', id: payload.id, message })
+      })
+      break
+    }
+    default: {
+      const exhaustivenessCheck: never = payload
+      postResponse({
+        type: 'error',
+        id: 'unknown',
+        message: `Received unsupported message type: ${String(exhaustivenessCheck)}`,
+      })
+    }
   }
-
-  if (payload.type === 'init-webgpu') {
-    void initWebGpu(payload.id).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : 'Unknown worker error'
-      postResponse({ type: 'error', id: payload.id, message })
-    })
-    return
-  }
-
-  postResponse({
-    type: 'error',
-    id: 'unknown',
-    message: 'Received unsupported message type.',
-  })
 }

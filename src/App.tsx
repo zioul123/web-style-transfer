@@ -16,18 +16,24 @@ function App() {
 
     const handleMessage = (event: MessageEvent<WorkerResponse>): void => {
       const payload = event.data
-      if (payload.type === 'pong') {
-        setWorkerStatus(`Worker responded to ping at ${new Date(payload.timestamp).toISOString()}.`)
-        return
-      }
 
-      if (payload.type === 'webgpu-init-result') {
-        setWebGpuStatus(payload.ok ? payload.message : `WebGPU fallback: ${payload.message}`)
-        return
-      }
-
-      if (payload.type === 'error') {
-        setWebGpuStatus(`WebGPU fallback: ${payload.message}`)
+      switch (payload.type) {
+        case 'pong': {
+          setWorkerStatus(`Worker responded to ping at ${new Date(payload.timestamp).toISOString()}.`)
+          break
+        }
+        case 'webgpu-init-result': {
+          setWebGpuStatus(payload.ok ? payload.message : `WebGPU fallback: ${payload.message}`)
+          break
+        }
+        case 'error': {
+          setWebGpuStatus(`WebGPU fallback: ${payload.message}`)
+          break
+        }
+        default: {
+          const exhaustivenessCheck: never = payload
+          setWebGpuStatus(`WebGPU fallback: Unhandled worker message: ${String(exhaustivenessCheck)}`)
+        }
       }
     }
 
