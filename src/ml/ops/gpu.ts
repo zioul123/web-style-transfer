@@ -56,6 +56,7 @@ class WebGPUOpsEngine {
     const encoder = device.createCommandEncoder();
     encoder.copyBufferToBuffer(buffer, 0, readBuffer, 0, Math.max(4, length * 4));
     device.queue.submit([encoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
     await readBuffer.mapAsync(GPUMapMode.READ);
     const copy = new Float32Array(readBuffer.getMappedRange().slice(0));
     readBuffer.unmap();
@@ -202,6 +203,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
     pass.dispatchWorkgroups(Math.ceil(length / WORKGROUP_SIZE));
     pass.end();
     device.queue.submit([encoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
 
     const out = await this.readFloatArray(device, outBuffer, length);
     aBuffer.destroy(); bBuffer.destroy(); outBuffer.destroy(); uniform.destroy();
@@ -238,6 +240,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
     pass.dispatchWorkgroups(Math.ceil(length / WORKGROUP_SIZE));
     pass.end();
     device.queue.submit([encoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
 
     const out = await this.readFloatArray(device, outBuffer, length);
     inBuffer.destroy(); outBuffer.destroy(); uniform.destroy();
@@ -275,6 +278,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
       pass.dispatchWorkgroups(Math.ceil(length / WORKGROUP_SIZE));
       pass.end();
       device.queue.submit([encoder.finish()]);
+      await device.queue.onSubmittedWorkDone();
     }
 
     let currentLength = length;
@@ -302,6 +306,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
       pass.dispatchWorkgroups(nextLength);
       pass.end();
       device.queue.submit([encoder.finish()]);
+      await device.queue.onSubmittedWorkDone();
 
       srcBuffer.destroy();
       reduceUniform.destroy();
