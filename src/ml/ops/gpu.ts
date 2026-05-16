@@ -317,19 +317,36 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
 
 const engine = new WebGPUOpsEngine();
 
-async function withFallback<T>(run: () => Promise<T>, fallback: () => T): Promise<T> {
+export type GPUBackend = 'webgpu' | 'cpu-fallback';
+
+export interface GPUExecutionMeta {
+  backend: GPUBackend;
+  operation: string;
+  fallbackReason?: string;
+}
+
+let lastExecutionMeta: GPUExecutionMeta | null = null;
+
+async function withFallback<T>(operation: string, run: () => Promise<T>, fallback: () => T): Promise<T> {
   try {
-    return await run();
-  } catch {
+    const result = await run();
+    lastExecutionMeta = { backend: 'webgpu', operation };
+    return result;
+  } catch (error) {
+    lastExecutionMeta = { backend: 'cpu-fallback', operation, fallbackReason: String(error) };
     return fallback();
   }
 }
 
+export function getLastGPUExecutionMeta(): GPUExecutionMeta | null {
+  return lastExecutionMeta;
+}
+
 export const gpuOps = {
-  add: async (a: Tensor, b: Tensor) => withFallback(() => engine.binaryOp('add', a, b), () => cpuOps.add(a, b)),
-  sub: async (a: Tensor, b: Tensor) => withFallback(() => engine.binaryOp('sub', a, b), () => cpuOps.sub(a, b)),
-  mul: async (a: Tensor, b: Tensor) => withFallback(() => engine.binaryOp('mul', a, b), () => cpuOps.mul(a, b)),
-  div: async (a: Tensor, b: Tensor) => withFallback(() => engine.binaryOp('div', a, b), () => cpuOps.div(a, b)),
-  clamp: async (a: Tensor, min = 0, max = 1) => withFallback(() => engine.clamp(a, min, max), () => cpuOps.clamp(a, min, max)),
-  mse: async (a: Tensor, b: Tensor) => withFallback(() => engine.mse(a, b), () => cpuOps.mse(a, b))
+  add: async (a: Tensor, b: Tensor) => withFallback('add', () => engine.binaryOp('add', a, b), () => cpuOps.add(a, b)),
+  sub: async (a: Tensor, b: Tensor) => withFallback('sub', () => engine.binaryOp('sub', a, b), () => cpuOps.sub(a, b)),
+  mul: async (a: Tensor, b: Tensor) => withFallback('mul', () => engine.binaryOp('mul', a, b), () => cpuOps.mul(a, b)),
+  div: async (a: Tensor, b: Tensor) => withFallback('div', () => engine.binaryOp('div', a, b), () => cpuOps.div(a, b)),
+  clamp: async (a: Tensor, min = 0, max = 1) => withFallback('clamp', () => engine.clamp(a, min, max), () => cpuOps.clamp(a, min, max)),
+  mse: async (a: Tensor, b: Tensor) => withFallback('mse', () => engine.mse(a, b), () => cpuOps.mse(a, b))
 };
