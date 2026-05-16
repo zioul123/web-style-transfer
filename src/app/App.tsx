@@ -3,8 +3,8 @@ import { createStyleTransferWorker } from '../features/style-transfer/workers/cl
 import { checkWebGPUSupport } from '../ml/webgpu/adapter';
 
 export function App() {
-  const [gpuStatus, setGpuStatus] = useState('Checking WebGPU support...');
-  const [workerStatus, setWorkerStatus] = useState('Worker not started');
+  const [gpuStatus, setGpuStatus] = useState<string>('Checking WebGPU support...');
+  const [workerStatus, setWorkerStatus] = useState<string>('Worker not started');
   const worker = useMemo(() => createStyleTransferWorker(), []);
 
   useEffect(() => {

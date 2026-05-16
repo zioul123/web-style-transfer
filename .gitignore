@@ -2,3 +2,5 @@
 expt
 __pycache__
 node_modules/
+dist/
+tsconfig.app.tsbuildinfo

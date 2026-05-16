@@ -8,7 +8,11 @@ export async function checkWebGPUSupport(): Promise<WebGPUStatus> {
   if (!('gpu' in navigator)) {
     return { supported: false, reason: 'WebGPU not available in this browser.' };
   }
-  const adapter = await navigator.gpu.requestAdapter();
+  const gpu = (navigator as Navigator & { gpu?: GPU }).gpu;
+  if (!gpu) {
+    return { supported: false, reason: 'WebGPU not available in this browser.' };
+  }
+  const adapter = await gpu.requestAdapter();
   if (!adapter) {
     return { supported: false, reason: 'No WebGPU adapter found.' };
   }
