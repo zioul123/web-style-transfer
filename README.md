@@ -53,25 +53,38 @@ This repository uses **two** JavaScript test layers:
     npm run test:unit
     ```
 
-- **EE/browser tests (Playwright)**
+- **E2E/browser tests (Playwright)**
   - Located in files that end in `*.spec.ts` under `tests/` (example: `tests/webgpu-ops.spec.ts`).
   - Purpose: validate real browser execution paths (including WebGPU behavior).
   - One-time browser install requirement:
 
     ```bash
-    npx playwright install
+    npx playwright install chromium
     ```
 
-  - Run EE tests:
+  - On Linux/container environments, install required shared libraries if browser launch fails:
 
     ```bash
-    npm run test:ee
+    npx playwright install-deps chromium
+    ```
+
+  - Run all Playwright tests:
+
+    ```bash
+    npm run test:e2e
+    ```
+
+  - Run the dedicated SwiftShader WebGPU parity test:
+
+    ```bash
+    npm run test:e2e:swiftshader
     ```
 
 ### Which test command should I run?
 
 - Use `npm run test:unit` during quick iteration on math/core logic.
-- Use `npm run test:ee` when changing browser/runtime/WebGPU behavior.
+- Use `npm run test:e2e` when changing browser/runtime/WebGPU behavior.
+- Use `npm run test:e2e:swiftshader` when debugging GPU kernel parity specifically.
 - Use `npm test` to run both suites together before opening or updating a PR.
 
 ## Repository Orientation (for developers and future AI sessions)

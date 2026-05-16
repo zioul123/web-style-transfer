@@ -55,12 +55,23 @@ class WebGPUOpsEngine {
     });
     const encoder = device.createCommandEncoder();
     encoder.copyBufferToBuffer(buffer, 0, readBuffer, 0, Math.max(4, length * 4));
-    device.queue.submit([encoder.finish()]);
+    await this.submitAndValidate(device, encoder, 'readFloatArray copy');
     await readBuffer.mapAsync(GPUMapMode.READ);
     const copy = new Float32Array(readBuffer.getMappedRange().slice(0));
     readBuffer.unmap();
     readBuffer.destroy();
     return copy;
+  }
+
+
+  private async submitAndValidate(device: GPUDevice, encoder: GPUCommandEncoder, label: string): Promise<void> {
+    device.pushErrorScope('validation');
+    device.queue.submit([encoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    const validationError = await device.popErrorScope();
+    if (validationError) {
+      throw new Error(`${label} failed: ${validationError.message}`);
+    }
   }
 
   private getBinaryPipeline(device: GPUDevice, op: 'add' | 'sub' | 'mul' | 'div'): GPUComputePipeline {
@@ -181,9 +192,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
     const aBuffer = this.createBuffer(device, a.data, GPUBufferUsage.STORAGE);
     const bBuffer = this.createBuffer(device, b.data, GPUBufferUsage.STORAGE);
     const outBuffer = device.createBuffer({ size: Math.max(4, length * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-    const uniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM, mappedAtCreation: true });
-    new Uint32Array(uniform.getMappedRange())[0] = ( { length } as BinaryUniform).length;
-    uniform.unmap();
+    const uniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const uniformData = new Uint32Array(4);
+    uniformData[0] = ({ length } as BinaryUniform).length;
+    device.queue.writeBuffer(uniform, 0, uniformData);
 
     const bindGroup = device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
@@ -201,7 +213,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
     pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(Math.ceil(length / WORKGROUP_SIZE));
     pass.end();
-    device.queue.submit([encoder.finish()]);
+    await this.submitAndValidate(device, encoder, `binaryOp:${op}`);
 
     const out = await this.readFloatArray(device, outBuffer, length);
     aBuffer.destroy(); bBuffer.destroy(); outBuffer.destroy(); uniform.destroy();
@@ -214,13 +226,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
     const length = a.data.length;
     const inBuffer = this.createBuffer(device, a.data, GPUBufferUsage.STORAGE);
     const outBuffer = device.createBuffer({ size: Math.max(4, length * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-    const uniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM, mappedAtCreation: true });
+    const uniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const uniformData = new ArrayBuffer(16);
     new Uint32Array(uniformData)[0] = ({ length, min, max } as ClampUniform).length;
     new Float32Array(uniformData)[1] = min;
     new Float32Array(uniformData)[2] = max;
-    new Uint8Array(uniform.getMappedRange()).set(new Uint8Array(uniformData));
-    uniform.unmap();
+    device.queue.writeBuffer(uniform, 0, uniformData);
 
     const bindGroup = device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
@@ -238,6 +249,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
     pass.dispatchWorkgroups(Math.ceil(length / WORKGROUP_SIZE));
     pass.end();
     device.queue.submit([encoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
 
     const out = await this.readFloatArray(device, outBuffer, length);
     inBuffer.destroy(); outBuffer.destroy(); uniform.destroy();
@@ -252,9 +264,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
     let srcBuffer = device.createBuffer({ size: Math.max(4, length * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     const aBuffer = this.createBuffer(device, a.data, GPUBufferUsage.STORAGE);
     const bBuffer = this.createBuffer(device, b.data, GPUBufferUsage.STORAGE);
-    const diffUniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM, mappedAtCreation: true });
-    new Uint32Array(diffUniform.getMappedRange())[0] = ({ length } as MseUniform).length;
-    diffUniform.unmap();
+    const diffUniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const diffUniformData = new Uint32Array(4);
+    diffUniformData[0] = ({ length } as MseUniform).length;
+    device.queue.writeBuffer(diffUniform, 0, diffUniformData);
 
     const diffPipeline = this.getMseDiffPipeline(device);
     const diffBind = device.createBindGroup({
@@ -274,7 +287,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
       pass.setBindGroup(0, diffBind);
       pass.dispatchWorkgroups(Math.ceil(length / WORKGROUP_SIZE));
       pass.end();
-      device.queue.submit([encoder.finish()]);
+      await this.submitAndValidate(device, encoder, 'mse diff');
     }
 
     let currentLength = length;
@@ -282,9 +295,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
     while (currentLength > 1) {
       const nextLength = Math.ceil(currentLength / WORKGROUP_SIZE);
       const dstBuffer = device.createBuffer({ size: Math.max(4, nextLength * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-      const reduceUniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM, mappedAtCreation: true });
-      new Uint32Array(reduceUniform.getMappedRange())[0] = currentLength;
-      reduceUniform.unmap();
+      const reduceUniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      const reduceUniformData = new Uint32Array(4);
+      reduceUniformData[0] = currentLength;
+      device.queue.writeBuffer(reduceUniform, 0, reduceUniformData);
 
       const reduceBind = device.createBindGroup({
         layout: reducePipeline.getBindGroupLayout(0),
@@ -301,7 +315,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
       pass.setBindGroup(0, reduceBind);
       pass.dispatchWorkgroups(nextLength);
       pass.end();
-      device.queue.submit([encoder.finish()]);
+      await this.submitAndValidate(device, encoder, 'mse reduce');
 
       srcBuffer.destroy();
       reduceUniform.destroy();
@@ -326,19 +340,25 @@ export interface GPUExecutionMeta {
 }
 
 let lastExecutionMeta: GPUExecutionMeta | null = null;
+const lastExecutionMetaByOperation = new Map<string, GPUExecutionMeta>();
 
 async function withFallback<T>(operation: string, run: () => Promise<T>, fallback: () => T): Promise<T> {
   try {
     const result = await run();
     lastExecutionMeta = { backend: 'webgpu', operation };
+    lastExecutionMetaByOperation.set(operation, lastExecutionMeta);
     return result;
   } catch (error) {
     lastExecutionMeta = { backend: 'cpu-fallback', operation, fallbackReason: String(error) };
+    lastExecutionMetaByOperation.set(operation, lastExecutionMeta);
     return fallback();
   }
 }
 
-export function getLastGPUExecutionMeta(): GPUExecutionMeta | null {
+export function getLastGPUExecutionMeta(operation?: string): GPUExecutionMeta | null {
+  if (operation) {
+    return lastExecutionMetaByOperation.get(operation) ?? null;
+  }
   return lastExecutionMeta;
 }
 

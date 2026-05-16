@@ -1,9 +1,21 @@
 import { expect, test } from '@playwright/test';
 
-test('webgpu ops execute on webgpu backend with swiftshader', async ({ page }) => {
-  await page.goto('/');
+type OpComparisonResult = {
+  addCpuData: number[];
+  addGpuData: number[];
+  addMeta?: { backend?: string; fallbackReason?: string };
 
-  const result = await page.evaluate(async () => {
+  firstAddMismatch?: { cpu: number; gpu: number; index: number };
+  mseCpu: number;
+  mseGpu: number;
+  mseMeta?: { backend?: string; fallbackReason?: string };
+  mseTolerance: number;
+};
+
+test('webgpu ops execute on webgpu backend with swiftshader', async ({ page }) => {
+  await page.goto('/test-harness.html');
+
+  const result = await page.evaluate(async (): Promise<OpComparisonResult> => {
     const { Tensor } = await import('/src/ml/core/tensor.ts');
     const { cpuOps } = await import('/src/ml/ops/cpu.ts');
     const { gpuOps, getLastGPUExecutionMeta } = await import('/src/ml/ops/gpu.ts');
@@ -14,22 +26,62 @@ test('webgpu ops execute on webgpu backend with swiftshader', async ({ page }) =
 
     const addGpu = await gpuOps.add(a, b);
     const addCpu = cpuOps.add(a, b);
-    const addMeta = getLastGPUExecutionMeta();
+    const addMeta = getLastGPUExecutionMeta('add');
 
     const mseGpu = await gpuOps.mse(a, b);
     const mseCpu = cpuOps.mse(a, b);
-    const mseMeta = getLastGPUExecutionMeta();
+    const mseMeta = getLastGPUExecutionMeta('mse');
+
+    const addGpuData: number[] = Array.from(addGpu.data);
+    const addCpuData: number[] = Array.from(addCpu.data);
+    const firstAddMismatch = addGpuData.reduce<{ cpu: number; gpu: number; index: number } | undefined>(
+      (mismatch, gpuValue, index) => {
+        if (mismatch) {
+          return mismatch;
+        }
+        const cpuValue = addCpuData[index];
+        return gpuValue === cpuValue
+          ? undefined
+          : {
+              cpu: cpuValue,
+              gpu: gpuValue,
+              index
+            };
+      },
+      undefined
+    );
 
     return {
-      addEqual: Array.from(addGpu.data).every((value, index) => value === addCpu.data[index]),
+      addCpuData,
+      addGpuData,
       addMeta,
-      mseEqual: Math.abs(mseGpu - mseCpu) < 1e-6,
-      mseMeta
+      firstAddMismatch,
+      mseCpu,
+      mseGpu,
+      mseMeta,
+      mseTolerance: 1e-6
     };
   });
 
-  expect(result.addEqual).toBe(true);
-  expect(result.mseEqual).toBe(true);
-  expect(result.addMeta?.backend).toBe('webgpu');
-  expect(result.mseMeta?.backend).toBe('webgpu');
+  expect(
+    result.firstAddMismatch,
+    result.firstAddMismatch
+      ? `GPU add mismatch at index ${result.firstAddMismatch.index}: gpu=${result.firstAddMismatch.gpu}, cpu=${result.firstAddMismatch.cpu}. GPU output=${JSON.stringify(result.addGpuData)}, CPU output=${JSON.stringify(result.addCpuData)}`
+      : `GPU add unexpectedly reported mismatch without mismatch detail. GPU output=${JSON.stringify(result.addGpuData)}, CPU output=${JSON.stringify(result.addCpuData)}`
+  ).toBeUndefined();
+
+  const mseDelta = Math.abs(result.mseGpu - result.mseCpu);
+  expect(
+    mseDelta,
+    `GPU mse mismatch: gpu=${result.mseGpu}, cpu=${result.mseCpu}, |delta|=${mseDelta}, tolerance=${result.mseTolerance}`
+  ).toBeLessThanOrEqual(result.mseTolerance);
+
+  expect(
+    result.addMeta?.backend,
+    `Expected add to run on webgpu but got ${result.addMeta?.backend}. Reason: ${result.addMeta?.fallbackReason ?? 'n/a'}`
+  ).toBe('webgpu');
+  expect(
+    result.mseMeta?.backend,
+    `Expected mse to run on webgpu but got ${result.mseMeta?.backend}. Reason: ${result.mseMeta?.fallbackReason ?? 'n/a'}`
+  ).toBe('webgpu');
 });
