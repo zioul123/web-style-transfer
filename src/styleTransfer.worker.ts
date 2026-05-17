@@ -127,17 +127,15 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
         try {
           const a = createTensor(payload.a.shape, payload.a.values)
           if (payload.op === 'mse') {
-            if (payload.b === undefined) throw new Error('MSE requires tensor b.')
             const b = createTensor(payload.b.shape, payload.b.values)
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: cpuMse(a, b) })
             return
           }
           if (payload.op === 'clamp') {
-            const v = await runClamp(a.values, payload.clampMin ?? 0, payload.clampMax ?? 1)
+            const v = await runClamp(a.values, payload.clampMin, payload.clampMax)
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(v) })
             return
           }
-          if (payload.b === undefined) throw new Error(`${payload.op} requires tensor b.`)
           const b = createTensor(payload.b.shape, payload.b.values)
           const v = await runBinaryOp(payload.op, a.values, b.values)
           postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(v) })
