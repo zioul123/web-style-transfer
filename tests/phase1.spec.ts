@@ -21,6 +21,11 @@ type Phase1EvaluateResult = {
   mse: WorkerResponse
 }
 
+const makeWorkerMseTensor = (length: number): { shape: readonly [number, number, number, number]; values: number[] } => ({
+  shape: [1, 1, 1, length] as const,
+  values: Array.from({ length }, (_unused: unknown, index: number): number => ((index % 11) - 5) / 3),
+})
+
 test('phase 1 tensor roundtrip and ops parity', async ({ page }) => {
   await page.goto('/')
 
@@ -95,4 +100,62 @@ test('phase 1 tensor roundtrip and ops parity', async ({ page }) => {
   expect(result.div.values).toEqual(Array.from(cpuDiv(createTensor(shape, tensorValues), createTensor(shape, [2, 2, 2, 2])).values))
   expect(result.clamp.values).toEqual(Array.from(cpuClamp(createTensor(shape, [-1, 0.5, 1.5, 0.25]), 0, 1).values))
   expect(result.mse.scalar).toBeCloseTo(cpuMse(createTensor(shape, tensorValues), createTensor(shape, [1, 1, 1, 1])))
+})
+
+test('phase 1 mse GPU reduction parity for >64 lengths', async ({ page }) => {
+  await page.goto('/')
+
+  const mseLengths: readonly number[] = [64, 64 * 5, 64 * 5 + 1, 64 * 5 + 32, 64 * 5 + 63]
+
+  const phase1MseResult: { init: WorkerResponse; responses: Array<{ length: number; response: WorkerResponse }> } = await page.evaluate(async (lengths: readonly number[]) => {
+    const worker = new Worker(new URL('/src/styleTransfer.worker.ts', window.location.origin), { type: 'module' })
+    const ask = (payload: WorkerRequest): Promise<WorkerResponse> =>
+      new Promise((resolve) => {
+        const handler = (event: MessageEvent<WorkerResponse>): void => {
+          if (event.data.id === payload.id) {
+            worker.removeEventListener('message', handler)
+            resolve(event.data)
+          }
+        }
+        worker.addEventListener('message', handler)
+        worker.postMessage(payload)
+      })
+
+    const init = await ask({ type: 'init-webgpu', id: `${Date.now()}-mse-init` })
+    const responses: Array<{ length: number; response: WorkerResponse }> = []
+    for (const length of lengths) {
+      const aValues: number[] = Array.from({ length }, (_unused: unknown, index: number): number => ((index % 11) - 5) / 3)
+      const bValues: number[] = Array.from({ length }, (_unused: unknown, index: number): number => ((index % 7) - 3) / 2)
+      const response = await ask({
+        type: 'tensor-op',
+        id: `${Date.now()}-mse-${length}`,
+        op: 'mse',
+        a: { shape: [1, 1, 1, length] as const, values: aValues },
+        b: { shape: [1, 1, 1, length] as const, values: bValues },
+      })
+      responses.push({ length, response })
+    }
+
+    worker.terminate()
+    return { init, responses }
+  }, mseLengths)
+
+  expect(phase1MseResult.init.type).toBe('webgpu-init-result')
+  if (phase1MseResult.init.type !== 'webgpu-init-result') throw new Error('Expected webgpu-init-result')
+  expect(phase1MseResult.init.ok).toBeTruthy()
+
+  for (const result of phase1MseResult.responses) {
+    expect(result.response.type).toBe('tensor-op-result')
+    if (result.response.type !== 'tensor-op-result') throw new Error(`Expected tensor-op-result for length ${result.length}.`)
+    expect(isWorkerTensorScalarOpResponse(result.response)).toBeTruthy()
+    if (!isWorkerTensorScalarOpResponse(result.response)) throw new Error(`Expected scalar MSE response for length ${result.length}.`)
+
+    const aTensor = makeWorkerMseTensor(result.length)
+    const bTensor = {
+      shape: [1, 1, 1, result.length] as const,
+      values: Array.from({ length: result.length }, (_unused: unknown, index: number): number => ((index % 7) - 3) / 2),
+    }
+    const expectedMse: number = cpuMse(createTensor(aTensor.shape, aTensor.values), createTensor(bTensor.shape, bTensor.values))
+    expect(result.response.scalar).toBeCloseTo(expectedMse, 6)
+  }
 })
