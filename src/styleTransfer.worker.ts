@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 
 import type { WorkerRequest, WorkerResponse } from './types'
-import { createTensor, cpuMse } from './ml'
+import { createTensor } from './ml'
 
 let gpuDevice: GPUDevice | null = null
 
@@ -39,6 +39,50 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= ${count}u) { return; }
   out[i] = clamp(a[i], ${min}, ${max});
+}`
+
+const makeMseDiffShader = (count: number): string => `
+@group(0) @binding(0) var<storage, read> a: array<f32>;
+@group(0) @binding(1) var<storage, read> b: array<f32>;
+@group(0) @binding(2) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let d = a[i] - b[i];
+  out[i] = d * d;
+}`
+
+const makeReduceSumShader = (count: number): string => `
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+var<workgroup> cache: array<f32, 64>;
+@compute @workgroup_size(64)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>) {
+  let i = gid.x;
+  let localIndex = lid.x;
+  if (i < ${count}u) {
+    cache[localIndex] = inputValues[i];
+  } else {
+    cache[localIndex] = 0.0;
+  }
+  workgroupBarrier();
+
+  var step: u32 = 32u;
+  loop {
+    if (localIndex < step) {
+      cache[localIndex] = cache[localIndex] + cache[localIndex + step];
+    }
+    workgroupBarrier();
+    if (step == 1u) {
+      break;
+    }
+    step = step / 2u;
+  }
+
+  if (localIndex == 0u) {
+    out[wid.x] = cache[0];
+  }
 }`
 
 const postResponse = (response: WorkerResponse): void => {
@@ -120,6 +164,76 @@ const runClamp = async (a: Float32Array, min: number, max: number): Promise<Floa
   return arr
 }
 
+const runMse = async (a: Float32Array, b: Float32Array): Promise<number> => {
+  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
+  const device: GPUDevice = gpuDevice
+  const count: number = a.length
+  const bytes: number = count * 4
+
+  const aBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  const bBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  let currentBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_SRC })
+
+  device.queue.writeBuffer(aBuffer, 0, a)
+  device.queue.writeBuffer(bBuffer, 0, b)
+
+  const diffPipeline: GPUComputePipeline = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: makeMseDiffShader(count) }), entryPoint: 'main' } })
+  const diffBindGroup: GPUBindGroup = device.createBindGroup({
+    layout: diffPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: aBuffer } },
+      { binding: 1, resource: { buffer: bBuffer } },
+      { binding: 2, resource: { buffer: currentBuffer } },
+    ],
+  })
+
+  {
+    const encoder: GPUCommandEncoder = device.createCommandEncoder()
+    const pass: GPUComputePassEncoder = encoder.beginComputePass()
+    pass.setPipeline(diffPipeline)
+    pass.setBindGroup(0, diffBindGroup)
+    pass.dispatchWorkgroups(Math.ceil(count / 64))
+    pass.end()
+    device.queue.submit([encoder.finish()])
+  }
+
+  let currentCount: number = count
+  // Repeatedly reduce the squared-error buffer by summing each 64-value chunk into one output value.
+  // After each pass, `currentBuffer` holds a smaller partial-sum vector and `currentCount` shrinks to
+  // `ceil(previousCount / 64)`. When `currentCount` reaches 1, the single value is the total SSE.
+  while (currentCount > 1) {
+    const nextCount: number = Math.ceil(currentCount / 64)
+    const nextBytes: number = nextCount * 4
+    const nextBuffer: GPUBuffer = device.createBuffer({ size: nextBytes, usage: BUFFER_USAGE_STORAGE_COPY_SRC })
+    const reducePipeline: GPUComputePipeline = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: makeReduceSumShader(currentCount) }), entryPoint: 'main' } })
+    const reduceBindGroup: GPUBindGroup = device.createBindGroup({
+      layout: reducePipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: currentBuffer } },
+        { binding: 1, resource: { buffer: nextBuffer } },
+      ],
+    })
+    const encoder: GPUCommandEncoder = device.createCommandEncoder()
+    const pass: GPUComputePassEncoder = encoder.beginComputePass()
+    pass.setPipeline(reducePipeline)
+    pass.setBindGroup(0, reduceBindGroup)
+    pass.dispatchWorkgroups(nextCount)
+    pass.end()
+    device.queue.submit([encoder.finish()])
+    currentBuffer = nextBuffer
+    currentCount = nextCount
+  }
+
+  const readBuffer: GPUBuffer = device.createBuffer({ size: 4, usage: BUFFER_USAGE_MAP_READ_COPY_DST })
+  const encoder: GPUCommandEncoder = device.createCommandEncoder()
+  encoder.copyBufferToBuffer(currentBuffer, 0, readBuffer, 0, 4)
+  device.queue.submit([encoder.finish()])
+  await readBuffer.mapAsync(MAP_MODE_READ)
+  const sumSquaredError: number = new Float32Array(readBuffer.getMappedRange().slice(0))[0]
+  readBuffer.unmap()
+  return sumSquaredError / count
+}
+
 self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
   const payload: WorkerRequest = event.data
   switch (payload.type) {
@@ -144,7 +258,8 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
           const a = createTensor(payload.a.shape, payload.a.values)
           if (payload.op === 'mse') {
             const b = createTensor(payload.b.shape, payload.b.values)
-            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: cpuMse(a, b) })
+            const mse = await runMse(a.values, b.values)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: mse })
             return
           }
           if (payload.op === 'clamp') {
