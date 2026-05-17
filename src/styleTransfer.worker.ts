@@ -141,10 +141,7 @@ const runBinaryOp = async (op: 'add' | 'sub' | 'mul' | 'div', a: Float32Array, b
 
 const runScalarBinaryOp = async (op: 'add' | 'sub' | 'mul' | 'div', tensor: Float32Array, scalar: number, scalarOnLeft: boolean): Promise<Float32Array> => {
   const scalarTensor: Float32Array = new Float32Array([scalar])
-  if (scalarOnLeft) {
-    return runBinaryOp(op, tensor, scalarTensor, 'scalarTensor')
-  }
-  return runBinaryOp(op, tensor, scalarTensor, 'tensorScalar')
+  return runBinaryOp(op, tensor, scalarTensor, scalarOnLeft ? 'scalarTensor' : 'tensorScalar')
 }
 
 const getTensorFromOperand = (operand: WorkerTensorOperand): { ok: true; values: Float32Array } | { ok: false } => {
