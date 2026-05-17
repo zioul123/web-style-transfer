@@ -11,6 +11,7 @@ let gpuDevice: GPUDevice | null = null
 const BUFFER_USAGE_STORAGE_COPY_DST: number = 0x0080 | 0x0008
 const BUFFER_USAGE_STORAGE_COPY_SRC: number = 0x0080 | 0x0004
 const BUFFER_USAGE_MAP_READ_COPY_DST: number = 0x0001 | 0x0008
+const BUFFER_USAGE_UNIFORM_COPY_DST: number = 0x0040 | 0x0008
 const MAP_MODE_READ: number = 0x0001
 
 const BINARY_SHADER_SNIPPETS: Record<'add' | 'sub' | 'mul' | 'div', { tensorTensor: string; tensorScalar: string; scalarTensor: string }> = {
@@ -401,7 +402,7 @@ const runMaxPool2dForward = async (input: Float32Array, shape: readonly [number,
   const outWidth: number = Math.floor(inWidth / 2)
   const outCount: number = channels * outHeight * outWidth
   if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
-  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 5 * 4, usage: 0x0040 | 0x0008 })
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 5 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST })
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, inHeight, inWidth, outHeight, outWidth]))
   return runUnaryShader(makeMaxPool2dShader(outCount), input, outCount, [{ binding: 1, resource: { buffer: uniformBuffer } }])
 }
@@ -412,7 +413,7 @@ const runNormalizeForward = async (input: Float32Array, shape: readonly [number,
   if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
   const meanBuffer: GPUBuffer = gpuDevice.createBuffer({ size: channels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST })
   const stdBuffer: GPUBuffer = gpuDevice.createBuffer({ size: channels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST })
-  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 3 * 4, usage: 0x0040 | 0x0008 })
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 3 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST })
   gpuDevice.queue.writeBuffer(meanBuffer, 0, new Float32Array(mean))
   gpuDevice.queue.writeBuffer(stdBuffer, 0, new Float32Array(std))
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, shape[2], shape[3]]))
@@ -431,7 +432,7 @@ const runConv2dForward = async (input: Float32Array, inputShape: readonly [numbe
   const outCount: number = outChannels * height * width
   const weightBuffer: GPUBuffer = gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST })
   const biasBuffer: GPUBuffer = gpuDevice.createBuffer({ size: outChannels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST })
-  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: 0x0040 | 0x0008 })
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST })
   gpuDevice.queue.writeBuffer(weightBuffer, 0, weight)
   gpuDevice.queue.writeBuffer(biasBuffer, 0, new Float32Array(bias))
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]))
