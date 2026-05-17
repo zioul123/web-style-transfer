@@ -5,31 +5,40 @@ import {
   isWorkerTensorVectorOpResponse,
   type WorkerRequest,
   type WorkerResponse,
+  type WorkerTensor,
+  type WorkerTensorOperand,
 } from '../src/types'
 
 const shape = [1, 1, 2, 2] as const
 const tensorValues = [1, 2, 3, 4]
-
-type Phase1EvaluateResult = {
-  init: WorkerResponse
-  roundtrip: WorkerResponse
-  add: WorkerResponse
-  sub: WorkerResponse
-  mul: WorkerResponse
-  div: WorkerResponse
-  clamp: WorkerResponse
-  mse: WorkerResponse
-}
+const tensor: WorkerTensor = { shape, values: tensorValues }
+const tensorB: WorkerTensor = { shape, values: [5, 6, 7, 8] }
 
 const makeWorkerMseTensor = (length: number): { shape: readonly [number, number, number, number]; values: number[] } => ({
   shape: [1, 1, 1, length] as const,
   values: Array.from({ length }, (_unused: unknown, index: number): number => ((index % 11) - 5) / 3),
 })
 
-test('phase 1 tensor roundtrip and ops parity', async ({ page }) => {
+const expectVector = (response: WorkerResponse): number[] => {
+  expect(response.type).toBe('tensor-op-result')
+  if (response.type !== 'tensor-op-result') throw new Error('Expected tensor-op-result.')
+  expect(isWorkerTensorVectorOpResponse(response)).toBeTruthy()
+  if (!isWorkerTensorVectorOpResponse(response)) throw new Error('Expected vector response.')
+  return response.values
+}
+
+const expectError = (response: WorkerResponse): string => {
+  expect(response.type).toBe('tensor-op-result')
+  if (response.type !== 'tensor-op-result') throw new Error('Expected tensor-op-result.')
+  expect(response.ok).toBeFalsy()
+  if (response.ok) throw new Error('Expected error response.')
+  return response.message
+}
+
+test('phase 1 exhaustive scalar/tensor op coverage', async ({ page }) => {
   await page.goto('/')
 
-  const result: Phase1EvaluateResult = await page.evaluate(async () => {
+  const result = await page.evaluate(async ({ inputTensor, inputTensorB }) => {
     const worker = new Worker(new URL('/src/styleTransfer.worker.ts', window.location.origin), { type: 'module' })
 
     const ask = (payload: WorkerRequest): Promise<WorkerResponse> =>
@@ -44,62 +53,62 @@ test('phase 1 tensor roundtrip and ops parity', async ({ page }) => {
         worker.postMessage(payload)
       })
 
-    const workerShape = [1, 1, 2, 2] as const
-    const workerTensorValues = [1, 2, 3, 4]
-    const tensor = { shape: workerShape, values: workerTensorValues }
+    const tensorOperand: WorkerTensorOperand = { kind: 'tensor', tensor: inputTensor }
+    const tensorOperandB: WorkerTensorOperand = { kind: 'tensor', tensor: inputTensorB }
+    const scalarTwo: WorkerTensorOperand = { kind: 'scalar', scalar: 2 }
+    const scalarTen: WorkerTensorOperand = { kind: 'scalar', scalar: 10 }
 
     const init = await ask({ type: 'init-webgpu', id: `${Date.now()}-init` })
-    const roundtrip = await ask({ type: 'tensor-roundtrip', id: `${Date.now()}-rt`, tensor })
-    const add = await ask({ type: 'tensor-op', id: `${Date.now()}-add`, op: 'add', a: tensor, b: { shape: workerShape, values: [5, 6, 7, 8] } })
-    const sub = await ask({ type: 'tensor-op', id: `${Date.now()}-sub`, op: 'sub', a: tensor, b: { shape: workerShape, values: [1, 1, 1, 1] } })
-    const mul = await ask({ type: 'tensor-op', id: `${Date.now()}-mul`, op: 'mul', a: tensor, b: { shape: workerShape, values: [2, 2, 2, 2] } })
-    const div = await ask({ type: 'tensor-op', id: `${Date.now()}-div`, op: 'div', a: tensor, b: { shape: workerShape, values: [2, 2, 2, 2] } })
-    const clamp = await ask({ type: 'tensor-op', id: `${Date.now()}-clamp`, op: 'clamp', a: { shape: workerShape, values: [-1, 0.5, 1.5, 0.25] }, clampMin: 0, clampMax: 1 })
-    const mse = await ask({ type: 'tensor-op', id: `${Date.now()}-mse`, op: 'mse', a: tensor, b: { shape: workerShape, values: [1, 1, 1, 1] } })
+
+    const combos: Record<string, WorkerResponse> = {}
+    for (const op of ['add', 'sub', 'mul', 'div'] as const) {
+      combos[`${op}-tt`] = await ask({ type: 'tensor-op', id: `${Date.now()}-${op}-tt`, op, a: tensorOperand, b: tensorOperandB })
+      combos[`${op}-ts`] = await ask({ type: 'tensor-op', id: `${Date.now()}-${op}-ts`, op, a: tensorOperand, b: scalarTwo })
+      combos[`${op}-st`] = await ask({ type: 'tensor-op', id: `${Date.now()}-${op}-st`, op, a: scalarTen, b: tensorOperand })
+      combos[`${op}-ss`] = await ask({ type: 'tensor-op', id: `${Date.now()}-${op}-ss`, op, a: scalarTen, b: scalarTwo })
+    }
+
+    const mse_tt = await ask({ type: 'tensor-op', id: `${Date.now()}-mse-tt`, op: 'mse', a: tensorOperand, b: tensorOperandB })
+    const mse_ts = await ask({ type: 'tensor-op', id: `${Date.now()}-mse-ts`, op: 'mse', a: tensorOperand, b: scalarTwo })
+    const mse_st = await ask({ type: 'tensor-op', id: `${Date.now()}-mse-st`, op: 'mse', a: scalarTwo, b: tensorOperand })
+    const mse_ss = await ask({ type: 'tensor-op', id: `${Date.now()}-mse-ss`, op: 'mse', a: scalarTen, b: scalarTwo })
+
+    const clampTensor = await ask({ type: 'tensor-op', id: `${Date.now()}-clamp-t`, op: 'clamp', a: { kind: 'tensor', tensor: { shape: inputTensor.shape, values: [-1, 0.5, 1.5, 0.25] } }, clampMin: 0, clampMax: 1 })
+    const clampScalar = await ask({ type: 'tensor-op', id: `${Date.now()}-clamp-s`, op: 'clamp', a: { kind: 'scalar', scalar: 2.5 }, clampMin: 0, clampMax: 1 })
 
     worker.terminate()
-
-    return { init, roundtrip, add, sub, mul, div, clamp, mse }
-  })
+    return { init, combos, mse_tt, mse_ts, mse_st, mse_ss, clampTensor, clampScalar }
+  }, { inputTensor: tensor, inputTensorB: tensorB })
 
   expect(result.init.type).toBe('webgpu-init-result')
   if (result.init.type !== 'webgpu-init-result') throw new Error('Expected webgpu-init-result')
   expect(result.init.ok).toBeTruthy()
 
-  expect(result.roundtrip.type).toBe('tensor-roundtrip-result')
-  if (result.roundtrip.type !== 'tensor-roundtrip-result') throw new Error('Expected tensor-roundtrip-result')
-  expect(result.roundtrip.ok).toBeTruthy()
-  if (!result.roundtrip.ok) throw new Error(result.roundtrip.message)
-  expect(result.roundtrip.tensor.values).toEqual(tensorValues)
+  const opFns = { add: cpuAdd, sub: cpuSub, mul: cpuMul, div: cpuDiv }
+  for (const op of ['add', 'sub', 'mul', 'div'] as const) {
+    const tt = expectVector(result.combos[`${op}-tt`])
+    const ts = expectVector(result.combos[`${op}-ts`])
+    const st = expectVector(result.combos[`${op}-st`])
+    const ss = expectError(result.combos[`${op}-ss`])
 
+    expect(tt).toEqual(Array.from(opFns[op](createTensor(shape, tensorValues), createTensor(shape, tensorB.values)).values))
+    expect(ts).toEqual(Array.from(opFns[op](createTensor(shape, tensorValues), createTensor(shape, [2, 2, 2, 2])).values))
+    expect(st).toEqual(Array.from(opFns[op](createTensor(shape, [10, 10, 10, 10]), createTensor(shape, tensorValues)).values))
+    expect(ss).toContain('At least one operand must be a tensor')
+  }
 
-  if (result.add.type !== 'tensor-op-result') throw new Error('add must be tensor-op-result')
-  if (result.sub.type !== 'tensor-op-result') throw new Error('sub must be tensor-op-result')
-  if (result.mul.type !== 'tensor-op-result') throw new Error('mul must be tensor-op-result')
-  if (result.div.type !== 'tensor-op-result') throw new Error('div must be tensor-op-result')
-  if (result.clamp.type !== 'tensor-op-result') throw new Error('clamp must be tensor-op-result')
-  if (result.mse.type !== 'tensor-op-result') throw new Error('mse must be tensor-op-result')
+  expect(result.mse_tt.type).toBe('tensor-op-result')
+  if (result.mse_tt.type !== 'tensor-op-result') throw new Error('Expected tensor-op-result')
+  expect(isWorkerTensorScalarOpResponse(result.mse_tt)).toBeTruthy()
+  if (!isWorkerTensorScalarOpResponse(result.mse_tt)) throw new Error('Expected scalar MSE response')
+  expect(result.mse_tt.scalar).toBeCloseTo(cpuMse(createTensor(shape, tensorValues), createTensor(shape, tensorB.values)))
 
-  expect(isWorkerTensorVectorOpResponse(result.add)).toBeTruthy()
-  expect(isWorkerTensorVectorOpResponse(result.sub)).toBeTruthy()
-  expect(isWorkerTensorVectorOpResponse(result.mul)).toBeTruthy()
-  expect(isWorkerTensorVectorOpResponse(result.div)).toBeTruthy()
-  expect(isWorkerTensorVectorOpResponse(result.clamp)).toBeTruthy()
-  expect(isWorkerTensorScalarOpResponse(result.mse)).toBeTruthy()
+  expect(expectError(result.mse_ts)).toContain('MSE requires both operands to be tensors')
+  expect(expectError(result.mse_st)).toContain('MSE requires both operands to be tensors')
+  expect(expectError(result.mse_ss)).toContain('MSE requires both operands to be tensors')
 
-  if (!isWorkerTensorVectorOpResponse(result.add)) throw new Error('add must be vector response')
-  if (!isWorkerTensorVectorOpResponse(result.sub)) throw new Error('sub must be vector response')
-  if (!isWorkerTensorVectorOpResponse(result.mul)) throw new Error('mul must be vector response')
-  if (!isWorkerTensorVectorOpResponse(result.div)) throw new Error('div must be vector response')
-  if (!isWorkerTensorVectorOpResponse(result.clamp)) throw new Error('clamp must be vector response')
-  if (!isWorkerTensorScalarOpResponse(result.mse)) throw new Error('mse must be scalar response')
-
-  expect(result.add.values).toEqual(Array.from(cpuAdd(createTensor(shape, tensorValues), createTensor(shape, [5, 6, 7, 8])).values))
-  expect(result.sub.values).toEqual(Array.from(cpuSub(createTensor(shape, tensorValues), createTensor(shape, [1, 1, 1, 1])).values))
-  expect(result.mul.values).toEqual(Array.from(cpuMul(createTensor(shape, tensorValues), createTensor(shape, [2, 2, 2, 2])).values))
-  expect(result.div.values).toEqual(Array.from(cpuDiv(createTensor(shape, tensorValues), createTensor(shape, [2, 2, 2, 2])).values))
-  expect(result.clamp.values).toEqual(Array.from(cpuClamp(createTensor(shape, [-1, 0.5, 1.5, 0.25]), 0, 1).values))
-  expect(result.mse.scalar).toBeCloseTo(cpuMse(createTensor(shape, tensorValues), createTensor(shape, [1, 1, 1, 1])))
+  expect(expectVector(result.clampTensor)).toEqual(Array.from(cpuClamp(createTensor(shape, [-1, 0.5, 1.5, 0.25]), 0, 1).values))
+  expect(expectVector(result.clampScalar)).toEqual([1])
 })
 
 test('phase 1 mse GPU reduction parity for >64 lengths', async ({ page }) => {
@@ -130,8 +139,8 @@ test('phase 1 mse GPU reduction parity for >64 lengths', async ({ page }) => {
         type: 'tensor-op',
         id: `${Date.now()}-mse-${length}`,
         op: 'mse',
-        a: { shape: [1, 1, 1, length] as const, values: aValues },
-        b: { shape: [1, 1, 1, length] as const, values: bValues },
+        a: { kind: 'tensor', tensor: { shape: [1, 1, 1, length] as const, values: aValues } },
+        b: { kind: 'tensor', tensor: { shape: [1, 1, 1, length] as const, values: bValues } },
       })
       responses.push({ length, response })
     }

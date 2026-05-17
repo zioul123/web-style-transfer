@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import type { WorkerRequest, WorkerResponse } from './types'
+import type { WorkerRequest, WorkerResponse, WorkerTensorOperand } from './types'
 import { createTensor } from './ml'
 
 let gpuDevice: GPUDevice | null = null
@@ -13,14 +13,14 @@ const BUFFER_USAGE_STORAGE_COPY_SRC: number = 0x0080 | 0x0004
 const BUFFER_USAGE_MAP_READ_COPY_DST: number = 0x0001 | 0x0008
 const MAP_MODE_READ: number = 0x0001
 
-const BINARY_SHADER_SNIPPETS: Record<'add' | 'sub' | 'mul' | 'div', string> = {
-  add: 'out[i] = a[i] + b[i];',
-  sub: 'out[i] = a[i] - b[i];',
-  mul: 'out[i] = a[i] * b[i];',
-  div: 'out[i] = a[i] / b[i];',
+const BINARY_SHADER_SNIPPETS: Record<'add' | 'sub' | 'mul' | 'div', { tensorTensor: string; tensorScalar: string; scalarTensor: string }> = {
+  add: { tensorTensor: 'out[i] = a[i] + b[i];', tensorScalar: 'out[i] = a[i] + b[0];', scalarTensor: 'out[i] = b[0] + a[i];' },
+  sub: { tensorTensor: 'out[i] = a[i] - b[i];', tensorScalar: 'out[i] = a[i] - b[0];', scalarTensor: 'out[i] = b[0] - a[i];' },
+  mul: { tensorTensor: 'out[i] = a[i] * b[i];', tensorScalar: 'out[i] = a[i] * b[0];', scalarTensor: 'out[i] = b[0] * a[i];' },
+  div: { tensorTensor: 'out[i] = a[i] / b[i];', tensorScalar: 'out[i] = a[i] / b[0];', scalarTensor: 'out[i] = b[0] / a[i];' },
 }
 
-const makeBinaryOpShader = (op: 'add' | 'sub' | 'mul' | 'div', count: number): string => `
+const makeBinaryOpShader = (op: 'add' | 'sub' | 'mul' | 'div', count: number, mode: 'tensorTensor' | 'tensorScalar' | 'scalarTensor'): string => `
 @group(0) @binding(0) var<storage, read> a: array<f32>;
 @group(0) @binding(1) var<storage, read> b: array<f32>;
 @group(0) @binding(2) var<storage, read_write> out: array<f32>;
@@ -28,8 +28,9 @@ const makeBinaryOpShader = (op: 'add' | 'sub' | 'mul' | 'div', count: number): s
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= ${count}u) { return; }
-  ${BINARY_SHADER_SNIPPETS[op]}
+  ${BINARY_SHADER_SNIPPETS[op][mode]}
 }`
+
 
 const makeClampShader = (count: number, min: number, max: number): string => `
 @group(0) @binding(0) var<storage, read> a: array<f32>;
@@ -103,11 +104,11 @@ const initWebGpu = async (id: string): Promise<void> => {
   postResponse({ type: 'webgpu-init-result', id, ok: true, message: `WebGPU device initialized: ${gpuDevice.label || 'unnamed-device'}` })
 }
 
-const runBinaryOp = async (op: 'add' | 'sub' | 'mul' | 'div', a: Float32Array, b: Float32Array): Promise<Float32Array> => {
+const runBinaryOp = async (op: 'add' | 'sub' | 'mul' | 'div', a: Float32Array, b: Float32Array, mode: 'tensorTensor' | 'tensorScalar' | 'scalarTensor'): Promise<Float32Array> => {
   if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
   const device: GPUDevice = gpuDevice
   const count: number = a.length
-  const code: string = makeBinaryOpShader(op, count)
+  const code: string = makeBinaryOpShader(op, count, mode)
   const bytes: number = count * 4
   const aBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_DST })
   const bBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_DST })
@@ -136,6 +137,22 @@ const runBinaryOp = async (op: 'add' | 'sub' | 'mul' | 'div', a: Float32Array, b
   const arr: Float32Array = new Float32Array(readBuffer.getMappedRange().slice(0))
   readBuffer.unmap()
   return arr
+}
+
+const runScalarBinaryOp = async (op: 'add' | 'sub' | 'mul' | 'div', tensor: Float32Array, scalar: number, scalarOnLeft: boolean): Promise<Float32Array> => {
+  const scalarTensor: Float32Array = new Float32Array([scalar])
+  return runBinaryOp(op, tensor, scalarTensor, scalarOnLeft ? 'scalarTensor' : 'tensorScalar')
+}
+
+const getTensorFromOperand = (operand: WorkerTensorOperand): { ok: true; values: Float32Array } | { ok: false } => {
+  if (operand.kind !== 'tensor') return { ok: false }
+  const tensor = createTensor(operand.tensor.shape, operand.tensor.values)
+  return { ok: true, values: tensor.values }
+}
+
+const getValuesFromOperand = (operand: WorkerTensorOperand): Float32Array => {
+  if (operand.kind === 'scalar') return new Float32Array([operand.scalar])
+  return createTensor(operand.tensor.shape, operand.tensor.values).values
 }
 
 const runClamp = async (a: Float32Array, min: number, max: number): Promise<Float32Array> => {
@@ -255,20 +272,38 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
     case 'tensor-op': {
       void (async (): Promise<void> => {
         try {
-          const a = createTensor(payload.a.shape, payload.a.values)
           if (payload.op === 'mse') {
-            const b = createTensor(payload.b.shape, payload.b.values)
-            const mse = await runMse(a.values, b.values)
+            const aOperand = getTensorFromOperand(payload.a)
+            if (!aOperand.ok) throw new Error('MSE requires both operands to be tensors.')
+            const bOperand = getTensorFromOperand(payload.b)
+            if (!bOperand.ok) throw new Error('MSE requires both operands to be tensors.')
+            const mse = await runMse(aOperand.values, bOperand.values)
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: mse })
             return
           }
           if (payload.op === 'clamp') {
-            const v = await runClamp(a.values, payload.clampMin, payload.clampMax)
+            const v = await runClamp(getValuesFromOperand(payload.a), payload.clampMin, payload.clampMax)
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(v) })
             return
           }
-          const b = createTensor(payload.b.shape, payload.b.values)
-          const v = await runBinaryOp(payload.op, a.values, b.values)
+          if (payload.a.kind === 'scalar' && payload.b.kind === 'scalar') {
+            throw new Error('At least one operand must be a tensor for binary tensor ops.')
+          }
+          let v: Float32Array
+          if (payload.a.kind === 'tensor' && payload.b.kind === 'tensor') {
+            v = await runBinaryOp(
+              payload.op,
+              createTensor(payload.a.tensor.shape, payload.a.tensor.values).values,
+              createTensor(payload.b.tensor.shape, payload.b.tensor.values).values,
+              'tensorTensor',
+            )
+          } else if (payload.a.kind === 'tensor' && payload.b.kind === 'scalar') {
+            v = await runScalarBinaryOp(payload.op, createTensor(payload.a.tensor.shape, payload.a.tensor.values).values, payload.b.scalar, false)
+          } else if (payload.a.kind === 'scalar' && payload.b.kind === 'tensor') {
+            v = await runScalarBinaryOp(payload.op, createTensor(payload.b.tensor.shape, payload.b.tensor.values).values, payload.a.scalar, true)
+          } else {
+            throw new Error('At least one operand must be a tensor for binary tensor ops.')
+          }
           postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(v) })
         } catch (error: unknown) {
           postResponse({ type: 'tensor-op-result', id: payload.id, ok: false, message: error instanceof Error ? error.message : 'Tensor op failed.' })
