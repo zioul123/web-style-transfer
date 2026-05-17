@@ -30,6 +30,10 @@ function App() {
           setWebGpuStatus(`WebGPU fallback: ${payload.message}`)
           break
         }
+        case 'tensor-roundtrip-result':
+        case 'tensor-op-result': {
+          break
+        }
         default: {
           const exhaustivenessCheck: never = payload
           setWebGpuStatus(`WebGPU fallback: Unhandled worker message: ${String(exhaustivenessCheck)}`)
