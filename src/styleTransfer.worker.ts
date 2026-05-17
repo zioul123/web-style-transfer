@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 
 import type { WorkerRequest, WorkerResponse, WorkerTensorOperand } from './types'
-import { createTensor } from './ml'
+import { createTensor, cpuConv2dForward, cpuMaxPool2dForward, cpuNormalizeForward, cpuReluForward } from './ml'
 
 let gpuDevice: GPUDevice | null = null
 
@@ -85,6 +85,12 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(global_invocation
     out[wid.x] = cache[0];
   }
 }`
+
+
+const isBinaryTensorOpPayload = (
+  payload: WorkerRequest,
+): payload is { type: 'tensor-op'; id: string; op: 'add' | 'sub' | 'mul' | 'div'; a: WorkerTensorOperand; b: WorkerTensorOperand } =>
+  payload.type === 'tensor-op' && (payload.op === 'add' || payload.op === 'sub' || payload.op === 'mul' || payload.op === 'div')
 
 const postResponse = (response: WorkerResponse): void => {
   self.postMessage(response)
@@ -272,6 +278,33 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
     case 'tensor-op': {
       void (async (): Promise<void> => {
         try {
+
+          if (payload.op === 'conv2d-forward') {
+            const input = createTensor(payload.input.shape, payload.input.values)
+            const weight = createTensor(payload.weight.shape, payload.weight.values)
+            const output = cpuConv2dForward(input, weight, payload.bias)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output.values) })
+            return
+          }
+          if (payload.op === 'relu-forward') {
+            const input = createTensor(payload.input.shape, payload.input.values)
+            const output = cpuReluForward(input)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output.values) })
+            return
+          }
+          if (payload.op === 'maxpool2d-forward') {
+            const input = createTensor(payload.input.shape, payload.input.values)
+            const output = cpuMaxPool2dForward(input)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output.values) })
+            return
+          }
+          if (payload.op === 'normalize-forward') {
+            const input = createTensor(payload.input.shape, payload.input.values)
+            if (payload.mean === undefined || payload.std === undefined) throw new Error('normalize-forward requires mean and std arrays.')
+            const output = cpuNormalizeForward(input, payload.mean, payload.std)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output.values) })
+            return
+          }
           if (payload.op === 'mse') {
             const aOperand = getTensorFromOperand(payload.a)
             if (!aOperand.ok) throw new Error('MSE requires both operands to be tensors.')
@@ -285,6 +318,9 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
             const v = await runClamp(getValuesFromOperand(payload.a), payload.clampMin, payload.clampMax)
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(v) })
             return
+          }
+          if (!isBinaryTensorOpPayload(payload)) {
+            throw new Error(`Unsupported tensor op: ${payload.op}`)
           }
           if (payload.a.kind === 'scalar' && payload.b.kind === 'scalar') {
             throw new Error('At least one operand must be a tensor for binary tensor ops.')
