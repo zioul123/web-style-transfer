@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 
 import type { WorkerRequest, WorkerResponse, WorkerTensorOperand } from './types'
-import { createTensor, cpuConv2dForward, cpuMaxPool2dForward, cpuNormalizeForward, cpuReluForward } from './ml'
+import { createTensor } from './ml'
 
 let gpuDevice: GPUDevice | null = null
 
@@ -86,6 +86,112 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(global_invocation
   }
 }`
 
+const makeReluShader = (count: number): string => `
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  out[i] = max(0.0, inputValues[i]);
+}`
+
+const makeNormalizeShader = (count: number): string => `
+struct NormalizeUniforms {
+  channels: u32,
+  height: u32,
+  width: u32,
+}
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<storage, read> meanValues: array<f32>;
+@group(0) @binding(2) var<storage, read> stdValues: array<f32>;
+@group(0) @binding(3) var<uniform> uniforms: NormalizeUniforms;
+@group(0) @binding(4) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let spatial = uniforms.height * uniforms.width;
+  let c = (i / spatial) % uniforms.channels;
+  out[i] = (inputValues[i] - meanValues[c]) / stdValues[c];
+}`
+
+const makeMaxPool2dShader = (count: number): string => `
+struct MaxPoolUniforms {
+  channels: u32,
+  inHeight: u32,
+  inWidth: u32,
+  outHeight: u32,
+  outWidth: u32,
+}
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<uniform> uniforms: MaxPoolUniforms;
+@group(0) @binding(2) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let channelPlane = uniforms.outHeight * uniforms.outWidth;
+  let c = (i / channelPlane) % uniforms.channels;
+  let outOffset = i % channelPlane;
+  let oh = outOffset / uniforms.outWidth;
+  let ow = outOffset % uniforms.outWidth;
+  let ih = oh * 2u;
+  let iw = ow * 2u;
+  let inputPlane = uniforms.inHeight * uniforms.inWidth;
+  let base = c * inputPlane;
+  let idx00 = base + ih * uniforms.inWidth + iw;
+  let idx01 = idx00 + 1u;
+  let idx10 = idx00 + uniforms.inWidth;
+  let idx11 = idx10 + 1u;
+  let m0 = max(inputValues[idx00], inputValues[idx01]);
+  let m1 = max(inputValues[idx10], inputValues[idx11]);
+  out[i] = max(m0, m1);
+}`
+
+const makeConv2dShader = (count: number): string => `
+struct Conv2dUniforms {
+  inChannels: u32,
+  outChannels: u32,
+  height: u32,
+  width: u32,
+}
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<storage, read> weightValues: array<f32>;
+@group(0) @binding(2) var<storage, read> biasValues: array<f32>;
+@group(0) @binding(3) var<uniform> uniforms: Conv2dUniforms;
+@group(0) @binding(4) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let hw = uniforms.height * uniforms.width;
+  let oc = (i / hw) % uniforms.outChannels;
+  let outOffset = i % hw;
+  let oh = outOffset / uniforms.width;
+  let ow = outOffset % uniforms.width;
+  var sum = biasValues[oc];
+  for (var ic: u32 = 0u; ic < uniforms.inChannels; ic = ic + 1u) {
+    let inputBase = ic * hw;
+    let weightBase = (oc * uniforms.inChannels + ic) * 9u;
+    for (var kh: u32 = 0u; kh < 3u; kh = kh + 1u) {
+      let khSigned = i32(kh) - 1;
+      let ihSigned = i32(oh) + khSigned;
+      if (ihSigned < 0 || ihSigned >= i32(uniforms.height)) { continue; }
+      for (var kw: u32 = 0u; kw < 3u; kw = kw + 1u) {
+        let kwSigned = i32(kw) - 1;
+        let iwSigned = i32(ow) + kwSigned;
+        if (iwSigned < 0 || iwSigned >= i32(uniforms.width)) { continue; }
+        let ih = u32(ihSigned);
+        let iw = u32(iwSigned);
+        let inputIndex = inputBase + ih * uniforms.width + iw;
+        let weightIndex = weightBase + kh * 3u + kw;
+        sum = sum + inputValues[inputIndex] * weightValues[weightIndex];
+      }
+    }
+  }
+  out[i] = sum;
+}`
 
 const isBinaryTensorOpPayload = (
   payload: WorkerRequest,
@@ -258,6 +364,84 @@ const runMse = async (a: Float32Array, b: Float32Array): Promise<number> => {
   return sumSquaredError / count
 }
 
+const runUnaryShader = async (code: string, input: Float32Array, outCount: number, extraEntries: GPUBindGroupEntry[] = []): Promise<Float32Array> => {
+  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
+  const device: GPUDevice = gpuDevice
+  const inputBuffer: GPUBuffer = device.createBuffer({ size: input.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  const outBuffer: GPUBuffer = device.createBuffer({ size: outCount * 4, usage: BUFFER_USAGE_STORAGE_COPY_SRC })
+  const readBuffer: GPUBuffer = device.createBuffer({ size: outCount * 4, usage: BUFFER_USAGE_MAP_READ_COPY_DST })
+  device.queue.writeBuffer(inputBuffer, 0, input)
+  const pipeline: GPUComputePipeline = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code }), entryPoint: 'main' } })
+  const bindGroup: GPUBindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [{ binding: 0, resource: { buffer: inputBuffer } }, ...extraEntries, { binding: extraEntries.length + 1, resource: { buffer: outBuffer } }],
+  })
+  const encoder: GPUCommandEncoder = device.createCommandEncoder()
+  const pass: GPUComputePassEncoder = encoder.beginComputePass()
+  pass.setPipeline(pipeline)
+  pass.setBindGroup(0, bindGroup)
+  pass.dispatchWorkgroups(Math.ceil(outCount / 64))
+  pass.end()
+  encoder.copyBufferToBuffer(outBuffer, 0, readBuffer, 0, outCount * 4)
+  device.queue.submit([encoder.finish()])
+  await readBuffer.mapAsync(MAP_MODE_READ)
+  const out: Float32Array = new Float32Array(readBuffer.getMappedRange().slice(0))
+  readBuffer.unmap()
+  return out
+}
+
+const runReluForward = async (input: Float32Array): Promise<Float32Array> => runUnaryShader(makeReluShader(input.length), input, input.length)
+
+const runMaxPool2dForward = async (input: Float32Array, shape: readonly [number, number, number, number]): Promise<Float32Array> => {
+  if (shape[0] !== 1) throw new Error('maxpool2d-forward currently expects batch size 1.')
+  const channels: number = shape[1]
+  const inHeight: number = shape[2]
+  const inWidth: number = shape[3]
+  const outHeight: number = Math.floor(inHeight / 2)
+  const outWidth: number = Math.floor(inWidth / 2)
+  const outCount: number = channels * outHeight * outWidth
+  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 5 * 4, usage: 0x0040 | 0x0008 })
+  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, inHeight, inWidth, outHeight, outWidth]))
+  return runUnaryShader(makeMaxPool2dShader(outCount), input, outCount, [{ binding: 1, resource: { buffer: uniformBuffer } }])
+}
+
+const runNormalizeForward = async (input: Float32Array, shape: readonly [number, number, number, number], mean: readonly number[], std: readonly number[]): Promise<Float32Array> => {
+  const channels: number = shape[1]
+  if (mean.length !== channels || std.length !== channels) throw new Error('Mean/std lengths must match input channels.')
+  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
+  const meanBuffer: GPUBuffer = gpuDevice.createBuffer({ size: channels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  const stdBuffer: GPUBuffer = gpuDevice.createBuffer({ size: channels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 3 * 4, usage: 0x0040 | 0x0008 })
+  gpuDevice.queue.writeBuffer(meanBuffer, 0, new Float32Array(mean))
+  gpuDevice.queue.writeBuffer(stdBuffer, 0, new Float32Array(std))
+  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, shape[2], shape[3]]))
+  return runUnaryShader(makeNormalizeShader(input.length), input, input.length, [
+    { binding: 1, resource: { buffer: meanBuffer } },
+    { binding: 2, resource: { buffer: stdBuffer } },
+    { binding: 3, resource: { buffer: uniformBuffer } },
+  ])
+}
+
+const runConv2dForward = async (input: Float32Array, inputShape: readonly [number, number, number, number], weight: Float32Array, weightShape: readonly [number, number, number, number], bias: readonly number[]): Promise<Float32Array> => {
+  const [batch, inChannels, height, width] = inputShape
+  const [outChannels, weightInChannels, kernelHeight, kernelWidth] = weightShape
+  if (batch !== 1 || kernelHeight !== 3 || kernelWidth !== 3 || inChannels !== weightInChannels || bias.length !== outChannels) throw new Error('conv2d-forward only supports VGG-compatible params.')
+  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
+  const outCount: number = outChannels * height * width
+  const weightBuffer: GPUBuffer = gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  const biasBuffer: GPUBuffer = gpuDevice.createBuffer({ size: outChannels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: 0x0040 | 0x0008 })
+  gpuDevice.queue.writeBuffer(weightBuffer, 0, weight)
+  gpuDevice.queue.writeBuffer(biasBuffer, 0, new Float32Array(bias))
+  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]))
+  return runUnaryShader(makeConv2dShader(outCount), input, outCount, [
+    { binding: 1, resource: { buffer: weightBuffer } },
+    { binding: 2, resource: { buffer: biasBuffer } },
+    { binding: 3, resource: { buffer: uniformBuffer } },
+  ])
+}
+
 self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
   const payload: WorkerRequest = event.data
   switch (payload.type) {
@@ -283,26 +467,26 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
           if (payload.op === 'conv2d-forward') {
             const input = createTensor(payload.input.shape, payload.input.values)
             const weight = createTensor(payload.weight.shape, payload.weight.values)
-            const output = cpuConv2dForward(input, weight, payload.bias)
-            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output.values) })
+            const output = await runConv2dForward(input.values, input.shape, weight.values, weight.shape, payload.bias)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output) })
             return
           }
           if (payload.op === 'relu-forward') {
             const input = createTensor(payload.input.shape, payload.input.values)
-            const output = cpuReluForward(input)
-            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output.values) })
+            const output = await runReluForward(input.values)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output) })
             return
           }
           if (payload.op === 'maxpool2d-forward') {
             const input = createTensor(payload.input.shape, payload.input.values)
-            const output = cpuMaxPool2dForward(input)
-            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output.values) })
+            const output = await runMaxPool2dForward(input.values, input.shape)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output) })
             return
           }
           if (payload.op === 'normalize-forward') {
             const input = createTensor(payload.input.shape, payload.input.values)
-            const output = cpuNormalizeForward(input, payload.mean, payload.std)
-            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output.values) })
+            const output = await runNormalizeForward(input.values, input.shape, payload.mean, payload.std)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output) })
             return
           }
           if (payload.op === 'mse') {
