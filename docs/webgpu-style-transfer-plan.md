@@ -208,11 +208,15 @@ Keep this strictly presentation-side; do not couple with compute core.
 ### Phase 1
 - ✅ Core tensor shape/data primitives are implemented.
 - ✅ CPU reference ops are implemented for `add`, `sub`, `mul`, `div`, `clamp`, `mse`.
-- ✅ Worker WebGPU kernels are implemented for `add`, `sub`, `mul`, `div`, `clamp`.
-- ✅ Playwright parity tests are passing for tensor roundtrip and op-level parity against CPU reference.
-- ⚠️ **GPU MSE kernel is not implemented yet** (currently CPU-backed for oracle parity); this is expected to be completed in a follow-up PR.
+- ✅ Worker WebGPU kernels are implemented for `add`, `sub`, `mul`, `div`, `clamp`, `mse`.
+- ✅ Scalar operand support is implemented for binary ops (`tensor ⊕ scalar` and `scalar ⊕ tensor`) with explicit erroring for unsupported `scalar ⊕ scalar` binary requests.
+- ✅ MSE request validation enforces tensor-tensor operands only.
+- ✅ Clamp supports both tensor and scalar inputs.
+- ✅ Playwright parity tests are passing for tensor roundtrip, exhaustive tensor/scalar op coverage, and GPU MSE reduction parity across lengths that exercise multi-pass reduction logic (`64`, `64 * 5`, `64 * 5 + 1`, `64 * 5 + 32`, `64 * 5 + 63`).
+- ✅ **Phase 1 is complete**.
 
 ### Notes for future agents
 - Current worker architecture is intentionally minimal and message-oriented to keep parity testing deterministic.
 - Shader code generation has been separated into helper functions to make future extraction into dedicated shader modules straightforward.
-- The next high-leverage work item is implementing GPU MSE and then proceeding into Phase 2 conv/relu/pool forward ops.
+- For scalar binary ops, the current implementation uses shader-mode specialization with scalar broadcast reads (`b[0]`) rather than CPU-side scalar expansion.
+- The next high-leverage work item is proceeding into Phase 2 conv/relu/pool forward ops.
