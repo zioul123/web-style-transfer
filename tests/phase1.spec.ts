@@ -1,19 +1,37 @@
 import { expect, test } from '@playwright/test'
 import { cpuAdd, cpuClamp, cpuDiv, cpuMse, cpuMul, cpuSub, createTensor } from '../src/ml'
+import {
+  isWorkerTensorScalarOpResponse,
+  isWorkerTensorVectorOpResponse,
+  type WorkerRequest,
+  type WorkerResponse,
+  type WorkerTensorOpResponse,
+} from '../src/types'
+
+const shape = [1, 1, 2, 2] as const
+const tensorValues = [1, 2, 3, 4]
+
+type Phase1EvaluateResult = {
+  init: WorkerResponse
+  roundtrip: WorkerResponse
+  add: WorkerResponse
+  sub: WorkerResponse
+  mul: WorkerResponse
+  div: WorkerResponse
+  clamp: WorkerResponse
+  mse: WorkerResponse
+}
 
 test('phase 1 tensor roundtrip and ops parity', async ({ page }) => {
   await page.goto('/')
 
-  const result = await page.evaluate(async () => {
-    const worker = new Worker(new URL('/src/styleTransfer.worker.ts', window.location.origin), {
-      type: 'module',
-    })
+  const result: Phase1EvaluateResult = await page.evaluate(async () => {
+    const worker = new Worker(new URL('/src/styleTransfer.worker.ts', window.location.origin), { type: 'module' })
 
-    const ask = (payload: { id: string; [key: string]: unknown }): Promise<unknown> =>
+    const ask = (payload: WorkerRequest): Promise<WorkerResponse> =>
       new Promise((resolve) => {
-        const handler = (event: MessageEvent<unknown>): void => {
-          const data = event.data as { id?: string }
-          if (data.id === payload.id) {
+        const handler = (event: MessageEvent<WorkerResponse>): void => {
+          if (event.data.id === payload.id) {
             worker.removeEventListener('message', handler)
             resolve(event.data)
           }
@@ -22,34 +40,60 @@ test('phase 1 tensor roundtrip and ops parity', async ({ page }) => {
         worker.postMessage(payload)
       })
 
-    const shape = [1, 1, 2, 2] as const
-    const tensor = { shape, values: [1, 2, 3, 4] }
+    const workerShape = [1, 1, 2, 2] as const
+    const workerTensorValues = [1, 2, 3, 4]
+    const tensor = { shape: workerShape, values: workerTensorValues }
 
-    const init = (await ask({ type: 'init-webgpu', id: `${Date.now()}-init` })) as { ok: boolean; message: string }
-    const roundtrip = (await ask({ type: 'tensor-roundtrip', id: `${Date.now()}-rt`, tensor })) as {
-      ok: boolean
-      tensor?: { values: number[] }
-    }
-    const add = (await ask({ type: 'tensor-op', id: `${Date.now()}-add`, op: 'add', a: tensor, b: { shape, values: [5, 6, 7, 8] } })) as { ok: boolean; values?: number[] }
-    const sub = (await ask({ type: 'tensor-op', id: `${Date.now()}-sub`, op: 'sub', a: tensor, b: { shape, values: [1, 1, 1, 1] } })) as { ok: boolean; values?: number[] }
-    const mul = (await ask({ type: 'tensor-op', id: `${Date.now()}-mul`, op: 'mul', a: tensor, b: { shape, values: [2, 2, 2, 2] } })) as { ok: boolean; values?: number[] }
-    const div = (await ask({ type: 'tensor-op', id: `${Date.now()}-div`, op: 'div', a: tensor, b: { shape, values: [2, 2, 2, 2] } })) as { ok: boolean; values?: number[] }
-    const clamp = (await ask({ type: 'tensor-op', id: `${Date.now()}-clamp`, op: 'clamp', a: { shape, values: [-1, 0.5, 1.5, 0.25] }, clampMin: 0, clampMax: 1 })) as { ok: boolean; values?: number[] }
-    const mse = (await ask({ type: 'tensor-op', id: `${Date.now()}-mse`, op: 'mse', a: tensor, b: { shape, values: [1, 1, 1, 1] } })) as { ok: boolean; scalar?: number }
+    const init = await ask({ type: 'init-webgpu', id: `${Date.now()}-init` })
+    const roundtrip = await ask({ type: 'tensor-roundtrip', id: `${Date.now()}-rt`, tensor })
+    const add = await ask({ type: 'tensor-op', id: `${Date.now()}-add`, op: 'add', a: tensor, b: { shape: workerShape, values: [5, 6, 7, 8] } })
+    const sub = await ask({ type: 'tensor-op', id: `${Date.now()}-sub`, op: 'sub', a: tensor, b: { shape: workerShape, values: [1, 1, 1, 1] } })
+    const mul = await ask({ type: 'tensor-op', id: `${Date.now()}-mul`, op: 'mul', a: tensor, b: { shape: workerShape, values: [2, 2, 2, 2] } })
+    const div = await ask({ type: 'tensor-op', id: `${Date.now()}-div`, op: 'div', a: tensor, b: { shape: workerShape, values: [2, 2, 2, 2] } })
+    const clamp = await ask({ type: 'tensor-op', id: `${Date.now()}-clamp`, op: 'clamp', a: { shape: workerShape, values: [-1, 0.5, 1.5, 0.25] }, clampMin: 0, clampMax: 1 })
+    const mse = await ask({ type: 'tensor-op', id: `${Date.now()}-mse`, op: 'mse', a: tensor, b: { shape: workerShape, values: [1, 1, 1, 1] } })
 
     worker.terminate()
 
     return { init, roundtrip, add, sub, mul, div, clamp, mse }
   })
 
+  expect(result.init.type).toBe('webgpu-init-result')
+  if (result.init.type !== 'webgpu-init-result') throw new Error('Expected webgpu-init-result')
   expect(result.init.ok).toBeTruthy()
-  expect(result.roundtrip.ok).toBeTruthy()
-  expect(result.roundtrip.tensor?.values).toEqual([1, 2, 3, 4])
 
-  expect(result.add.values).toEqual(Array.from(cpuAdd(createTensor([1, 1, 2, 2], [1, 2, 3, 4]), createTensor([1, 1, 2, 2], [5, 6, 7, 8])).values))
-  expect(result.sub.values).toEqual(Array.from(cpuSub(createTensor([1, 1, 2, 2], [1, 2, 3, 4]), createTensor([1, 1, 2, 2], [1, 1, 1, 1])).values))
-  expect(result.mul.values).toEqual(Array.from(cpuMul(createTensor([1, 1, 2, 2], [1, 2, 3, 4]), createTensor([1, 1, 2, 2], [2, 2, 2, 2])).values))
-  expect(result.div.values).toEqual(Array.from(cpuDiv(createTensor([1, 1, 2, 2], [1, 2, 3, 4]), createTensor([1, 1, 2, 2], [2, 2, 2, 2])).values))
-  expect(result.clamp.values).toEqual(Array.from(cpuClamp(createTensor([1, 1, 2, 2], [-1, 0.5, 1.5, 0.25]), 0, 1).values))
-  expect(result.mse.scalar).toBeCloseTo(cpuMse(createTensor([1, 1, 2, 2], [1, 2, 3, 4]), createTensor([1, 1, 2, 2], [1, 1, 1, 1])))
+  expect(result.roundtrip.type).toBe('tensor-roundtrip-result')
+  if (result.roundtrip.type !== 'tensor-roundtrip-result') throw new Error('Expected tensor-roundtrip-result')
+  expect(result.roundtrip.ok).toBeTruthy()
+  if (!result.roundtrip.ok) throw new Error(result.roundtrip.message)
+  expect(result.roundtrip.tensor.values).toEqual(tensorValues)
+
+
+  if (result.add.type !== 'tensor-op-result') throw new Error('add must be tensor-op-result')
+  if (result.sub.type !== 'tensor-op-result') throw new Error('sub must be tensor-op-result')
+  if (result.mul.type !== 'tensor-op-result') throw new Error('mul must be tensor-op-result')
+  if (result.div.type !== 'tensor-op-result') throw new Error('div must be tensor-op-result')
+  if (result.clamp.type !== 'tensor-op-result') throw new Error('clamp must be tensor-op-result')
+  if (result.mse.type !== 'tensor-op-result') throw new Error('mse must be tensor-op-result')
+
+  expect(isWorkerTensorVectorOpResponse(result.add)).toBeTruthy()
+  expect(isWorkerTensorVectorOpResponse(result.sub)).toBeTruthy()
+  expect(isWorkerTensorVectorOpResponse(result.mul)).toBeTruthy()
+  expect(isWorkerTensorVectorOpResponse(result.div)).toBeTruthy()
+  expect(isWorkerTensorVectorOpResponse(result.clamp)).toBeTruthy()
+  expect(isWorkerTensorScalarOpResponse(result.mse)).toBeTruthy()
+
+  if (!isWorkerTensorVectorOpResponse(result.add)) throw new Error('add must be vector response')
+  if (!isWorkerTensorVectorOpResponse(result.sub)) throw new Error('sub must be vector response')
+  if (!isWorkerTensorVectorOpResponse(result.mul)) throw new Error('mul must be vector response')
+  if (!isWorkerTensorVectorOpResponse(result.div)) throw new Error('div must be vector response')
+  if (!isWorkerTensorVectorOpResponse(result.clamp)) throw new Error('clamp must be vector response')
+  if (!isWorkerTensorScalarOpResponse(result.mse)) throw new Error('mse must be scalar response')
+
+  expect(result.add.values).toEqual(Array.from(cpuAdd(createTensor(shape, tensorValues), createTensor(shape, [5, 6, 7, 8])).values))
+  expect(result.sub.values).toEqual(Array.from(cpuSub(createTensor(shape, tensorValues), createTensor(shape, [1, 1, 1, 1])).values))
+  expect(result.mul.values).toEqual(Array.from(cpuMul(createTensor(shape, tensorValues), createTensor(shape, [2, 2, 2, 2])).values))
+  expect(result.div.values).toEqual(Array.from(cpuDiv(createTensor(shape, tensorValues), createTensor(shape, [2, 2, 2, 2])).values))
+  expect(result.clamp.values).toEqual(Array.from(cpuClamp(createTensor(shape, [-1, 0.5, 1.5, 0.25]), 0, 1).values))
+  expect(result.mse.scalar).toBeCloseTo(cpuMse(createTensor(shape, tensorValues), createTensor(shape, [1, 1, 1, 1])))
 })

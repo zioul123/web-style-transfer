@@ -38,10 +38,20 @@ export type WorkerRoundtripResponse =
   | { type: 'tensor-roundtrip-result'; id: string; ok: true; tensor: WorkerTensor }
   | { type: 'tensor-roundtrip-result'; id: string; ok: false; message: string }
 
+export type WorkerTensorScalarOpResponse = { type: 'tensor-op-result'; id: string; ok: true; scalar: number }
+export type WorkerTensorVectorOpResponse = { type: 'tensor-op-result'; id: string; ok: true; values: number[] }
+export type WorkerTensorOpErrorResponse = { type: 'tensor-op-result'; id: string; ok: false; message: string }
+
 export type WorkerTensorOpResponse =
-  | { type: 'tensor-op-result'; id: string; ok: true; values: number[] }
-  | { type: 'tensor-op-result'; id: string; ok: true; scalar: number }
-  | { type: 'tensor-op-result'; id: string; ok: false; message: string }
+  | WorkerTensorScalarOpResponse
+  | WorkerTensorVectorOpResponse
+  | WorkerTensorOpErrorResponse
+
+export const isWorkerTensorScalarOpResponse = (value: WorkerTensorOpResponse): value is WorkerTensorScalarOpResponse =>
+  value.ok && 'scalar' in value
+
+export const isWorkerTensorVectorOpResponse = (value: WorkerTensorOpResponse): value is WorkerTensorVectorOpResponse =>
+  value.ok && 'values' in value
 
 export type WorkerResponse =
   | { type: 'pong'; id: string; timestamp: number }
