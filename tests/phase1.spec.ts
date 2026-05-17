@@ -107,7 +107,7 @@ test('phase 1 mse GPU reduction parity for >64 lengths', async ({ page }) => {
 
   const mseLengths: readonly number[] = [64, 64 * 5, 64 * 5 + 1, 64 * 5 + 32, 64 * 5 + 63]
 
-  const results: Array<{ length: number; response: WorkerResponse }> = await page.evaluate(async (lengths: readonly number[]) => {
+  const phase1MseResult: { init: WorkerResponse; responses: Array<{ length: number; response: WorkerResponse }> } = await page.evaluate(async (lengths: readonly number[]) => {
     const worker = new Worker(new URL('/src/styleTransfer.worker.ts', window.location.origin), { type: 'module' })
     const ask = (payload: WorkerRequest): Promise<WorkerResponse> =>
       new Promise((resolve) => {
@@ -122,11 +122,6 @@ test('phase 1 mse GPU reduction parity for >64 lengths', async ({ page }) => {
       })
 
     const init = await ask({ type: 'init-webgpu', id: `${Date.now()}-mse-init` })
-    if (init.type !== 'webgpu-init-result' || !init.ok) {
-      worker.terminate()
-      throw new Error('WebGPU initialization failed for MSE reduction parity test.')
-    }
-
     const responses: Array<{ length: number; response: WorkerResponse }> = []
     for (const length of lengths) {
       const aValues: number[] = Array.from({ length }, (_unused: unknown, index: number): number => ((index % 11) - 5) / 3)
@@ -142,10 +137,14 @@ test('phase 1 mse GPU reduction parity for >64 lengths', async ({ page }) => {
     }
 
     worker.terminate()
-    return responses
+    return { init, responses }
   }, mseLengths)
 
-  for (const result of results) {
+  expect(phase1MseResult.init.type).toBe('webgpu-init-result')
+  if (phase1MseResult.init.type !== 'webgpu-init-result') throw new Error('Expected webgpu-init-result')
+  expect(phase1MseResult.init.ok).toBeTruthy()
+
+  for (const result of phase1MseResult.responses) {
     expect(result.response.type).toBe('tensor-op-result')
     if (result.response.type !== 'tensor-op-result') throw new Error(`Expected tensor-op-result for length ${result.length}.`)
     expect(isWorkerTensorScalarOpResponse(result.response)).toBeTruthy()
