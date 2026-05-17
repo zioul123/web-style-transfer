@@ -5,7 +5,6 @@ import {
   isWorkerTensorVectorOpResponse,
   type WorkerRequest,
   type WorkerResponse,
-  type WorkerTensorOpResponse,
 } from '../src/types'
 
 const shape = [1, 1, 2, 2] as const
