@@ -195,3 +195,24 @@ R3F is not required for core ML, but can be valuable for:
 - zoom/pan canvas interaction
 
 Keep this strictly presentation-side; do not couple with compute core.
+
+---
+
+## Implementation status snapshot (updated May 17, 2026)
+
+### Phase 0
+- ✅ React + TypeScript + Vite scaffolding is in place.
+- ✅ Worker wiring and ping/init protocol are implemented.
+- ✅ Playwright phase-0 validation is passing in Chromium+SwiftShader environments.
+
+### Phase 1
+- ✅ Core tensor shape/data primitives are implemented.
+- ✅ CPU reference ops are implemented for `add`, `sub`, `mul`, `div`, `clamp`, `mse`.
+- ✅ Worker WebGPU kernels are implemented for `add`, `sub`, `mul`, `div`, `clamp`.
+- ✅ Playwright parity tests are passing for tensor roundtrip and op-level parity against CPU reference.
+- ⚠️ **GPU MSE kernel is not implemented yet** (currently CPU-backed for oracle parity); this is expected to be completed in a follow-up PR.
+
+### Notes for future agents
+- Current worker architecture is intentionally minimal and message-oriented to keep parity testing deterministic.
+- Shader code generation has been separated into helper functions to make future extraction into dedicated shader modules straightforward.
+- The next high-leverage work item is implementing GPU MSE and then proceeding into Phase 2 conv/relu/pool forward ops.
