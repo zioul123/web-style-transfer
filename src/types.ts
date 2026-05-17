@@ -1,5 +1,10 @@
 export type TensorShape = readonly [number, number, number, number]
 
+export type TensorData = {
+  shape: TensorShape
+  values: Float32Array
+}
+
 export type WorkerTensor = {
   shape: TensorShape
   values: number[]

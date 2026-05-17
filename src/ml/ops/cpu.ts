@@ -1,25 +1,5 @@
-export type TensorShape = readonly [number, number, number, number]
-
-export type TensorData = {
-  shape: TensorShape
-  values: Float32Array
-}
-
-const elementCount = (shape: TensorShape): number => shape[0] * shape[1] * shape[2] * shape[3]
-
-const assertSameLength = (a: TensorData, b: TensorData): void => {
-  if (elementCount(a.shape) !== elementCount(b.shape)) {
-    throw new Error('Tensor sizes must match.')
-  }
-}
-
-export const createTensor = (shape: TensorShape, values: number[]): TensorData => {
-  const expected = elementCount(shape)
-  if (values.length !== expected) {
-    throw new Error(`Expected ${expected} values, got ${values.length}.`)
-  }
-  return { shape, values: new Float32Array(values) }
-}
+import type { TensorData } from '../../types'
+import { assertSameLength } from '../tensor'
 
 export const cpuAdd = (a: TensorData, b: TensorData): TensorData => {
   assertSameLength(a, b)
