@@ -13,14 +13,14 @@ const BUFFER_USAGE_STORAGE_COPY_SRC: number = 0x0080 | 0x0004
 const BUFFER_USAGE_MAP_READ_COPY_DST: number = 0x0001 | 0x0008
 const MAP_MODE_READ: number = 0x0001
 
-const BINARY_SHADER_SNIPPETS: Record<'add' | 'sub' | 'mul' | 'div', string> = {
-  add: 'out[i] = a[i] + b[i];',
-  sub: 'out[i] = a[i] - b[i];',
-  mul: 'out[i] = a[i] * b[i];',
-  div: 'out[i] = a[i] / b[i];',
+const BINARY_SHADER_SNIPPETS: Record<'add' | 'sub' | 'mul' | 'div', { tensorTensor: string; tensorScalar: string; scalarTensor: string }> = {
+  add: { tensorTensor: 'out[i] = a[i] + b[i];', tensorScalar: 'out[i] = a[i] + b[0];', scalarTensor: 'out[i] = b[0] + a[i];' },
+  sub: { tensorTensor: 'out[i] = a[i] - b[i];', tensorScalar: 'out[i] = a[i] - b[0];', scalarTensor: 'out[i] = b[0] - a[i];' },
+  mul: { tensorTensor: 'out[i] = a[i] * b[i];', tensorScalar: 'out[i] = a[i] * b[0];', scalarTensor: 'out[i] = b[0] * a[i];' },
+  div: { tensorTensor: 'out[i] = a[i] / b[i];', tensorScalar: 'out[i] = a[i] / b[0];', scalarTensor: 'out[i] = b[0] / a[i];' },
 }
 
-const makeBinaryOpShader = (op: 'add' | 'sub' | 'mul' | 'div', count: number): string => `
+const makeBinaryOpShader = (op: 'add' | 'sub' | 'mul' | 'div', count: number, mode: 'tensorTensor' | 'tensorScalar' | 'scalarTensor'): string => `
 @group(0) @binding(0) var<storage, read> a: array<f32>;
 @group(0) @binding(1) var<storage, read> b: array<f32>;
 @group(0) @binding(2) var<storage, read_write> out: array<f32>;
@@ -28,7 +28,7 @@ const makeBinaryOpShader = (op: 'add' | 'sub' | 'mul' | 'div', count: number): s
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= ${count}u) { return; }
-  ${BINARY_SHADER_SNIPPETS[op]}
+  ${BINARY_SHADER_SNIPPETS[op][mode]}
 }`
 
 
@@ -104,11 +104,11 @@ const initWebGpu = async (id: string): Promise<void> => {
   postResponse({ type: 'webgpu-init-result', id, ok: true, message: `WebGPU device initialized: ${gpuDevice.label || 'unnamed-device'}` })
 }
 
-const runBinaryOp = async (op: 'add' | 'sub' | 'mul' | 'div', a: Float32Array, b: Float32Array): Promise<Float32Array> => {
+const runBinaryOp = async (op: 'add' | 'sub' | 'mul' | 'div', a: Float32Array, b: Float32Array, mode: 'tensorTensor' | 'tensorScalar' | 'scalarTensor'): Promise<Float32Array> => {
   if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
   const device: GPUDevice = gpuDevice
   const count: number = a.length
-  const code: string = makeBinaryOpShader(op, count)
+  const code: string = makeBinaryOpShader(op, count, mode)
   const bytes: number = count * 4
   const aBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_DST })
   const bBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_DST })
@@ -140,12 +140,11 @@ const runBinaryOp = async (op: 'add' | 'sub' | 'mul' | 'div', a: Float32Array, b
 }
 
 const runScalarBinaryOp = async (op: 'add' | 'sub' | 'mul' | 'div', tensor: Float32Array, scalar: number, scalarOnLeft: boolean): Promise<Float32Array> => {
-  const scalarTensor: Float32Array = new Float32Array(tensor.length)
-  scalarTensor.fill(scalar)
+  const scalarTensor: Float32Array = new Float32Array([scalar])
   if (scalarOnLeft) {
-    return runBinaryOp(op, scalarTensor, tensor)
+    return runBinaryOp(op, tensor, scalarTensor, 'scalarTensor')
   }
-  return runBinaryOp(op, tensor, scalarTensor)
+  return runBinaryOp(op, tensor, scalarTensor, 'tensorScalar')
 }
 
 const getTensorFromOperand = (operand: WorkerTensorOperand): { ok: true; values: Float32Array } | { ok: false } => {
@@ -299,6 +298,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
               payload.op,
               createTensor(payload.a.tensor.shape, payload.a.tensor.values).values,
               createTensor(payload.b.tensor.shape, payload.b.tensor.values).values,
+              'tensorTensor',
             )
           } else if (payload.a.kind === 'tensor' && payload.b.kind === 'scalar') {
             v = await runScalarBinaryOp(payload.op, createTensor(payload.a.tensor.shape, payload.a.tensor.values).values, payload.b.scalar, false)
