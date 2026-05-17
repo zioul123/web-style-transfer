@@ -10,19 +10,23 @@ export type WorkerTensor = {
   values: number[]
 }
 
+export type WorkerTensorOperand =
+  | { kind: 'tensor'; tensor: WorkerTensor }
+  | { kind: 'scalar'; scalar: number }
+
 type WorkerTensorBinaryOpRequest = {
   type: 'tensor-op'
   id: string
   op: 'add' | 'sub' | 'mul' | 'div' | 'mse'
-  a: WorkerTensor
-  b: WorkerTensor
+  a: WorkerTensorOperand
+  b: WorkerTensorOperand
 }
 
 type WorkerTensorClampOpRequest = {
   type: 'tensor-op'
   id: string
   op: 'clamp'
-  a: WorkerTensor
+  a: WorkerTensorOperand
   clampMin: number
   clampMax: number
 }
