@@ -220,3 +220,4 @@ Keep this strictly presentation-side; do not couple with compute core.
 - Shader code generation has been separated into helper functions to make future extraction into dedicated shader modules straightforward.
 - For scalar binary ops, the current implementation uses shader-mode specialization with scalar broadcast reads (`b[0]`) rather than CPU-side scalar expansion.
 - The next high-leverage work item is proceeding into Phase 2 conv/relu/pool forward ops.
+- Phase 2 forward kernels currently favor straightforward correctness-first implementations; obvious future optimization targets include shared-memory tiled conv, vectorized loads/stores, and fused conv+bias+relu passes.

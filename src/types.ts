@@ -31,12 +31,40 @@ type WorkerTensorClampOpRequest = {
   clampMax: number
 }
 
+type WorkerTensorConv2dForwardOpRequest = {
+  type: 'tensor-op'
+  id: string
+  op: 'conv2d-forward'
+  input: WorkerTensor
+  weight: WorkerTensor
+  bias: number[]
+}
+
+type WorkerTensorUnaryForwardOpRequest = {
+  type: 'tensor-op'
+  id: string
+  op: 'relu-forward' | 'maxpool2d-forward'
+  input: WorkerTensor
+}
+
+type WorkerTensorNormalizeForwardOpRequest = {
+  type: 'tensor-op'
+  id: string
+  op: 'normalize-forward'
+  input: WorkerTensor
+  mean: number[]
+  std: number[]
+}
+
 export type WorkerRequest =
   | { type: 'ping'; id: string }
   | { type: 'init-webgpu'; id: string }
   | { type: 'tensor-roundtrip'; id: string; tensor: WorkerTensor }
   | WorkerTensorBinaryOpRequest
   | WorkerTensorClampOpRequest
+  | WorkerTensorConv2dForwardOpRequest
+  | WorkerTensorUnaryForwardOpRequest
+  | WorkerTensorNormalizeForwardOpRequest
 
 export type WorkerRoundtripResponse =
   | { type: 'tensor-roundtrip-result'; id: string; ok: true; tensor: WorkerTensor }
