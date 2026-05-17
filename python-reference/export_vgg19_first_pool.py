@@ -38,7 +38,6 @@ def export() -> None:
         raise RuntimeError('Unexpected VGG19 layout for first two convolution layers.')
 
     weights_payload = {
-        'inputShape': [1, 3, 16, 16],
         'conv1WeightShape': list(conv1.weight.shape),
         'conv1WeightValues': tensor_to_list(conv1.weight),
         'conv1BiasValues': tensor_to_list(conv1.bias),

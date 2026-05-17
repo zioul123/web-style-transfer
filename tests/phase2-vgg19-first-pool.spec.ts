@@ -2,7 +2,6 @@ import { expect, test } from '@playwright/test'
 import type { WorkerRequest, WorkerResponse } from '../src/types'
 
 type VggWeightsFixture = {
-  inputShape: [number, number, number, number]
   conv1WeightShape: [number, number, number, number]
   conv1WeightValues: number[]
   conv1BiasValues: number[]
@@ -12,7 +11,6 @@ type VggWeightsFixture = {
 }
 
 type VggCaseFixture = {
-  inputShape: [number, number, number, number]
   inputValues: number[]
   normalizedValues: number[]
   mean: [number, number, number]
@@ -74,7 +72,7 @@ test('phase 2 vgg19 truncated parity through first pool', async ({ page }) => {
 
     const conv1 = await ask({
       type: 'tensor-op', id: 'phase2-vgg-conv1', op: 'conv2d-forward',
-      input: { shape: weightsArg.inputShape, values: caseArg.normalizedValues },
+      input: { shape: caseArg.inputShape, values: caseArg.normalizedValues },
       weight: { shape: weightsArg.conv1WeightShape, values: weightsArg.conv1WeightValues },
       bias: weightsArg.conv1BiasValues,
     })
