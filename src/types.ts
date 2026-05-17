@@ -43,10 +43,17 @@ type WorkerTensorConv2dForwardOpRequest = {
 type WorkerTensorUnaryForwardOpRequest = {
   type: 'tensor-op'
   id: string
-  op: 'relu-forward' | 'maxpool2d-forward' | 'normalize-forward'
+  op: 'relu-forward' | 'maxpool2d-forward'
   input: WorkerTensor
-  mean?: number[]
-  std?: number[]
+}
+
+type WorkerTensorNormalizeForwardOpRequest = {
+  type: 'tensor-op'
+  id: string
+  op: 'normalize-forward'
+  input: WorkerTensor
+  mean: number[]
+  std: number[]
 }
 
 export type WorkerRequest =
@@ -57,6 +64,7 @@ export type WorkerRequest =
   | WorkerTensorClampOpRequest
   | WorkerTensorConv2dForwardOpRequest
   | WorkerTensorUnaryForwardOpRequest
+  | WorkerTensorNormalizeForwardOpRequest
 
 export type WorkerRoundtripResponse =
   | { type: 'tensor-roundtrip-result'; id: string; ok: true; tensor: WorkerTensor }

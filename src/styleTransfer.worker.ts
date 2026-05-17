@@ -89,8 +89,9 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(global_invocation
 
 const isBinaryTensorOpPayload = (
   payload: WorkerRequest,
-): payload is { type: 'tensor-op'; id: string; op: 'add' | 'sub' | 'mul' | 'div'; a: WorkerTensorOperand; b: WorkerTensorOperand } =>
-  payload.type === 'tensor-op' && (payload.op === 'add' || payload.op === 'sub' || payload.op === 'mul' || payload.op === 'div')
+): payload is Extract<WorkerRequest, { type: 'tensor-op'; op: 'add' | 'sub' | 'mul' | 'div' | 'mse'; a: WorkerTensorOperand; b: WorkerTensorOperand }> =>
+  payload.type === 'tensor-op'
+  && (payload.op === 'add' || payload.op === 'sub' || payload.op === 'mul' || payload.op === 'div' || payload.op === 'mse')
 
 const postResponse = (response: WorkerResponse): void => {
   self.postMessage(response)
@@ -300,7 +301,6 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
           }
           if (payload.op === 'normalize-forward') {
             const input = createTensor(payload.input.shape, payload.input.values)
-            if (payload.mean === undefined || payload.std === undefined) throw new Error('normalize-forward requires mean and std arrays.')
             const output = cpuNormalizeForward(input, payload.mean, payload.std)
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output.values) })
             return
