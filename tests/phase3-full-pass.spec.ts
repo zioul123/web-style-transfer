@@ -68,7 +68,7 @@ test('phase 3 full vgg19 pass parity through conv5_1 style + conv4_2 content los
     const styleLossByLayer: Record<string, number> = {}
     let contentLoss = 0
 
-    for (let layerIndex = 0; layerIndex <= 28; layerIndex += 1) {
+    for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
       const weightShape = weights[`conv${layerIndex}.weightShape`]
       const weightValues = weights[`conv${layerIndex}.weightValues`]
       const biasValues = weights[`conv${layerIndex}.biasValues`]
@@ -85,7 +85,7 @@ test('phase 3 full vgg19 pass parity through conv5_1 style + conv4_2 content los
         currentStyleShape = [1, weightShape[0], currentStyleShape[2], currentStyleShape[3]]
 
         if (fixture.styleLayerIndices.includes(layerIndex)) {
-          styleLossByLayer[`conv${layerIndex}`] = getScalar(await ask({ type: 'tensor-op', id: `style-${layerIndex}`, op: 'style-loss', input: { shape: currentInputShape, values: currentInputValues }, target: { shape: currentStyleShape, values: currentStyleValues } }))
+          styleLossByLayer[`relu${layerIndex}`] = getScalar(await ask({ type: 'tensor-op', id: `style-${layerIndex}`, op: 'style-loss', input: { shape: currentInputShape, values: currentInputValues }, target: { shape: currentStyleShape, values: currentStyleValues } }))
         }
         if (layerIndex === fixture.contentLayerIndex) {
           contentLoss = getScalar(await ask({ type: 'tensor-op', id: 'content-21', op: 'content-loss', input: { shape: currentInputShape, values: currentInputValues }, target: { shape: currentContentShape, values: currentContentValues } }))
@@ -95,6 +95,9 @@ test('phase 3 full vgg19 pass parity through conv5_1 style + conv4_2 content los
         currentContentValues = getValues(await ask({ type: 'tensor-op', id: `relu-c-${layerIndex}`, op: 'relu-forward', input: { shape: currentContentShape, values: currentContentValues } }))
         currentInputValues = getValues(await ask({ type: 'tensor-op', id: `relu-i-${layerIndex}`, op: 'relu-forward', input: { shape: currentInputShape, values: currentInputValues } }))
         currentStyleValues = getValues(await ask({ type: 'tensor-op', id: `relu-s-${layerIndex}`, op: 'relu-forward', input: { shape: currentStyleShape, values: currentStyleValues } }))
+      }
+      if (layerIndex === 29 && fixture.styleLayerIndices.includes(layerIndex)) {
+        styleLossByLayer[`relu${layerIndex}`] = getScalar(await ask({ type: 'tensor-op', id: `style-${layerIndex}`, op: 'style-loss', input: { shape: currentInputShape, values: currentInputValues }, target: { shape: currentStyleShape, values: currentStyleValues } }))
       }
       if (poolLayers.includes(layerIndex)) {
         currentContentValues = getValues(await ask({ type: 'tensor-op', id: `pool-c-${layerIndex}`, op: 'maxpool2d-forward', input: { shape: currentContentShape, values: currentContentValues } }))
