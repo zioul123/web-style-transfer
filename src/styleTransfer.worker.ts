@@ -759,7 +759,8 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
               return
             }
             const mse = await runMse(input.values, target.values)
-            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: mse })
+            const contentWeight: number = payload.contentWeight ?? 1
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: mse * contentWeight })
             return
           }
           if (payload.op === 'relu-backward') {
@@ -793,7 +794,9 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
             const input = createTensor(payload.input.shape, payload.input.values)
             const target = createTensor(payload.target.shape, payload.target.values)
             const gradIn = await runContentLossBackward(input.values, target.values)
-            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(gradIn) })
+            const contentWeight: number = payload.contentWeight ?? 1
+            const weightedGradIn = contentWeight === 1 ? gradIn : await runScalarBinaryOp('mul', gradIn, contentWeight, false)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(weightedGradIn) })
             return
           }
           if (payload.op === 'gram-backward') {
@@ -807,7 +810,9 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
             const input = createTensor(payload.input.shape, payload.input.values)
             const target = createTensor(payload.target.shape, payload.target.values)
             const gradIn = await runStyleLossBackward(input.values, input.shape, target.values)
-            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(gradIn) })
+            const styleWeight: number = payload.styleWeight ?? 1
+            const weightedGradIn = styleWeight === 1 ? gradIn : await runScalarBinaryOp('mul', gradIn, styleWeight, false)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(weightedGradIn) })
             return
           }
           if (payload.op === 'style-loss') {
@@ -816,7 +821,8 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
             const inputGram = await runGramMatrix(input.values, input.shape)
             const targetGram = await runGramMatrix(target.values, target.shape)
             const mse = await runMse(inputGram, targetGram)
-            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: mse })
+            const styleWeight: number = payload.styleWeight ?? 1
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: mse * styleWeight })
             return
           }
           if (payload.op === 'mse') {

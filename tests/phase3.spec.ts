@@ -38,8 +38,10 @@ test('phase 3 reshape/gram/content/style-loss parity', async ({ page }) => {
     const gram = await ask({ type: 'tensor-op', id: 'phase3-gram', op: 'gram-matrix', input: { shape: fixtureArg.inputShape, values: fixtureArg.inputValues } })
     const contentLoss = await ask({ type: 'tensor-op', id: 'phase3-content-loss', op: 'content-loss', input: { shape: fixtureArg.inputShape, values: fixtureArg.inputValues }, target: { shape: fixtureArg.targetShape, values: fixtureArg.targetValues } })
     const styleLoss = await ask({ type: 'tensor-op', id: 'phase3-style-loss', op: 'style-loss', input: { shape: fixtureArg.inputShape, values: fixtureArg.inputValues }, target: { shape: fixtureArg.targetShape, values: fixtureArg.targetValues } })
+    const weightedContentLoss = await ask({ type: 'tensor-op', id: 'phase3-content-loss-weighted', op: 'content-loss', input: { shape: fixtureArg.inputShape, values: fixtureArg.inputValues }, target: { shape: fixtureArg.targetShape, values: fixtureArg.targetValues }, contentWeight: 3.0 })
+    const weightedStyleLoss = await ask({ type: 'tensor-op', id: 'phase3-style-loss-weighted', op: 'style-loss', input: { shape: fixtureArg.inputShape, values: fixtureArg.inputValues }, target: { shape: fixtureArg.targetShape, values: fixtureArg.targetValues }, styleWeight: 5.0 })
     worker.terminate()
-    return { init, reshape, gram, contentLoss, styleLoss }
+    return { init, reshape, gram, contentLoss, styleLoss, weightedContentLoss, weightedStyleLoss }
   }, fixture)
 
   expect(result.init.type).toBe('webgpu-init-result')
@@ -57,4 +59,10 @@ test('phase 3 reshape/gram/content/style-loss parity', async ({ page }) => {
 
   if (result.styleLoss.type !== 'tensor-op-result' || !result.styleLoss.ok || !('scalar' in result.styleLoss)) throw new Error('style loss failed')
   expect(result.styleLoss.scalar).toBeCloseTo(fixture.expectedStyleLoss, 6)
+
+  if (result.weightedContentLoss.type !== 'tensor-op-result' || !result.weightedContentLoss.ok || !('scalar' in result.weightedContentLoss)) throw new Error('weighted content loss failed')
+  expect(result.weightedContentLoss.scalar).toBeCloseTo(fixture.expectedContentLoss * 3.0, 6)
+
+  if (result.weightedStyleLoss.type !== 'tensor-op-result' || !result.weightedStyleLoss.ok || !('scalar' in result.weightedStyleLoss)) throw new Error('weighted style loss failed')
+  expect(result.weightedStyleLoss.scalar).toBeCloseTo(fixture.expectedStyleLoss * 5.0, 6)
 })

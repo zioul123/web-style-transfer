@@ -95,6 +95,7 @@ type WorkerTensorContentLossBackwardOpRequest = {
   op: 'content-loss-backward'
   input: WorkerTensor
   target: WorkerTensor
+  contentWeight?: number
 }
 
 type WorkerTensorStyleLossBackwardOpRequest = {
@@ -103,6 +104,7 @@ type WorkerTensorStyleLossBackwardOpRequest = {
   op: 'style-loss-backward'
   input: WorkerTensor
   target: WorkerTensor
+  styleWeight?: number
 }
 
 type WorkerTensorReshapeGramOpRequest = {
@@ -118,6 +120,8 @@ type WorkerTensorLossOpRequest = {
   op: 'content-loss' | 'style-loss'
   input: WorkerTensor
   target: WorkerTensor
+  contentWeight?: number
+  styleWeight?: number
 }
 
 type WorkerTensorNormalizeForwardOpRequest = {

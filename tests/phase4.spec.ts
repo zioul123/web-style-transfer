@@ -58,11 +58,13 @@ test('phase 4 backward parity by layer + tiny e2e input gradient', async ({ page
     const gramBackward = await ask({ type: 'tensor-op', id: 'p4-gram', op: 'gram-backward', input: { shape: gram.inputShape, values: gram.inputValues }, gradOut: { shape: gram.gradOutShape, values: gram.gradOutValues } })
     const content = fixture.contentLossBackward
     const contentBackward = await ask({ type: 'tensor-op', id: 'p4-content', op: 'content-loss-backward', input: { shape: content.shape, values: content.inputValues }, target: { shape: content.shape, values: content.targetValues } })
+    const weightedContentBackward = await ask({ type: 'tensor-op', id: 'p4-content-weighted', op: 'content-loss-backward', input: { shape: content.shape, values: content.inputValues }, target: { shape: content.shape, values: content.targetValues }, contentWeight: 2.5 })
     const style = fixture.styleLossBackward
     const styleBackward = await ask({ type: 'tensor-op', id: 'p4-style', op: 'style-loss-backward', input: { shape: style.shape, values: style.inputValues }, target: { shape: style.shape, values: style.targetValues } })
+    const weightedStyleBackward = await ask({ type: 'tensor-op', id: 'p4-style-weighted', op: 'style-loss-backward', input: { shape: style.shape, values: style.inputValues }, target: { shape: style.shape, values: style.targetValues }, styleWeight: 7.0 })
 
     worker.terminate()
-    return { init, fixture, reluBackward, poolBackward, normBackward, convBackward, gramBackward, contentBackward, styleBackward }
+    return { init, fixture, reluBackward, poolBackward, normBackward, convBackward, gramBackward, contentBackward, weightedContentBackward, styleBackward, weightedStyleBackward }
   })
 
   expect(result.init.type).toBe('webgpu-init-result')
@@ -73,7 +75,9 @@ test('phase 4 backward parity by layer + tiny e2e input gradient', async ({ page
     [result.convBackward, result.fixture.convBackwardInput.expectedGradIn],
     [result.gramBackward, result.fixture.gramBackward.expectedGradIn],
     [result.contentBackward, result.fixture.contentLossBackward.expectedGradIn],
+    [result.weightedContentBackward, result.fixture.contentLossBackward.expectedGradIn.map((value) => value * 2.5)],
     [result.styleBackward, result.fixture.styleLossBackward.expectedGradIn],
+    [result.weightedStyleBackward, result.fixture.styleLossBackward.expectedGradIn.map((value) => value * 7.0)],
   ]
   for (const [response, expected] of checks) {
     expect(response.type).toBe('tensor-op-result')
