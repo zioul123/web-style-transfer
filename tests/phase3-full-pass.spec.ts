@@ -84,9 +84,6 @@ test('phase 3 full vgg19 pass parity through conv5_1 style + conv4_2 content los
         currentInputShape = [1, weightShape[0], currentInputShape[2], currentInputShape[3]]
         currentStyleShape = [1, weightShape[0], currentStyleShape[2], currentStyleShape[3]]
 
-        if (fixture.styleLayerIndices.includes(layerIndex)) {
-          styleLossByLayer[`relu${layerIndex}`] = getScalar(await ask({ type: 'tensor-op', id: `style-${layerIndex}`, op: 'style-loss', input: { shape: currentInputShape, values: currentInputValues }, target: { shape: currentStyleShape, values: currentStyleValues } }))
-        }
         if (layerIndex === fixture.contentLayerIndex) {
           contentLoss = getScalar(await ask({ type: 'tensor-op', id: 'content-21', op: 'content-loss', input: { shape: currentInputShape, values: currentInputValues }, target: { shape: currentContentShape, values: currentContentValues } }))
         }
@@ -96,7 +93,7 @@ test('phase 3 full vgg19 pass parity through conv5_1 style + conv4_2 content los
         currentInputValues = getValues(await ask({ type: 'tensor-op', id: `relu-i-${layerIndex}`, op: 'relu-forward', input: { shape: currentInputShape, values: currentInputValues } }))
         currentStyleValues = getValues(await ask({ type: 'tensor-op', id: `relu-s-${layerIndex}`, op: 'relu-forward', input: { shape: currentStyleShape, values: currentStyleValues } }))
       }
-      if (layerIndex === 29 && fixture.styleLayerIndices.includes(layerIndex)) {
+      if (fixture.styleLayerIndices.includes(layerIndex)) {
         styleLossByLayer[`relu${layerIndex}`] = getScalar(await ask({ type: 'tensor-op', id: `style-${layerIndex}`, op: 'style-loss', input: { shape: currentInputShape, values: currentInputValues }, target: { shape: currentStyleShape, values: currentStyleValues } }))
       }
       if (poolLayers.includes(layerIndex)) {
