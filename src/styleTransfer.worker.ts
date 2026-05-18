@@ -811,8 +811,9 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
       if (reluShape === undefined) throw new Error(`Unsupported ReLU style layer index ${reluLayerIndex}.`)
       totalStyle += await runMse(await runGramMatrix(inputRelu, reluShape), await runGramMatrix(styleRelu, reluShape))
     }
-    const contentRelu = run.reluOut[payload.contentLayerIndex + 1] ?? run.convOut[payload.contentLayerIndex]
-    const contentTargetRelu = contentTargets.reluOut[payload.contentLayerIndex + 1] ?? contentTargets.convOut[payload.contentLayerIndex]
+    const contentRelu = run.reluOut[payload.contentLayerIndex]
+    const contentTargetRelu = contentTargets.reluOut[payload.contentLayerIndex]
+    if (contentRelu === undefined || contentTargetRelu === undefined) throw new Error(`Missing ReLU activation for content layer index ${payload.contentLayerIndex}.`)
     const contentLoss = await runMse(contentRelu, contentTargetRelu)
     losses.push(payload.styleWeight * totalStyle + payload.contentWeight * contentLoss)
     const nextValues = new Float32Array(inputValues.length)

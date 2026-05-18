@@ -15,7 +15,7 @@ ASSET_STYLE_PATH = REPO_ROOT / 'assets' / 'starry_night_768x970.jpg'
 OUTPUT_DIR = REPO_ROOT / 'public' / 'vgg19-phase3-full-pass'
 
 STYLE_LAYER_INDICES = [1, 6, 11, 20, 29]  # relu1_1, relu2_1, relu3_1, relu4_1, relu5_1
-CONTENT_LAYER_INDEX = 21  # conv4_2
+CONTENT_LAYER_INDEX = 22  # relu4_2
 LAST_LAYER_INDEX = 29
 
 
