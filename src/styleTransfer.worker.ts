@@ -758,7 +758,7 @@ const runFirstPoolOptimizer = async (payload: Extract<WorkerRequest, { type: 'ru
 }
 
 
-const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-style-transfer' }>): Promise<{ losses: number[]; finalValues: number[] }> => {
+const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-style-transfer' }>, onProgress: (step: number, loss: number, values: Float32Array) => void): Promise<{ losses: number[]; finalValues: number[] }> => {
   const reluLayers: readonly number[] = [1, 3, 6, 8, 11, 13, 15, 17, 20, 22, 24, 26, 29]
   const poolLayers: readonly number[] = [4, 9, 18, 27]
   const contentNorm = await runNormalizeForward(new Float32Array(payload.contentImageValues), payload.inputShape, payload.mean, payload.std)
@@ -815,13 +815,15 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
     const contentTargetRelu = contentTargets.reluOut[payload.contentLayerIndex]
     if (contentRelu === undefined || contentTargetRelu === undefined) throw new Error(`Missing ReLU activation for content layer index ${payload.contentLayerIndex}.`)
     const contentLoss = await runMse(contentRelu, contentTargetRelu)
-    losses.push(payload.styleWeight * totalStyle + payload.contentWeight * contentLoss)
+    const totalLoss = payload.styleWeight * totalStyle + payload.contentWeight * contentLoss
+    losses.push(totalLoss)
     const nextValues = new Float32Array(inputValues.length)
     for (let i = 0; i < inputValues.length; i += 1) {
       const direction = Math.sign(inputValues[i] - payload.contentImageValues[i])
       nextValues[i] = inputValues[i] - payload.learningRate * 0.1 * direction
     }
     inputValues = new Float32Array(await runClamp(nextValues, 0, 1))
+    onProgress(step + 1, totalLoss, inputValues)
   }
   return { losses, finalValues: Array.from(inputValues) }
 }
@@ -858,7 +860,9 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
     case 'run-style-transfer': {
       void (async (): Promise<void> => {
         try {
-          const result = await runStyleTransfer(payload)
+          const result = await runStyleTransfer(payload, (step, loss, values) => {
+            postResponse({ type: 'run-style-transfer-progress', id: payload.id, step, loss, values: Array.from(values) })
+          })
           postResponse({ type: 'run-style-transfer-result', id: payload.id, ok: true, losses: result.losses, finalValues: result.finalValues })
         } catch (error: unknown) {
           postResponse({ type: 'run-style-transfer-result', id: payload.id, ok: false, message: error instanceof Error ? error.message : 'Style transfer run failed.' })

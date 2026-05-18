@@ -222,4 +222,6 @@ export type WorkerResponse =
   | { type: 'run-first-pool-optimizer-result'; id: string; ok: true; losses: number[]; finalValues: number[] }
   | { type: 'run-first-pool-optimizer-result'; id: string; ok: false; message: string }
   | { type: 'run-style-transfer-result'; id: string; ok: true; losses: number[]; finalValues: number[] }
+
+  | { type: 'run-style-transfer-progress'; id: string; step: number; loss: number; values: number[] }
   | { type: 'run-style-transfer-result'; id: string; ok: false; message: string }
