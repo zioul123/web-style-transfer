@@ -1,11 +1,16 @@
 import { expect, test } from '@playwright/test'
 import type { WorkerRequest, WorkerResponse } from '../src/types'
+import { VGG19_POOL_LAYER_INDICES_UP_TO_CONV5_1, VGG19_RELU_LAYER_INDICES_UP_TO_CONV5_1 } from '../src/ml/constants/vgg19'
 
 test('phase 3 full vgg19 pass parity through conv5_1 style + conv4_2 content losses', async ({ page }) => {
   test.setTimeout(300000)
   await page.goto('/')
   const artifactReady = await page.evaluate(async () => {
-    const check = async (url: string): Promise<boolean> => (await fetch(url)).ok
+    const check = async (url: string): Promise<boolean> => {
+      const response = await fetch(url)
+      if (!response.ok) return false
+      try { JSON.parse(await response.text()); return true } catch (_error) { return false }
+    }
     return await check('/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json')
       && await check('/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json')
   })
@@ -79,11 +84,11 @@ test('phase 3 full vgg19 pass parity through conv5_1 style + conv4_2 content los
           contentLoss = getScalar(await ask({ type: 'tensor-op', id: 'content-21', op: 'content-loss', input: { shape: currentInputShape, values: currentInputValues }, target: { shape: currentInputShape, values: currentInputValues } }))
         }
       }
-      if ([1, 3, 6, 8, 11, 13, 15, 17, 20, 22, 24, 26].includes(layerIndex)) {
+      if (VGG19_RELU_LAYER_INDICES_UP_TO_CONV5_1.includes(layerIndex)) {
         currentInputValues = getValues(await ask({ type: 'tensor-op', id: `relu-i-${layerIndex}`, op: 'relu-forward', input: { shape: currentInputShape, values: currentInputValues } }))
         currentStyleValues = getValues(await ask({ type: 'tensor-op', id: `relu-s-${layerIndex}`, op: 'relu-forward', input: { shape: currentStyleShape, values: currentStyleValues } }))
       }
-      if ([4, 9, 18, 27].includes(layerIndex)) {
+      if (VGG19_POOL_LAYER_INDICES_UP_TO_CONV5_1.includes(layerIndex)) {
         currentInputValues = getValues(await ask({ type: 'tensor-op', id: `pool-i-${layerIndex}`, op: 'maxpool2d-forward', input: { shape: currentInputShape, values: currentInputValues } }))
         currentStyleValues = getValues(await ask({ type: 'tensor-op', id: `pool-s-${layerIndex}`, op: 'maxpool2d-forward', input: { shape: currentStyleShape, values: currentStyleValues } }))
         currentInputShape = [1, currentInputShape[1], Math.floor(currentInputShape[2] / 2), Math.floor(currentInputShape[3] / 2)]
