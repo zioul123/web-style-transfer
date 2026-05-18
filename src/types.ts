@@ -47,6 +47,21 @@ type WorkerTensorUnaryForwardOpRequest = {
   input: WorkerTensor
 }
 
+type WorkerTensorReshapeGramOpRequest = {
+  type: 'tensor-op'
+  id: string
+  op: 'reshape-chw-flatten' | 'gram-matrix'
+  input: WorkerTensor
+}
+
+type WorkerTensorLossOpRequest = {
+  type: 'tensor-op'
+  id: string
+  op: 'content-loss' | 'style-loss'
+  input: WorkerTensor
+  target: WorkerTensor
+}
+
 type WorkerTensorNormalizeForwardOpRequest = {
   type: 'tensor-op'
   id: string
@@ -65,6 +80,8 @@ export type WorkerRequest =
   | WorkerTensorConv2dForwardOpRequest
   | WorkerTensorUnaryForwardOpRequest
   | WorkerTensorNormalizeForwardOpRequest
+  | WorkerTensorReshapeGramOpRequest
+  | WorkerTensorLossOpRequest
 
 export type WorkerRoundtripResponse =
   | { type: 'tensor-roundtrip-result'; id: string; ok: true; tensor: WorkerTensor }
