@@ -378,7 +378,9 @@ const initWebGpu = async (id: string): Promise<void> => {
     return
   }
   gpuDevice = await adapter.requestDevice()
-  postResponse({ type: 'webgpu-init-result', id, ok: true, message: `WebGPU device initialized: ${gpuDevice.label || 'unnamed-device'}` })
+  const adapterInfo = await (adapter as GPUAdapter & { requestAdapterInfo?: () => Promise<{ vendor: string; architecture: string; device: string; description: string }> }).requestAdapterInfo?.().catch(() => null)
+  const infoMessage = adapterInfo == null ? '' : ` | vendor=${adapterInfo.vendor}, architecture=${adapterInfo.architecture}, device=${adapterInfo.device}, description=${adapterInfo.description}`
+  postResponse({ type: 'webgpu-init-result', id, ok: true, message: `WebGPU device initialized: ${gpuDevice.label || 'unnamed-device'}${infoMessage}` })
 }
 
 const runBinaryOp = async (op: 'add' | 'sub' | 'mul' | 'div', a: Float32Array, b: Float32Array, mode: 'tensorTensor' | 'tensorScalar' | 'scalarTensor'): Promise<Float32Array> => {
