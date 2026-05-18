@@ -14,9 +14,9 @@ ASSET_CONTENT_PATH = REPO_ROOT / 'assets' / 'madeira_128x128.jpg'
 ASSET_STYLE_PATH = REPO_ROOT / 'assets' / 'starry_night_768x970.jpg'
 OUTPUT_DIR = REPO_ROOT / 'public' / 'vgg19-phase3-full-pass'
 
-STYLE_LAYER_INDICES = [0, 5, 10, 19, 28]  # conv1_1, conv2_1, conv3_1, conv4_1, conv5_1
+STYLE_LAYER_INDICES = [1, 6, 11, 20, 29]  # relu1_1, relu2_1, relu3_1, relu4_1, relu5_1
 CONTENT_LAYER_INDEX = 21  # conv4_2
-LAST_LAYER_INDEX = 28
+LAST_LAYER_INDEX = 29
 
 
 def tensor_to_list(tensor: torch.Tensor) -> list[float]:
@@ -76,7 +76,7 @@ def export() -> None:
       input_features = layer(input_features)
 
       if layer_index in STYLE_LAYER_INDICES:
-        style_losses[f'conv{layer_index}'] = torch.nn.functional.mse_loss(gram_matrix(input_features), gram_matrix(style_features)).item()
+        style_losses[f'relu{layer_index}'] = torch.nn.functional.mse_loss(gram_matrix(input_features), gram_matrix(style_features)).item()
       if layer_index == CONTENT_LAYER_INDEX:
         content_loss = torch.nn.functional.mse_loss(input_features, content_features).item()
 

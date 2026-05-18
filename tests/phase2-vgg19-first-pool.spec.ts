@@ -8,6 +8,9 @@ type VggWeightsFixture = {
   conv2WeightShape: [number, number, number, number]
   conv2WeightValues: number[]
   conv2BiasValues: number[]
+  conv3WeightShape: [number, number, number, number]
+  conv3WeightValues: number[]
+  conv3BiasValues: number[]
 }
 
 type VggCaseFixture = {
@@ -89,16 +92,25 @@ test('phase 2 vgg19 truncated parity through first pool', async ({ page }) => {
     const relu2 = await ask({ type: 'tensor-op', id: 'phase2-vgg-relu2', op: 'relu-forward', input: { shape: [1, 64, 16, 16], values: conv2Values } })
     const relu2Values = vectorValues(relu2, 'relu2')
     const pool1 = await ask({ type: 'tensor-op', id: 'phase2-vgg-pool1', op: 'maxpool2d-forward', input: { shape: [1, 64, 16, 16], values: relu2Values } })
+    const pool1Values = vectorValues(pool1, 'pool1')
+    const conv3 = await ask({
+      type: 'tensor-op', id: 'phase2-vgg-conv3', op: 'conv2d-forward',
+      input: { shape: [1, 64, 8, 8], values: pool1Values },
+      weight: { shape: weightsArg.conv3WeightShape, values: weightsArg.conv3WeightValues },
+      bias: weightsArg.conv3BiasValues,
+    })
+    const conv3Values = vectorValues(conv3, 'conv3')
+    const relu3 = await ask({ type: 'tensor-op', id: 'phase2-vgg-relu3', op: 'relu-forward', input: { shape: [1, 128, 8, 8], values: conv3Values } })
 
     worker.terminate()
-    return { init, norm, pool1 }
+    return { init, norm, relu3 }
   }, { weightsArg: weights, caseArg: caseData })
 
   expect(result.init.type).toBe('webgpu-init-result')
   if (result.norm.type !== 'tensor-op-result' || !result.norm.ok || !('values' in result.norm)) throw new Error('normalize-forward failed')
-  if (result.pool1.type !== 'tensor-op-result' || !result.pool1.ok || !('values' in result.pool1)) throw new Error('vgg run failed')
+  if (result.relu3.type !== 'tensor-op-result' || !result.relu3.ok || !('values' in result.relu3)) throw new Error('vgg run failed')
 
   for (let i = 0; i < caseData.expectedValues.length; i += 1) {
-    expect(result.pool1.values[i]).toBeCloseTo(caseData.expectedValues[i], 4)
+    expect(result.relu3.values[i]).toBeCloseTo(caseData.expectedValues[i], 4)
   }
 })

@@ -31,7 +31,9 @@ function App() {
           break
         }
         case 'tensor-roundtrip-result':
-        case 'tensor-op-result': {
+        case 'tensor-op-result':
+        case 'run-first-pool-optimizer-result':
+        case 'run-style-transfer-result': {
           break
         }
         default: {

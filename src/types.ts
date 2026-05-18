@@ -133,10 +133,52 @@ type WorkerTensorNormalizeForwardOpRequest = {
   std: number[]
 }
 
+
+
+type WorkerRunStyleTransferRequest = {
+  type: 'run-style-transfer'
+  id: string
+  inputShape: TensorShape
+  inputImageValues: number[]
+  contentImageValues: number[]
+  styleImageValues: number[]
+  mean: [number, number, number]
+  std: [number, number, number]
+  styleLayerIndices: number[]
+  contentLayerIndex: number
+  weights: Record<string, number[] | [number, number, number, number]>
+  contentWeight: number
+  styleWeight: number
+  learningRate: number
+  steps: number
+}
+type WorkerRunFirstPoolOptimizerRequest = {
+  type: 'run-first-pool-optimizer'
+  id: string
+  inputShape: TensorShape
+  mean: [number, number, number]
+  std: [number, number, number]
+  contentImageValues: number[]
+  styleImageValues: number[]
+  initialInputValues: number[]
+  conv1Weight: WorkerTensor
+  conv1Bias: number[]
+  conv2Weight: WorkerTensor
+  conv2Bias: number[]
+  conv3Weight: WorkerTensor
+  conv3Bias: number[]
+  contentWeight: number
+  styleWeightConv1: number
+  styleWeightConv3: number
+  learningRate: number
+  steps: number
+}
 export type WorkerRequest =
   | { type: 'ping'; id: string }
   | { type: 'init-webgpu'; id: string }
   | { type: 'tensor-roundtrip'; id: string; tensor: WorkerTensor }
+  | WorkerRunFirstPoolOptimizerRequest
+  | WorkerRunStyleTransferRequest
   | WorkerTensorBinaryOpRequest
   | WorkerTensorClampOpRequest
   | WorkerTensorConv2dForwardOpRequest
@@ -177,3 +219,7 @@ export type WorkerResponse =
   | WorkerRoundtripResponse
   | WorkerTensorOpResponse
   | { type: 'error'; id: string; message: string }
+  | { type: 'run-first-pool-optimizer-result'; id: string; ok: true; losses: number[]; finalValues: number[] }
+  | { type: 'run-first-pool-optimizer-result'; id: string; ok: false; message: string }
+  | { type: 'run-style-transfer-result'; id: string; ok: true; losses: number[]; finalValues: number[] }
+  | { type: 'run-style-transfer-result'; id: string; ok: false; message: string }
