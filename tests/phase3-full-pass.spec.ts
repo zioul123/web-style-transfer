@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import type { WorkerRequest, WorkerResponse } from '../src/types'
 import { VGG19_POOL_LAYER_INDICES_UP_TO_CONV5_1, VGG19_RELU_LAYER_INDICES_UP_TO_CONV5_1 } from '../src/ml/constants/vgg19'
 
-test('phase 3 full vgg19 pass parity through conv5_1 style + conv4_2 content losses', async ({ page }) => {
+test('phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content losses', async ({ page }) => {
   test.setTimeout(300000)
   await page.goto('/')
   const artifactReady = await page.evaluate(async () => {
@@ -68,7 +68,7 @@ test('phase 3 full vgg19 pass parity through conv5_1 style + conv4_2 content los
     const styleLossByLayer: Record<string, number> = {}
     let contentLoss = 0
 
-    for (let layerIndex = 0; layerIndex <= 28; layerIndex += 1) {
+    for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
       const weightShape = weights[`conv${layerIndex}.weightShape`]
       const weightValues = weights[`conv${layerIndex}.weightValues`]
       const biasValues = weights[`conv${layerIndex}.biasValues`]
@@ -84,17 +84,17 @@ test('phase 3 full vgg19 pass parity through conv5_1 style + conv4_2 content los
         currentInputShape = [1, weightShape[0], currentInputShape[2], currentInputShape[3]]
         currentStyleShape = [1, weightShape[0], currentStyleShape[2], currentStyleShape[3]]
 
-        if (fixture.styleLayerIndices.includes(layerIndex)) {
-          styleLossByLayer[`conv${layerIndex}`] = getScalar(await ask({ type: 'tensor-op', id: `style-${layerIndex}`, op: 'style-loss', input: { shape: currentInputShape, values: currentInputValues }, target: { shape: currentStyleShape, values: currentStyleValues } }))
-        }
-        if (layerIndex === fixture.contentLayerIndex) {
-          contentLoss = getScalar(await ask({ type: 'tensor-op', id: 'content-21', op: 'content-loss', input: { shape: currentInputShape, values: currentInputValues }, target: { shape: currentContentShape, values: currentContentValues } }))
-        }
       }
       if (reluLayers.includes(layerIndex)) {
         currentContentValues = getValues(await ask({ type: 'tensor-op', id: `relu-c-${layerIndex}`, op: 'relu-forward', input: { shape: currentContentShape, values: currentContentValues } }))
         currentInputValues = getValues(await ask({ type: 'tensor-op', id: `relu-i-${layerIndex}`, op: 'relu-forward', input: { shape: currentInputShape, values: currentInputValues } }))
         currentStyleValues = getValues(await ask({ type: 'tensor-op', id: `relu-s-${layerIndex}`, op: 'relu-forward', input: { shape: currentStyleShape, values: currentStyleValues } }))
+      }
+      if (layerIndex === fixture.contentLayerIndex) {
+        contentLoss = getScalar(await ask({ type: 'tensor-op', id: `content-${layerIndex}`, op: 'content-loss', input: { shape: currentInputShape, values: currentInputValues }, target: { shape: currentContentShape, values: currentContentValues } }))
+      }
+      if (fixture.styleLayerIndices.includes(layerIndex)) {
+        styleLossByLayer[`relu${layerIndex}`] = getScalar(await ask({ type: 'tensor-op', id: `style-${layerIndex}`, op: 'style-loss', input: { shape: currentInputShape, values: currentInputValues }, target: { shape: currentStyleShape, values: currentStyleValues } }))
       }
       if (poolLayers.includes(layerIndex)) {
         currentContentValues = getValues(await ask({ type: 'tensor-op', id: `pool-c-${layerIndex}`, op: 'maxpool2d-forward', input: { shape: currentContentShape, values: currentContentValues } }))
@@ -110,6 +110,15 @@ test('phase 3 full vgg19 pass parity through conv5_1 style + conv4_2 content los
     const styleTotal = Object.values(styleLossByLayer).reduce((sum, value) => sum + value, 0)
     return { init, styleLossByLayer, styleTotal, contentLoss, totalLoss: styleTotal + contentLoss, expected: fixture }
   }, { reluLayers: VGG19_RELU_LAYER_INDICES_UP_TO_CONV5_1, poolLayers: VGG19_POOL_LAYER_INDICES_UP_TO_CONV5_1 })
+
+
+  const styleLayerPairs = Object.entries(result.expected.expectedStyleLossByLayer).map(([layerName, expectedLoss]) => ({
+    layerName,
+    expectedLoss,
+    actualLoss: result.styleLossByLayer[layerName],
+    diff: (result.styleLossByLayer[layerName] ?? Number.NaN) - expectedLoss,
+  }))
+  console.log('phase3 full-pass style-loss pairs', JSON.stringify(styleLayerPairs))
 
   expect(result.init.type).toBe('webgpu-init-result')
   if (result.init.type !== 'webgpu-init-result') throw new Error('Expected init result')
