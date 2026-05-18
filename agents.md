@@ -11,6 +11,14 @@ npx playwright install chromium
 npx playwright install-deps chromium
 ```
 
+When running some e2e tests, certain tests that require fixtures will be skipped by default. Prior to running them, you will need to generate the fixtures by running:
+
+```bash
+python python-reference/export_vgg19_phase3_full_pass.py
+```
+
+Do not commit these fixtures if they were not already commited, as they are very big.
+
 # Style
 
 Use explicit types when declaring state, e.g. instead of `const [myState, setMyState] = useState('abcde.');`, use `const [myState, setMyState] = useState<string>('abcde.');`.

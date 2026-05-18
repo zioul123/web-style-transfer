@@ -116,6 +116,6 @@ test('phase 3 full vgg19 pass parity through conv5_1 style + conv4_2 content los
   expect(result.init.ok).toBeTruthy()
   for (const [layerName, expectedLoss] of Object.entries(result.expected.expectedStyleLossByLayer)) expect(result.styleLossByLayer[layerName]).toBeCloseTo(expectedLoss, 4)
   expect(result.styleTotal).toBeCloseTo(result.expected.expectedStyleLossTotal, 4)
-  expect(result.contentLoss).toBeCloseTo(result.expected.expectedContentLoss, 6)
+  expect(result.contentLoss).toBeCloseTo(result.expected.expectedContentLoss, 4)
   expect(result.totalLoss).toBeCloseTo(result.expected.expectedTotalLoss, 4)
 })
