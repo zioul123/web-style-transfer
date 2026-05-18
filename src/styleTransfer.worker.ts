@@ -763,14 +763,17 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
   const poolLayers: readonly number[] = [4, 9, 18, 27]
   const contentNorm = await runNormalizeForward(new Float32Array(payload.contentImageValues), payload.inputShape, payload.mean, payload.std)
   const styleNorm = await runNormalizeForward(new Float32Array(payload.styleImageValues), payload.inputShape, payload.mean, payload.std)
-  const runForward = async (start: Float32Array): Promise<{ convOut: Record<number, Float32Array>; reluOut: Record<number, Float32Array>; convInShape: Record<number, readonly [number, number, number, number]>; reluPre: Record<number, Float32Array>; final: Float32Array }> => {
+  const runForward = async (start: Float32Array): Promise<{ reluOut: Record<number, Float32Array>; convInShape: Record<number, readonly [number, number, number, number]>; reluPre: Record<number, Float32Array>; layerInput: Record<number, Float32Array>; layerInputShape: Record<number, readonly [number, number, number, number]>; final: Float32Array }> => {
     let shape: readonly [number, number, number, number] = payload.inputShape
     let values = start
-    const convOut: Record<number, Float32Array> = {}
     const reluOut: Record<number, Float32Array> = {}
     const convInShape: Record<number, readonly [number, number, number, number]> = {}
     const reluPre: Record<number, Float32Array> = {}
+    const layerInput: Record<number, Float32Array> = {}
+    const layerInputShape: Record<number, readonly [number, number, number, number]> = {}
     for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
+      layerInput[layerIndex] = values
+      layerInputShape[layerIndex] = shape
       const weightShapeRaw = payload.weights[`conv${layerIndex}.weightShape`]
       const weightValues = payload.weights[`conv${layerIndex}.weightValues`]
       const biasValues = payload.weights[`conv${layerIndex}.biasValues`]
@@ -779,7 +782,6 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
         const weightShape = weightShapeRaw as [number, number, number, number]
         values = await runConv2dForward(values, shape, new Float32Array(weightValues), weightShape, biasValues)
         shape = [1, weightShape[0], shape[2], shape[3]]
-        convOut[layerIndex] = values
       }
       if (reluLayers.includes(layerIndex)) {
         reluPre[layerIndex] = values
@@ -791,7 +793,7 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
         shape = [1, shape[1], Math.floor(shape[2] / 2), Math.floor(shape[3] / 2)]
       }
     }
-    return { convOut, reluOut, convInShape, reluPre, final: values }
+    return { reluOut, convInShape, reluPre, layerInput, layerInputShape, final: values }
   }
 
   const contentTargets = await runForward(contentNorm)
@@ -816,10 +818,44 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
     if (contentRelu === undefined || contentTargetRelu === undefined) throw new Error(`Missing ReLU activation for content layer index ${payload.contentLayerIndex}.`)
     const contentLoss = await runMse(contentRelu, contentTargetRelu)
     losses.push(payload.styleWeight * totalStyle + payload.contentWeight * contentLoss)
+    const gradByReluLayer: Record<number, Float32Array> = {}
+    for (const reluLayerIndex of payload.styleLayerIndices) {
+      const inputRelu = run.reluOut[reluLayerIndex]
+      const styleRelu = styleTargets.reluOut[reluLayerIndex]
+      if (inputRelu === undefined || styleRelu === undefined) throw new Error(`Missing ReLU activation for style gradient layer index ${reluLayerIndex}.`)
+      const reluShapeByLayer: Record<number, readonly [number, number, number, number]> = { 1: [1, 64, 16, 16], 6: [1, 128, 8, 8], 11: [1, 256, 4, 4], 20: [1, 512, 2, 2], 29: [1, 512, 1, 1] }
+      const reluShape = reluShapeByLayer[reluLayerIndex]
+      if (reluShape === undefined) throw new Error(`Unsupported ReLU style gradient layer index ${reluLayerIndex}.`)
+      const styleGrad = await runStyleLossBackward(inputRelu, reluShape, styleRelu)
+      const weightedStyleGrad = payload.styleWeight === 1 ? styleGrad : await runScalarBinaryOp('mul', styleGrad, payload.styleWeight, false)
+      gradByReluLayer[reluLayerIndex] = gradByReluLayer[reluLayerIndex] === undefined ? weightedStyleGrad : await runBinaryOp('add', gradByReluLayer[reluLayerIndex], weightedStyleGrad, 'tensorTensor')
+    }
+    const contentGrad = await runContentLossBackward(contentRelu, contentTargetRelu)
+    const weightedContentGrad = payload.contentWeight === 1 ? contentGrad : await runScalarBinaryOp('mul', contentGrad, payload.contentWeight, false)
+    gradByReluLayer[payload.contentLayerIndex] = gradByReluLayer[payload.contentLayerIndex] === undefined ? weightedContentGrad : await runBinaryOp('add', gradByReluLayer[payload.contentLayerIndex], weightedContentGrad, 'tensorTensor')
+
+    let grad: Float32Array | null = null
+    for (let layerIndex = 29; layerIndex >= 0; layerIndex -= 1) {
+      if (poolLayers.includes(layerIndex)) {
+        if (grad !== null) grad = await runMaxPool2dBackward(run.layerInput[layerIndex], run.layerInputShape[layerIndex], grad)
+      }
+      if (reluLayers.includes(layerIndex)) {
+        const tapGrad = gradByReluLayer[layerIndex]
+        if (tapGrad !== undefined) grad = grad === null ? tapGrad : await runBinaryOp('add', grad, tapGrad, 'tensorTensor')
+        if (grad !== null) grad = await runReluBackward(run.reluPre[layerIndex], grad)
+      }
+      const weightShapeRaw = payload.weights[`conv${layerIndex}.weightShape`]
+      const weightValues = payload.weights[`conv${layerIndex}.weightValues`]
+      if (Array.isArray(weightShapeRaw) && Array.isArray(weightValues) && grad !== null) {
+        grad = await runConv2dBackwardInput(run.convInShape[layerIndex], grad, new Float32Array(weightValues), weightShapeRaw as [number, number, number, number])
+      }
+    }
+    if (grad === null) throw new Error('No gradient path reached the input image.')
+    const gInput = await runNormalizeBackward(grad, payload.inputShape, payload.std)
+
     const nextValues = new Float32Array(inputValues.length)
     for (let i = 0; i < inputValues.length; i += 1) {
-      const direction = Math.sign(inputValues[i] - payload.contentImageValues[i])
-      nextValues[i] = inputValues[i] - payload.learningRate * 0.1 * direction
+      nextValues[i] = inputValues[i] - payload.learningRate * gInput[i]
     }
     inputValues = new Float32Array(await runClamp(nextValues, 0, 1))
   }
