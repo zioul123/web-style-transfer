@@ -1,74 +1,40 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Canvas, useLoader } from '@react-three/fiber'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { TextureLoader } from 'three'
 import type { WorkerRequest, WorkerResponse } from './types'
 
+type FirstPoolWeights = {
+  conv1Weight: { shape: [number, number, number, number]; values: number[] }
+  conv1Bias: number[]
+  conv2Weight: { shape: [number, number, number, number]; values: number[] }
+  conv2Bias: number[]
+  conv3Weight: { shape: [number, number, number, number]; values: number[] }
+  conv3Bias: number[]
+}
+type ResolutionPreset = 128 | 256
 const createMessageId = (): string => `${Date.now()}-${Math.random().toString(16).slice(2)}`
 
+const readFileAsImage = (file: File): Promise<HTMLImageElement> => new Promise((resolve, reject) => { const u = URL.createObjectURL(file); const i = new Image(); i.onload = () => { URL.revokeObjectURL(u); resolve(i) }; i.onerror = () => { URL.revokeObjectURL(u); reject(new Error(`Failed to load ${file.name}`)) }; i.src = u })
+const imageToTensorValues = (image: HTMLImageElement, resolution: ResolutionPreset): number[] => { const canvas = document.createElement('canvas'); canvas.width = resolution; canvas.height = resolution; const ctx = canvas.getContext('2d'); if (ctx === null) throw new Error('2D canvas unavailable.'); ctx.drawImage(image, 0, 0, resolution, resolution); const data = ctx.getImageData(0, 0, resolution, resolution).data; const spatial = resolution * resolution; const chw = new Float32Array(3 * spatial); for (let i = 0; i < spatial; i += 1) { chw[i] = data[i * 4] / 255; chw[spatial + i] = data[i * 4 + 1] / 255; chw[spatial * 2 + i] = data[i * 4 + 2] / 255 } return Array.from(chw) }
+const tensorValuesToDataUrl = (values: number[], resolution: ResolutionPreset): string => { const spatial = resolution * resolution; const canvas = document.createElement('canvas'); canvas.width = resolution; canvas.height = resolution; const ctx = canvas.getContext('2d'); if (ctx === null) throw new Error('2D canvas unavailable.'); const img = ctx.createImageData(resolution, resolution); for (let i = 0; i < spatial; i += 1) { img.data[i * 4] = Math.max(0, Math.min(255, Math.round(values[i] * 255))); img.data[i * 4 + 1] = Math.max(0, Math.min(255, Math.round(values[spatial + i] * 255))); img.data[i * 4 + 2] = Math.max(0, Math.min(255, Math.round(values[spatial * 2 + i] * 255))); img.data[i * 4 + 3] = 255 } ctx.putImageData(img, 0, 0); return canvas.toDataURL('image/png') }
+
+const Plane = ({ url, x }: { url: string; x: number }) => { const texture = useLoader(TextureLoader, url); return <mesh position={[x, 0, 0]}><planeGeometry args={[1.75, 1.75]} /><meshBasicMaterial map={texture} /></mesh> }
+
 function App() {
-  const [workerStatus, setWorkerStatus] = useState<string>('Worker starting…')
-  const [webGpuStatus, setWebGpuStatus] = useState<string>('Checking WebGPU support…')
+  const [workerStatus, setWorkerStatus] = useState<string>('Worker starting…'); const [gpuStatus, setGpuStatus] = useState<string>('Checking WebGPU support…'); const [gpuInfo, setGpuInfo] = useState<string>('GPU details pending…'); const [resolution, setResolution] = useState<ResolutionPreset>(128); const [stepsPerChunk, setStepsPerChunk] = useState<number>(4); const [contentWeight, setContentWeight] = useState<number>(1); const [styleWeight, setStyleWeight] = useState<number>(1000); const [learningRate, setLearningRate] = useState<number>(0.02); const [iterations, setIterations] = useState<number>(0); const [isRunning, setIsRunning] = useState<boolean>(false); const [lastLoss, setLastLoss] = useState<number | null>(null); const [contentImage, setContentImage] = useState<string | null>(null); const [styleImage, setStyleImage] = useState<string | null>(null); const [outputImage, setOutputImage] = useState<string | null>(null); const [weights, setWeights] = useState<FirstPoolWeights | null>(null); const [contentTensor, setContentTensor] = useState<number[] | null>(null); const [styleTensor, setStyleTensor] = useState<number[] | null>(null); const [inputTensor, setInputTensor] = useState<number[] | null>(null)
+  const workerRef = useRef<Worker | null>(null); const hasWebGpuOnMainThread = useMemo<boolean>(() => 'gpu' in navigator, [])
 
-  const hasWebGpuOnMainThread = useMemo<boolean>(() => 'gpu' in navigator, [])
-
+  useEffect(() => { void fetch('/vgg19-first-pool/vgg19_first_pool_weights.json').then(async (r) => await r.json()).then((json: FirstPoolWeights) => setWeights(json)).catch(() => setWorkerStatus('Failed to load first-pool VGG weights.')) }, [])
   useEffect(() => {
-    const worker = new Worker(new URL('./styleTransfer.worker.ts', import.meta.url), {
-      type: 'module',
-    })
+    const worker = new Worker(new URL('./styleTransfer.worker.ts', import.meta.url), { type: 'module' }); workerRef.current = worker
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => { const p = event.data; if (p.type === 'pong') setWorkerStatus(`Worker ping OK @ ${new Date(p.timestamp).toISOString()}`); if (p.type === 'webgpu-init-result') setGpuStatus(p.ok ? p.message : `Fallback: ${p.message}`); if (p.type === 'error') setWorkerStatus(p.message); if (p.type === 'run-first-pool-optimizer-result') { if (!p.ok) { setWorkerStatus(p.message); setIsRunning(false); return } setInputTensor(p.finalValues); setOutputImage(tensorValuesToDataUrl(p.finalValues, resolution)); setIterations((v) => v + stepsPerChunk); if (p.losses.length > 0) setLastLoss(p.losses[p.losses.length - 1]) } }
+    worker.addEventListener('message', onMessage); worker.postMessage({ type: 'ping', id: createMessageId() } satisfies WorkerRequest); worker.postMessage({ type: 'init-webgpu', id: createMessageId() } satisfies WorkerRequest)
+    return () => { worker.removeEventListener('message', onMessage); worker.terminate(); workerRef.current = null }
+  }, [resolution, stepsPerChunk])
+  useEffect(() => { void (async () => { if (!hasWebGpuOnMainThread) { setGpuInfo('No WebGPU adapter on main thread.'); return } const adapter = await navigator.gpu.requestAdapter(); if (adapter === null) { setGpuInfo('Adapter request failed.'); return } const maybeAdapter = adapter as GPUAdapter & { requestAdapterInfo?: () => Promise<{ vendor?: string; architecture?: string; device?: string; description?: string }> }; if (maybeAdapter.requestAdapterInfo === undefined) { setGpuInfo('Adapter info API unavailable in this browser build.'); return } const info = await maybeAdapter.requestAdapterInfo(); setGpuInfo(`Vendor: ${info.vendor || 'unknown'} | Architecture: ${info.architecture || 'unknown'} | Device: ${info.device || 'unknown'} | Description: ${info.description || 'unknown'}`) })() }, [hasWebGpuOnMainThread])
+  useEffect(() => { if (!isRunning || workerRef.current === null || weights === null || contentTensor === null || styleTensor === null || inputTensor === null) return; workerRef.current.postMessage({ type: 'run-first-pool-optimizer', id: createMessageId(), inputShape: [1, 3, resolution, resolution], mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], contentImageValues: contentTensor, styleImageValues: styleTensor, initialInputValues: inputTensor, conv1Weight: weights.conv1Weight, conv1Bias: weights.conv1Bias, conv2Weight: weights.conv2Weight, conv2Bias: weights.conv2Bias, conv3Weight: weights.conv3Weight, conv3Bias: weights.conv3Bias, contentWeight, styleWeightConv1: styleWeight, styleWeightConv3: styleWeight, learningRate, steps: stepsPerChunk } satisfies WorkerRequest) }, [contentTensor, contentWeight, inputTensor, isRunning, iterations, learningRate, resolution, stepsPerChunk, styleTensor, styleWeight, weights])
+  const onUpload = async (event: React.ChangeEvent<HTMLInputElement>, target: 'content' | 'style'): Promise<void> => { const file = event.target.files?.[0]; if (file === undefined) return; const image = await readFileAsImage(file); const dataUrl = URL.createObjectURL(file); const tensor = imageToTensorValues(image, resolution); if (target === 'content') { setContentImage(dataUrl); setContentTensor(tensor); setInputTensor(tensor); setOutputImage(tensorValuesToDataUrl(tensor, resolution)) } else { setStyleImage(dataUrl); setStyleTensor(tensor) } setIterations(0); setLastLoss(null) }
 
-    const handleMessage = (event: MessageEvent<WorkerResponse>): void => {
-      const payload = event.data
-
-      switch (payload.type) {
-        case 'pong': {
-          setWorkerStatus(`Worker responded to ping at ${new Date(payload.timestamp).toISOString()}.`)
-          break
-        }
-        case 'webgpu-init-result': {
-          setWebGpuStatus(payload.ok ? payload.message : `WebGPU fallback: ${payload.message}`)
-          break
-        }
-        case 'error': {
-          setWebGpuStatus(`WebGPU fallback: ${payload.message}`)
-          break
-        }
-        case 'tensor-roundtrip-result':
-        case 'tensor-op-result':
-        case 'run-first-pool-optimizer-result':
-        case 'run-style-transfer-result': {
-          break
-        }
-        default: {
-          const exhaustivenessCheck: never = payload
-          setWebGpuStatus(`WebGPU fallback: Unhandled worker message: ${String(exhaustivenessCheck)}`)
-        }
-      }
-    }
-
-    worker.addEventListener('message', handleMessage)
-
-    const pingMessage: WorkerRequest = { type: 'ping', id: createMessageId() }
-    worker.postMessage(pingMessage)
-
-    const initMessage: WorkerRequest = { type: 'init-webgpu', id: createMessageId() }
-    worker.postMessage(initMessage)
-
-    return () => {
-      worker.removeEventListener('message', handleMessage)
-      worker.terminate()
-    }
-  }, [])
-
-  return (
-    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col justify-center gap-6 px-6 py-16 text-slate-100">
-      <h1 className="text-3xl font-semibold">WebGPU Style Transfer — Phase 0</h1>
-      <p className="rounded-lg border border-slate-700 bg-slate-900 p-4">{workerStatus}</p>
-      <p className="rounded-lg border border-slate-700 bg-slate-900 p-4">{webGpuStatus}</p>
-      {!hasWebGpuOnMainThread ? (
-        <p className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-4 text-amber-200">
-          This browser environment does not expose WebGPU on the main thread. Use Chrome/Chromium with WebGPU enabled.
-        </p>
-      ) : null}
-    </main>
-  )
+  return <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-6 py-8 text-slate-100"><h1 className="text-3xl font-semibold">WebGPU Style Transfer — Phase 6 UI</h1><section className="grid gap-4 rounded-xl border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-2"><p>{workerStatus}</p><p>{gpuStatus}</p><p className="md:col-span-2 text-slate-300">{gpuInfo}</p></section><section className="grid gap-4 rounded-xl border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3"><label className="flex flex-col gap-1">Content image<input type="file" accept="image/*" onChange={(event) => void onUpload(event, 'content')} /></label><label className="flex flex-col gap-1">Style image<input type="file" accept="image/*" onChange={(event) => void onUpload(event, 'style')} /></label><label className="flex flex-col gap-1">Resolution<select value={resolution} onChange={(event) => setResolution(Number(event.target.value) as ResolutionPreset)}><option value={128}>128</option><option value={256}>256</option></select></label><label className="flex flex-col gap-1">Chunk steps<input type="number" min={1} max={20} value={stepsPerChunk} onChange={(event) => setStepsPerChunk(Number(event.target.value))} /></label><label className="flex flex-col gap-1">Style weight<input type="number" value={styleWeight} onChange={(event) => setStyleWeight(Number(event.target.value))} /></label><label className="flex flex-col gap-1">Content weight<input type="number" value={contentWeight} onChange={(event) => setContentWeight(Number(event.target.value))} /></label><label className="flex flex-col gap-1">Learning rate<input type="number" step={0.001} value={learningRate} onChange={(event) => setLearningRate(Number(event.target.value))} /></label></section><section className="flex items-center gap-4"><button className="rounded bg-emerald-500 px-4 py-2 font-semibold text-black" onClick={() => setIsRunning(true)} disabled={isRunning || contentTensor === null || styleTensor === null}>▶ Play</button><button className="rounded bg-amber-500 px-4 py-2 font-semibold text-black" onClick={() => setIsRunning(false)} disabled={!isRunning}>⏸ Pause</button><p>Iterations: {iterations}</p><p>Loss: {lastLoss === null ? '—' : lastLoss.toFixed(4)}</p></section><section className="grid gap-4 md:grid-cols-3"><img className="aspect-square w-full rounded border border-slate-700 object-cover" src={contentImage ?? undefined} alt="Content" /><img className="aspect-square w-full rounded border border-slate-700 object-cover" src={styleImage ?? undefined} alt="Style" /><img className="aspect-square w-full rounded border border-slate-700 object-cover" src={outputImage ?? undefined} alt="Output" /></section><section className="h-72 overflow-hidden rounded-xl border border-slate-700 bg-black/40"><Canvas camera={{ position: [0, 0, 3] }}>{contentImage !== null ? <Plane url={contentImage} x={-2} /> : null}{styleImage !== null ? <Plane url={styleImage} x={0} /> : null}{outputImage !== null ? <Plane url={outputImage} x={2} /> : null}</Canvas></section><section className="rounded-xl border border-dashed border-sky-400/50 bg-sky-400/5 p-4 text-sky-200">📝 Reserved: add “How we made it” blog post link/teaser here.</section></main>
 }
-
 export default App
