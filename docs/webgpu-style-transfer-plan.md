@@ -221,3 +221,40 @@ Keep this strictly presentation-side; do not couple with compute core.
 - For scalar binary ops, the current implementation uses shader-mode specialization with scalar broadcast reads (`b[0]`) rather than CPU-side scalar expansion.
 - The next high-leverage work item is proceeding into Phase 2 conv/relu/pool forward ops.
 - Phase 2 forward kernels currently favor straightforward correctness-first implementations; obvious future optimization targets include shared-memory tiled conv, vectorized loads/stores, and fused conv+bias+relu passes.
+
+---
+
+## Phase 4 implementation notes (manual backward, fixed graph)
+
+### What is now in place
+
+- Worker protocol includes explicit backward ops:
+  - `relu-backward`
+  - `maxpool2d-backward`
+  - `normalize-backward`
+  - `conv2d-backward-input`
+  - `content-loss-backward`
+  - `gram-backward`
+  - `style-loss-backward`
+- Backward parity fixture generation exists in Python and exports deterministic tiny tensors from PyTorch.
+- Playwright spec validates each backward path against fixture expected gradients.
+
+### Forward/backward mechanism details
+
+1. **Forward execution** remains message-based and op-granular in `styleTransfer.worker.ts`.
+2. **Backward seeds** are generated from scalar losses:
+   - content loss seed: `2 * (input - target) / N`
+   - style loss seed: MSE gradient in Gram space.
+3. **Gram backward** maps Gram-space gradients back to feature-space gradients with explicit normalization by `B*C*H*W`.
+4. **Layer backward routing** applies local Jacobian rules for ReLU, MaxPool, Normalize, and Conv2d input gradients.
+5. **Input-only optimization intent** is preserved: no weight/bias updates are part of this phase.
+
+### GPU and alignment caveat
+
+When encoding uniforms for backward kernels in WGSL, ensure 16-byte alignment for uniform structs. A prior mismatch can cause hangs/timeouts during test runs, especially in SwiftShader environments.
+
+### Suggested follow-up cleanup
+
+- Move backward kernels into dedicated shader modules for easier profiling.
+- Add small shared helper(s) for shape compatibility checks to keep handler logic compact.
+- Add a full phase-4 end-to-end fixture/spec that verifies chained gradient routing from multiple taps in one pass.

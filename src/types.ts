@@ -47,6 +47,64 @@ type WorkerTensorUnaryForwardOpRequest = {
   input: WorkerTensor
 }
 
+type WorkerTensorReluBackwardOpRequest = {
+  type: 'tensor-op'
+  id: string
+  op: 'relu-backward'
+  input: WorkerTensor
+  gradOut: WorkerTensor
+}
+
+type WorkerTensorMaxPoolBackwardOpRequest = {
+  type: 'tensor-op'
+  id: string
+  op: 'maxpool2d-backward'
+  input: WorkerTensor
+  gradOut: WorkerTensor
+}
+
+type WorkerTensorNormalizeBackwardOpRequest = {
+  type: 'tensor-op'
+  id: string
+  op: 'normalize-backward'
+  input: WorkerTensor
+  gradOut: WorkerTensor
+  std: number[]
+}
+
+type WorkerTensorConv2dBackwardInputOpRequest = {
+  type: 'tensor-op'
+  id: string
+  op: 'conv2d-backward-input'
+  inputShape: TensorShape
+  gradOut: WorkerTensor
+  weight: WorkerTensor
+}
+
+type WorkerTensorGramBackwardOpRequest = {
+  type: 'tensor-op'
+  id: string
+  op: 'gram-backward'
+  input: WorkerTensor
+  gradOut: WorkerTensor
+}
+
+type WorkerTensorContentLossBackwardOpRequest = {
+  type: 'tensor-op'
+  id: string
+  op: 'content-loss-backward'
+  input: WorkerTensor
+  target: WorkerTensor
+}
+
+type WorkerTensorStyleLossBackwardOpRequest = {
+  type: 'tensor-op'
+  id: string
+  op: 'style-loss-backward'
+  input: WorkerTensor
+  target: WorkerTensor
+}
+
 type WorkerTensorReshapeGramOpRequest = {
   type: 'tensor-op'
   id: string
@@ -79,6 +137,13 @@ export type WorkerRequest =
   | WorkerTensorClampOpRequest
   | WorkerTensorConv2dForwardOpRequest
   | WorkerTensorUnaryForwardOpRequest
+  | WorkerTensorReluBackwardOpRequest
+  | WorkerTensorMaxPoolBackwardOpRequest
+  | WorkerTensorNormalizeBackwardOpRequest
+  | WorkerTensorConv2dBackwardInputOpRequest
+  | WorkerTensorGramBackwardOpRequest
+  | WorkerTensorContentLossBackwardOpRequest
+  | WorkerTensorStyleLossBackwardOpRequest
   | WorkerTensorNormalizeForwardOpRequest
   | WorkerTensorReshapeGramOpRequest
   | WorkerTensorLossOpRequest

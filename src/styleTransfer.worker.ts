@@ -97,6 +97,107 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   out[i] = max(0.0, inputValues[i]);
 }`
 
+
+const makeReluBackwardShader = (count: number): string => `
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<storage, read> gradOutValues: array<f32>;
+@group(0) @binding(2) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  out[i] = select(0.0, gradOutValues[i], inputValues[i] > 0.0);
+}`
+
+const makeMaxPool2dBackwardShader = (count: number): string => `
+struct MaxPoolBackwardUniforms {
+  channels: u32,
+  inHeight: u32,
+  inWidth: u32,
+  outHeight: u32,
+  outWidth: u32,
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,
+}
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<storage, read> gradOutValues: array<f32>;
+@group(0) @binding(2) var<uniform> uniforms: MaxPoolBackwardUniforms;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let hw = uniforms.inHeight * uniforms.inWidth;
+  let c = (i / hw) % uniforms.channels;
+  let inOffset = i % hw;
+  let ih = inOffset / uniforms.inWidth;
+  let iw = inOffset % uniforms.inWidth;
+  let oh = ih / 2u;
+  let ow = iw / 2u;
+  if (oh >= uniforms.outHeight || ow >= uniforms.outWidth) { out[i] = 0.0; return; }
+  let outIdx = c * uniforms.outHeight * uniforms.outWidth + oh * uniforms.outWidth + ow;
+  var maxH = oh * 2u;
+  var maxW = ow * 2u;
+  var maxVal = inputValues[c * hw + maxH * uniforms.inWidth + maxW];
+  for (var kh: u32 = 0u; kh < 2u; kh = kh + 1u) {
+    for (var kw: u32 = 0u; kw < 2u; kw = kw + 1u) {
+      let candH = oh * 2u + kh;
+      let candW = ow * 2u + kw;
+      let v = inputValues[c * hw + candH * uniforms.inWidth + candW];
+      if (v > maxVal) { maxVal = v; maxH = candH; maxW = candW; }
+    }
+  }
+  out[i] = select(0.0, gradOutValues[outIdx], ih == maxH && iw == maxW);
+}`
+
+const makeNormalizeBackwardShader = (count: number): string => `
+struct NormalizeBackwardUniforms { channels: u32, height: u32, width: u32, _pad: u32 }
+@group(0) @binding(0) var<storage, read> gradOutValues: array<f32>;
+@group(0) @binding(1) var<storage, read> stdValues: array<f32>;
+@group(0) @binding(2) var<uniform> uniforms: NormalizeBackwardUniforms;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let spatial = uniforms.height * uniforms.width;
+  let c = (i / spatial) % uniforms.channels;
+  out[i] = gradOutValues[i] / stdValues[c];
+}`
+
+const makeConv2dBackwardInputShader = (count: number): string => `
+struct Conv2dBackwardInputUniforms { inChannels: u32, outChannels: u32, height: u32, width: u32 }
+@group(0) @binding(0) var<storage, read> gradOutValues: array<f32>;
+@group(0) @binding(1) var<storage, read> weightValues: array<f32>;
+@group(0) @binding(2) var<uniform> uniforms: Conv2dBackwardInputUniforms;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let hw = uniforms.height * uniforms.width;
+  let ic = (i / hw) % uniforms.inChannels;
+  let inOffset = i % hw;
+  let ih = inOffset / uniforms.width;
+  let iw = inOffset % uniforms.width;
+  var sum = 0.0;
+  for (var oc: u32 = 0u; oc < uniforms.outChannels; oc = oc + 1u) {
+    for (var kh: u32 = 0u; kh < 3u; kh = kh + 1u) {
+      for (var kw: u32 = 0u; kw < 3u; kw = kw + 1u) {
+        let ohSigned = i32(ih) - i32(kh) + 1;
+        let owSigned = i32(iw) - i32(kw) + 1;
+        if (ohSigned < 0 || ohSigned >= i32(uniforms.height) || owSigned < 0 || owSigned >= i32(uniforms.width)) { continue; }
+        let oh = u32(ohSigned);
+        let ow = u32(owSigned);
+        let gradOutIndex = oc * hw + oh * uniforms.width + ow;
+        let weightIndex = ((oc * uniforms.inChannels + ic) * 9u) + kh * 3u + kw;
+        sum = sum + gradOutValues[gradOutIndex] * weightValues[weightIndex];
+      }
+    }
+  }
+  out[i] = sum;
+}`
 const makeNormalizeShader = (count: number): string => `
 struct NormalizeUniforms {
   channels: u32,
@@ -150,6 +251,44 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   out[i] = max(m0, m1);
 }`
 
+
+const makeMseBackwardShader = (count: number): string => `
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<storage, read> targetValues: array<f32>;
+@group(0) @binding(2) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  out[i] = (2.0 * (inputValues[i] - targetValues[i])) / ${count}.0;
+}`
+
+const makeGramBackwardShader = (count: number): string => `
+struct GramBackwardUniforms {
+  channels: u32,
+  spatial: u32,
+  norm: u32,
+  _pad: u32,
+}
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<storage, read> gradOutValues: array<f32>;
+@group(0) @binding(2) var<uniform> uniforms: GramBackwardUniforms;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let a = i / uniforms.spatial;
+  let p = i % uniforms.spatial;
+  var sum: f32 = 0.0;
+  for (var b: u32 = 0u; b < uniforms.channels; b = b + 1u) {
+    let gradAB = gradOutValues[a * uniforms.channels + b];
+    let gradBA = gradOutValues[b * uniforms.channels + a];
+    let inputBP = inputValues[b * uniforms.spatial + p];
+    sum = sum + ((gradAB + gradBA) * inputBP);
+  }
+  out[i] = sum / f32(uniforms.norm);
+}`
 const makeConv2dShader = (count: number): string => `
 struct Conv2dUniforms {
   inChannels: u32,
@@ -417,6 +556,54 @@ const runUnaryShader = async (code: string, input: Float32Array, outCount: numbe
 
 const runReluForward = async (input: Float32Array): Promise<Float32Array> => runUnaryShader(makeReluShader(input.length), input, input.length)
 
+
+const runReluBackward = async (input: Float32Array, gradOut: Float32Array): Promise<Float32Array> => {
+  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
+  const gradOutBuffer: GPUBuffer = gpuDevice.createBuffer({ size: gradOut.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  gpuDevice.queue.writeBuffer(gradOutBuffer, 0, gradOut)
+  return runUnaryShader(makeReluBackwardShader(input.length), input, input.length, [{ binding: 1, resource: { buffer: gradOutBuffer } }])
+}
+
+const runMaxPool2dBackward = async (input: Float32Array, shape: readonly [number, number, number, number], gradOut: Float32Array): Promise<Float32Array> => {
+  if (shape[0] !== 1) throw new Error('maxpool2d-backward currently expects batch size 1.')
+  const channels = shape[1]
+  const inHeight = shape[2]
+  const inWidth = shape[3]
+  const outHeight = Math.floor(inHeight / 2)
+  const outWidth = Math.floor(inWidth / 2)
+  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
+  const gradOutBuffer: GPUBuffer = gpuDevice.createBuffer({ size: gradOut.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 8 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST })
+  gpuDevice.queue.writeBuffer(gradOutBuffer, 0, gradOut)
+  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, inHeight, inWidth, outHeight, outWidth, 0, 0, 0]))
+  return runUnaryShader(makeMaxPool2dBackwardShader(input.length), input, input.length, [{ binding: 1, resource: { buffer: gradOutBuffer } }, { binding: 2, resource: { buffer: uniformBuffer } }])
+}
+
+const runNormalizeBackward = async (gradOut: Float32Array, shape: readonly [number, number, number, number], std: readonly number[]): Promise<Float32Array> => {
+  const channels = shape[1]
+  if (std.length !== channels) throw new Error('Std length must match input channels.')
+  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
+  const stdBuffer: GPUBuffer = gpuDevice.createBuffer({ size: channels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST })
+  gpuDevice.queue.writeBuffer(stdBuffer, 0, new Float32Array(std))
+  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, shape[2], shape[3], 0]))
+  return runUnaryShader(makeNormalizeBackwardShader(gradOut.length), gradOut, gradOut.length, [{ binding: 1, resource: { buffer: stdBuffer } }, { binding: 2, resource: { buffer: uniformBuffer } }])
+}
+
+const runConv2dBackwardInput = async (inputShape: readonly [number, number, number, number], gradOut: Float32Array, weight: Float32Array, weightShape: readonly [number, number, number, number]): Promise<Float32Array> => {
+  const [batch, inChannels, height, width] = inputShape
+  const [outChannels, weightInChannels, kernelHeight, kernelWidth] = weightShape
+  if (batch !== 1 || kernelHeight !== 3 || kernelWidth !== 3 || inChannels !== weightInChannels) throw new Error('conv2d-backward-input only supports VGG-compatible params.')
+  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
+  const outCount = inChannels * height * width
+  const gradOutBuffer: GPUBuffer = gpuDevice.createBuffer({ size: gradOut.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  const weightBuffer: GPUBuffer = gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST })
+  gpuDevice.queue.writeBuffer(gradOutBuffer, 0, gradOut)
+  gpuDevice.queue.writeBuffer(weightBuffer, 0, weight)
+  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]))
+  return runUnaryShader(makeConv2dBackwardInputShader(outCount), gradOut, outCount, [{ binding: 1, resource: { buffer: weightBuffer } }, { binding: 2, resource: { buffer: uniformBuffer } }])
+}
 const runMaxPool2dForward = async (input: Float32Array, shape: readonly [number, number, number, number]): Promise<Float32Array> => {
   if (shape[0] !== 1) throw new Error('maxpool2d-forward currently expects batch size 1.')
   const channels: number = shape[1]
@@ -437,7 +624,7 @@ const runNormalizeForward = async (input: Float32Array, shape: readonly [number,
   if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
   const meanBuffer: GPUBuffer = gpuDevice.createBuffer({ size: channels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST })
   const stdBuffer: GPUBuffer = gpuDevice.createBuffer({ size: channels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST })
-  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 3 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST })
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST })
   gpuDevice.queue.writeBuffer(meanBuffer, 0, new Float32Array(mean))
   gpuDevice.queue.writeBuffer(stdBuffer, 0, new Float32Array(std))
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, shape[2], shape[3]]))
@@ -478,6 +665,33 @@ const runGramMatrix = async (input: Float32Array, shape: readonly [number, numbe
   return runUnaryShader(makeGramMatrixShader(outCount), input, outCount, [{ binding: 1, resource: { buffer: uniformBuffer } }])
 }
 
+
+const runContentLossBackward = async (input: Float32Array, target: Float32Array): Promise<Float32Array> => {
+  if (input.length !== target.length) return new Float32Array(input.length)
+  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
+  const targetBuffer: GPUBuffer = gpuDevice.createBuffer({ size: target.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  gpuDevice.queue.writeBuffer(targetBuffer, 0, target)
+  return runUnaryShader(makeMseBackwardShader(input.length), input, input.length, [{ binding: 1, resource: { buffer: targetBuffer } }])
+}
+
+const runGramBackward = async (input: Float32Array, shape: readonly [number, number, number, number], gradOut: Float32Array): Promise<Float32Array> => {
+  const channels: number = shape[1]
+  const spatial: number = shape[2] * shape[3]
+  const norm: number = shape[0] * shape[1] * shape[2] * shape[3]
+  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
+  const gradOutBuffer: GPUBuffer = gpuDevice.createBuffer({ size: gradOut.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST })
+  gpuDevice.queue.writeBuffer(gradOutBuffer, 0, gradOut)
+  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, spatial, norm, 0]))
+  return runUnaryShader(makeGramBackwardShader(input.length), input, input.length, [{ binding: 1, resource: { buffer: gradOutBuffer } }, { binding: 2, resource: { buffer: uniformBuffer } }])
+}
+
+const runStyleLossBackward = async (input: Float32Array, shape: readonly [number, number, number, number], target: Float32Array): Promise<Float32Array> => {
+  const inputGram = await runGramMatrix(input, shape)
+  const targetGram = await runGramMatrix(target, shape)
+  const gramGrad: Float32Array = await runContentLossBackward(inputGram, targetGram)
+  return await runGramBackward(input, shape, gramGrad)
+}
 self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
   const payload: WorkerRequest = event.data
   switch (payload.type) {
@@ -546,6 +760,54 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
             }
             const mse = await runMse(input.values, target.values)
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: mse })
+            return
+          }
+          if (payload.op === 'relu-backward') {
+            const input = createTensor(payload.input.shape, payload.input.values)
+            const gradOut = createTensor(payload.gradOut.shape, payload.gradOut.values)
+            const gradIn = await runReluBackward(input.values, gradOut.values)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(gradIn) })
+            return
+          }
+          if (payload.op === 'maxpool2d-backward') {
+            const input = createTensor(payload.input.shape, payload.input.values)
+            const gradOut = createTensor(payload.gradOut.shape, payload.gradOut.values)
+            const gradIn = await runMaxPool2dBackward(input.values, input.shape, gradOut.values)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(gradIn) })
+            return
+          }
+          if (payload.op === 'normalize-backward') {
+            const gradOut = createTensor(payload.gradOut.shape, payload.gradOut.values)
+            const gradIn = await runNormalizeBackward(gradOut.values, gradOut.shape, payload.std)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(gradIn) })
+            return
+          }
+          if (payload.op === 'conv2d-backward-input') {
+            const gradOut = createTensor(payload.gradOut.shape, payload.gradOut.values)
+            const weight = createTensor(payload.weight.shape, payload.weight.values)
+            const gradIn = await runConv2dBackwardInput(payload.inputShape, gradOut.values, weight.values, weight.shape)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(gradIn) })
+            return
+          }
+          if (payload.op === 'content-loss-backward') {
+            const input = createTensor(payload.input.shape, payload.input.values)
+            const target = createTensor(payload.target.shape, payload.target.values)
+            const gradIn = await runContentLossBackward(input.values, target.values)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(gradIn) })
+            return
+          }
+          if (payload.op === 'gram-backward') {
+            const input = createTensor(payload.input.shape, payload.input.values)
+            const gradOut = createTensor(payload.gradOut.shape, payload.gradOut.values)
+            const gradIn = await runGramBackward(input.values, input.shape, gradOut.values)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(gradIn) })
+            return
+          }
+          if (payload.op === 'style-loss-backward') {
+            const input = createTensor(payload.input.shape, payload.input.values)
+            const target = createTensor(payload.target.shape, payload.target.values)
+            const gradIn = await runStyleLossBackward(input.values, input.shape, target.values)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(gradIn) })
             return
           }
           if (payload.op === 'style-loss') {

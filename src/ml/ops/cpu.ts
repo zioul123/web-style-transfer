@@ -96,3 +96,63 @@ export const cpuStyleLoss = (input: TensorData, target: TensorData): number => {
   const targetGram = cpuGramMatrix(target)
   return cpuMse(inputGram, targetGram)
 }
+
+export const cpuReluBackward = (input: TensorData, gradOut: TensorData): TensorData => {
+  assertSameLength(input, gradOut)
+  const out: Float32Array = new Float32Array(input.values.length)
+  for (let i = 0; i < out.length; i += 1) out[i] = input.values[i] > 0 ? gradOut.values[i] : 0
+  return { shape: input.shape, values: out }
+}
+
+export const cpuMaxPool2dBackward = (input: TensorData, gradOut: TensorData): TensorData => {
+  const [batch, channels, height, width] = input.shape
+  const outHeight: number = Math.floor(height / 2)
+  const outWidth: number = Math.floor(width / 2)
+  const expectedGradShape: TensorShape = [batch, channels, outHeight, outWidth]
+  if (gradOut.shape.some((value, index) => value !== expectedGradShape[index])) throw new Error('maxpool2d-backward gradOut shape mismatch.')
+  const gradIn: Float32Array = new Float32Array(input.values.length)
+  for (let n = 0; n < batch; n += 1) for (let c = 0; c < channels; c += 1) for (let oh = 0; oh < outHeight; oh += 1) for (let ow = 0; ow < outWidth; ow += 1) {
+    let maxH = oh * 2
+    let maxW = ow * 2
+    let maxVal = input.values[indexNchw(input.shape, n, c, maxH, maxW)]
+    for (let kh = 0; kh < 2; kh += 1) for (let kw = 0; kw < 2; kw += 1) {
+      const ih = oh * 2 + kh
+      const iw = ow * 2 + kw
+      const v = input.values[indexNchw(input.shape, n, c, ih, iw)]
+      if (v > maxVal) { maxVal = v; maxH = ih; maxW = iw }
+    }
+    gradIn[indexNchw(input.shape, n, c, maxH, maxW)] += gradOut.values[indexNchw(gradOut.shape, n, c, oh, ow)]
+  }
+  return { shape: input.shape, values: gradIn }
+}
+
+export const cpuNormalizeBackward = (gradOut: TensorData, std: readonly number[]): TensorData => {
+  const [batch, channels, height, width] = gradOut.shape
+  if (std.length !== channels) throw new Error('Std length must match input channels.')
+  const gradIn: Float32Array = new Float32Array(gradOut.values.length)
+  for (let n = 0; n < batch; n += 1) for (let c = 0; c < channels; c += 1) for (let h = 0; h < height; h += 1) for (let w = 0; w < width; w += 1) {
+    const idx = indexNchw(gradOut.shape, n, c, h, w)
+    gradIn[idx] = gradOut.values[idx] / std[c]
+  }
+  return { shape: gradOut.shape, values: gradIn }
+}
+
+export const cpuConv2dBackwardInput = (inputShape: TensorShape, gradOut: TensorData, weight: TensorData): TensorData => {
+  const [batch, inChannels, height, width] = inputShape
+  const [outChannels, weightInChannels, kernelHeight, kernelWidth] = weight.shape
+  if (batch !== 1 || kernelHeight !== 3 || kernelWidth !== 3 || inChannels !== weightInChannels) throw new Error('conv2d-backward-input only supports VGG-compatible params.')
+  const expectedGradShape: TensorShape = [batch, outChannels, height, width]
+  if (gradOut.shape.some((value, index) => value !== expectedGradShape[index])) throw new Error('conv2d-backward-input gradOut shape mismatch.')
+  const gradIn: Float32Array = new Float32Array(batch * inChannels * height * width)
+  for (let n = 0; n < batch; n += 1) for (let ic = 0; ic < inChannels; ic += 1) for (let ih = 0; ih < height; ih += 1) for (let iw = 0; iw < width; iw += 1) {
+    let sum = 0
+    for (let oc = 0; oc < outChannels; oc += 1) for (let kh = 0; kh < 3; kh += 1) for (let kw = 0; kw < 3; kw += 1) {
+      const oh = ih - kh + 1
+      const ow = iw - kw + 1
+      if (oh < 0 || oh >= height || ow < 0 || ow >= width) continue
+      sum += gradOut.values[indexNchw(gradOut.shape, n, oc, oh, ow)] * weight.values[indexNchw(weight.shape, oc, ic, kh, kw)]
+    }
+    gradIn[indexNchw(inputShape, n, ic, ih, iw)] = sum
+  }
+  return { shape: inputShape, values: gradIn }
+}
