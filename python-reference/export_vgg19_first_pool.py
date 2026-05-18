@@ -22,7 +22,7 @@ def export() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     model = vgg19(weights=VGG19_Weights.DEFAULT).features.eval()
-    first_block = nn.Sequential(*list(model.children())[:5])  # conv/relu/conv/relu/pool
+    first_block = nn.Sequential(*list(model.children())[:7])  # conv/relu/conv/relu/pool/conv/relu
 
     image = Image.open(ASSET_PATH).convert('RGB').resize((16, 16), Image.Resampling.BILINEAR)
     x = TF.to_tensor(image).unsqueeze(0)
@@ -34,8 +34,9 @@ def export() -> None:
 
     conv1 = model[0]
     conv2 = model[2]
-    if not isinstance(conv1, nn.Conv2d) or not isinstance(conv2, nn.Conv2d):
-        raise RuntimeError('Unexpected VGG19 layout for first two convolution layers.')
+    conv3 = model[5]
+    if not isinstance(conv1, nn.Conv2d) or not isinstance(conv2, nn.Conv2d) or not isinstance(conv3, nn.Conv2d):
+        raise RuntimeError('Unexpected VGG19 layout for first three convolution layers.')
 
     weights_payload = {
         'conv1WeightShape': list(conv1.weight.shape),
@@ -44,6 +45,9 @@ def export() -> None:
         'conv2WeightShape': list(conv2.weight.shape),
         'conv2WeightValues': tensor_to_list(conv2.weight),
         'conv2BiasValues': tensor_to_list(conv2.bias),
+        'conv3WeightShape': list(conv3.weight.shape),
+        'conv3WeightValues': tensor_to_list(conv3.weight),
+        'conv3BiasValues': tensor_to_list(conv3.bias),
     }
 
     input_payload = {
@@ -52,7 +56,7 @@ def export() -> None:
         'normalizedValues': tensor_to_list(x_norm),
         'mean': [0.485, 0.456, 0.406],
         'std': [0.229, 0.224, 0.225],
-        'expectedShape': [1, 64, 8, 8],
+        'expectedShape': [1, 128, 8, 8],
         'expectedValues': tensor_to_list(out),
     }
 
