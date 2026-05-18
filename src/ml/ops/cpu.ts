@@ -65,3 +65,34 @@ export const cpuConv2dForward = (input: TensorData, weight: TensorData, bias: re
   }
   return { shape: outShape, values: out }
 }
+
+export const cpuReshapeChwFlatten = (input: TensorData): TensorData => {
+  const [batch, channels, height, width] = input.shape
+  if (batch !== 1) throw new Error('reshape-chw-flatten expects batch size 1.')
+  return { shape: [1, 1, channels, height * width], values: new Float32Array(input.values) }
+}
+
+export const cpuGramMatrix = (input: TensorData): TensorData => {
+  const [batch, channels, height, width] = input.shape
+  if (batch !== 1) throw new Error('gram-matrix expects batch size 1.')
+  const spatial: number = height * width
+  const out: Float32Array = new Float32Array(channels * channels)
+  const norm: number = batch * channels * height * width
+  for (let row = 0; row < channels; row += 1) for (let col = 0; col < channels; col += 1) {
+    let sum = 0
+    for (let i = 0; i < spatial; i += 1) sum += input.values[row * spatial + i] * input.values[col * spatial + i]
+    out[row * channels + col] = sum / norm
+  }
+  return { shape: [1, 1, channels, channels], values: out }
+}
+
+export const cpuContentLoss = (input: TensorData, target: TensorData): number => {
+  if (input.values.length !== target.values.length || input.shape.some((v, i) => v !== target.shape[i])) return 0
+  return cpuMse(input, target)
+}
+
+export const cpuStyleLoss = (input: TensorData, target: TensorData): number => {
+  const inputGram = cpuGramMatrix(input)
+  const targetGram = cpuGramMatrix(target)
+  return cpuMse(inputGram, targetGram)
+}

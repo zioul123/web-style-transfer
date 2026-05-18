@@ -194,6 +194,30 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   out[i] = sum;
 }`
 
+const makeGramMatrixShader = (count: number): string => `
+struct GramUniforms {
+  channels: u32,
+  spatial: u32,
+}
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<uniform> uniforms: GramUniforms;
+@group(0) @binding(2) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let row = i / uniforms.channels;
+  let col = i % uniforms.channels;
+  var sum = 0.0;
+  let rowBase = row * uniforms.spatial;
+  let colBase = col * uniforms.spatial;
+  for (var s: u32 = 0u; s < uniforms.spatial; s = s + 1u) {
+    sum = sum + inputValues[rowBase + s] * inputValues[colBase + s];
+  }
+  let norm = f32(uniforms.channels * uniforms.spatial);
+  out[i] = sum / norm;
+}`
+
 const isBinaryTensorOpPayload = (
   payload: WorkerRequest,
 ): payload is Extract<WorkerRequest, { type: 'tensor-op'; op: 'add' | 'sub' | 'mul' | 'div' | 'mse'; a: WorkerTensorOperand; b: WorkerTensorOperand }> =>
@@ -443,6 +467,17 @@ const runConv2dForward = async (input: Float32Array, inputShape: readonly [numbe
   ])
 }
 
+const runGramMatrix = async (input: Float32Array, shape: readonly [number, number, number, number]): Promise<Float32Array> => {
+  if (shape[0] !== 1) throw new Error('gram-matrix expects batch size 1.')
+  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
+  const channels: number = shape[1]
+  const spatial: number = shape[2] * shape[3]
+  const outCount: number = channels * channels
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 2 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST })
+  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, spatial]))
+  return runUnaryShader(makeGramMatrixShader(outCount), input, outCount, [{ binding: 1, resource: { buffer: uniformBuffer } }])
+}
+
 self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
   const payload: WorkerRequest = event.data
   switch (payload.type) {
@@ -488,6 +523,38 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
             const input = createTensor(payload.input.shape, payload.input.values)
             const output = await runNormalizeForward(input.values, input.shape, payload.mean, payload.std)
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output) })
+            return
+          }
+          if (payload.op === 'reshape-chw-flatten') {
+            const input = createTensor(payload.input.shape, payload.input.values)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(input.values) })
+            return
+          }
+          if (payload.op === 'gram-matrix') {
+            const input = createTensor(payload.input.shape, payload.input.values)
+            const output = await runGramMatrix(input.values, input.shape)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output) })
+            return
+          }
+          if (payload.op === 'content-loss') {
+            const input = createTensor(payload.input.shape, payload.input.values)
+            const target = createTensor(payload.target.shape, payload.target.values)
+            const sameShape: boolean = input.shape.every((value, index) => value === target.shape[index])
+            if (!sameShape) {
+              postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: 0 })
+              return
+            }
+            const mse = await runMse(input.values, target.values)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: mse })
+            return
+          }
+          if (payload.op === 'style-loss') {
+            const input = createTensor(payload.input.shape, payload.input.values)
+            const target = createTensor(payload.target.shape, payload.target.values)
+            const inputGram = await runGramMatrix(input.values, input.shape)
+            const targetGram = await runGramMatrix(target.values, target.shape)
+            const mse = await runMse(inputGram, targetGram)
+            postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: mse })
             return
           }
           if (payload.op === 'mse') {
