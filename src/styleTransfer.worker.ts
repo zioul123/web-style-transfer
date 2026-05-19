@@ -758,9 +758,17 @@ const runFirstPoolOptimizer = async (payload: Extract<WorkerRequest, { type: 'ru
 }
 
 
-const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-style-transfer' }>): Promise<{ losses: number[]; finalValues: number[] }> => {
+const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-style-transfer' }>): Promise<{ losses: number[]; finalValues: number[]; stats: { elapsedMs: number; avgStepMs: number; forwardMs: number; backwardMs: number; lossMs: number; updateMs: number; clampMs: number; steps: number } }> => {
   const reluLayers: readonly number[] = [1, 3, 6, 8, 11, 13, 15, 17, 20, 22, 24, 26, 29]
   const poolLayers: readonly number[] = [4, 9, 18, 27]
+  const reluLayerSet = new Set(reluLayers)
+  const poolLayerSet = new Set(poolLayers)
+  const convWeightCache: Record<number, { shape: [number, number, number, number]; values: Float32Array } | undefined> = {}
+  for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
+    const weightShapeRaw = payload.weights[`conv${layerIndex}.weightShape`]
+    const weightValues = payload.weights[`conv${layerIndex}.weightValues`]
+    if (Array.isArray(weightShapeRaw) && Array.isArray(weightValues)) convWeightCache[layerIndex] = { shape: weightShapeRaw as [number, number, number, number], values: new Float32Array(weightValues) }
+  }
   const contentNorm = await runNormalizeForward(new Float32Array(payload.contentImageValues), payload.inputShape, payload.mean, payload.std)
   const styleNorm = await runNormalizeForward(new Float32Array(payload.styleImageValues), payload.inputShape, payload.mean, payload.std)
   const runForward = async (start: Float32Array): Promise<{ reluOut: Record<number, Float32Array>; reluShape: Record<number, readonly [number, number, number, number]>; convInShape: Record<number, readonly [number, number, number, number]>; reluPre: Record<number, Float32Array>; layerInput: Record<number, Float32Array>; layerInputShape: Record<number, readonly [number, number, number, number]>; final: Float32Array }> => {
@@ -775,22 +783,20 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
     for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
       layerInput[layerIndex] = values
       layerInputShape[layerIndex] = shape
-      const weightShapeRaw = payload.weights[`conv${layerIndex}.weightShape`]
-      const weightValues = payload.weights[`conv${layerIndex}.weightValues`]
+      const convWeight = convWeightCache[layerIndex]
       const biasValues = payload.weights[`conv${layerIndex}.biasValues`]
-      if (Array.isArray(weightShapeRaw) && Array.isArray(weightValues) && Array.isArray(biasValues)) {
+      if (convWeight !== undefined && Array.isArray(biasValues)) {
         convInShape[layerIndex] = shape
-        const weightShape = weightShapeRaw as [number, number, number, number]
-        values = await runConv2dForward(values, shape, new Float32Array(weightValues), weightShape, biasValues)
-        shape = [1, weightShape[0], shape[2], shape[3]]
+        values = await runConv2dForward(values, shape, convWeight.values, convWeight.shape, biasValues)
+        shape = [1, convWeight.shape[0], shape[2], shape[3]]
       }
-      if (reluLayers.includes(layerIndex)) {
+      if (reluLayerSet.has(layerIndex)) {
         reluPre[layerIndex] = values
         values = await runReluForward(values)
         reluOut[layerIndex] = values
         reluShape[layerIndex] = shape
       }
-      if (poolLayers.includes(layerIndex)) {
+      if (poolLayerSet.has(layerIndex)) {
         values = await runMaxPool2dForward(values, shape)
         shape = [1, shape[1], Math.floor(shape[2] / 2), Math.floor(shape[3] / 2)]
       }
@@ -813,6 +819,13 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
   const lbfgsHistory: { s: Float32Array; y: Float32Array; rho: number }[] = []
   let previousInput: Float32Array | null = null
   let previousGrad: Float32Array | null = null
+
+  let forwardMs = 0
+  let backwardMs = 0
+  let lossMs = 0
+  let updateMs = 0
+  let clampMs = 0
+  const totalStart = performance.now()
 
   const updateInput = async (grad: Float32Array, step: number): Promise<Float32Array<ArrayBufferLike>> => {
     const nextValues = new Float32Array(inputValues.length)
@@ -876,15 +889,20 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
       }
       for (let i = 0; i < inputValues.length; i += 1) nextValues[i] = inputValues[i] - payload.learningRate * q[i]
     }
+    const clampStart = performance.now()
     const clamped = new Float32Array(await runClamp(nextValues, 0, 1))
+    clampMs += performance.now() - clampStart
     previousInput = new Float32Array(inputValues)
     previousGrad = new Float32Array(grad)
     return clamped
   }
 
   for (let step = 0; step < payload.steps; step += 1) {
+    const forwardStart = performance.now()
     const norm = await runNormalizeForward(inputValues, payload.inputShape, payload.mean, payload.std)
     const run = await runForward(norm)
+    forwardMs += performance.now() - forwardStart
+    const lossStart = performance.now()
     let totalStyle = 0
     for (const reluLayerIndex of payload.styleLayerIndices) {
       const inputRelu = run.reluOut[reluLayerIndex]
@@ -899,6 +917,7 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
     if (contentRelu === undefined || contentTargetRelu === undefined) throw new Error(`Missing ReLU activation for content layer index ${payload.contentLayerIndex}.`)
     const contentLoss = await runMse(contentRelu, contentTargetRelu)
     losses.push(payload.styleWeight * totalStyle + payload.contentWeight * contentLoss)
+    lossMs += performance.now() - lossStart
     const gradByReluLayer: Record<number, Float32Array> = {}
     for (const reluLayerIndex of payload.styleLayerIndices) {
       const inputRelu = run.reluOut[reluLayerIndex]
@@ -914,28 +933,32 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
     const weightedContentGrad = payload.contentWeight === 1 ? contentGrad : await runScalarBinaryOp('mul', contentGrad, payload.contentWeight, false)
     gradByReluLayer[payload.contentLayerIndex] = gradByReluLayer[payload.contentLayerIndex] === undefined ? weightedContentGrad : await runBinaryOp('add', gradByReluLayer[payload.contentLayerIndex], weightedContentGrad, 'tensorTensor')
 
+    const backwardStart = performance.now()
     let grad: Float32Array | null = null
     for (let layerIndex = 29; layerIndex >= 0; layerIndex -= 1) {
-      if (poolLayers.includes(layerIndex)) {
+      if (poolLayerSet.has(layerIndex)) {
         if (grad !== null) grad = await runMaxPool2dBackward(run.layerInput[layerIndex], run.layerInputShape[layerIndex], grad)
       }
-      if (reluLayers.includes(layerIndex)) {
+      if (reluLayerSet.has(layerIndex)) {
         const tapGrad = gradByReluLayer[layerIndex]
         if (tapGrad !== undefined) grad = grad === null ? tapGrad : await runBinaryOp('add', grad, tapGrad, 'tensorTensor')
         if (grad !== null) grad = await runReluBackward(run.reluPre[layerIndex], grad)
       }
-      const weightShapeRaw = payload.weights[`conv${layerIndex}.weightShape`]
-      const weightValues = payload.weights[`conv${layerIndex}.weightValues`]
-      if (Array.isArray(weightShapeRaw) && Array.isArray(weightValues) && grad !== null) {
-        grad = await runConv2dBackwardInput(run.convInShape[layerIndex], grad, new Float32Array(weightValues), weightShapeRaw as [number, number, number, number])
+      const convWeight = convWeightCache[layerIndex]
+      if (convWeight !== undefined && grad !== null) {
+        grad = await runConv2dBackwardInput(run.convInShape[layerIndex], grad, convWeight.values, convWeight.shape)
       }
     }
     if (grad === null) throw new Error('No gradient path reached the input image.')
     const gInput = await runNormalizeBackward(grad, payload.inputShape, payload.std)
+    backwardMs += performance.now() - backwardStart
 
+    const updateStart = performance.now()
     inputValues = await updateInput(gInput, step)
+    updateMs += performance.now() - updateStart
   }
-  return { losses, finalValues: Array.from(inputValues) }
+  const elapsedMs = performance.now() - totalStart
+  return { losses, finalValues: Array.from(inputValues), stats: { elapsedMs, avgStepMs: payload.steps === 0 ? 0 : elapsedMs / payload.steps, forwardMs, backwardMs, lossMs, updateMs, clampMs, steps: payload.steps } }
 }
 
 self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
@@ -971,7 +994,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
       void (async (): Promise<void> => {
         try {
           const result = await runStyleTransfer(payload)
-          postResponse({ type: 'run-style-transfer-result', id: payload.id, ok: true, losses: result.losses, finalValues: result.finalValues })
+          postResponse({ type: 'run-style-transfer-result', id: payload.id, ok: true, losses: result.losses, finalValues: result.finalValues, stats: result.stats })
         } catch (error: unknown) {
           postResponse({ type: 'run-style-transfer-result', id: payload.id, ok: false, message: error instanceof Error ? error.message : 'Style transfer run failed.' })
         }

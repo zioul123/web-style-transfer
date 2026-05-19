@@ -219,6 +219,18 @@ export const isWorkerTensorScalarOpResponse = (value: WorkerTensorOpResponse): v
 export const isWorkerTensorVectorOpResponse = (value: WorkerTensorOpResponse): value is WorkerTensorVectorOpResponse =>
   value.ok && 'values' in value
 
+
+export type WorkerRunStats = {
+  elapsedMs: number
+  avgStepMs: number
+  forwardMs: number
+  backwardMs: number
+  lossMs: number
+  updateMs: number
+  clampMs: number
+  steps: number
+}
+
 export type WorkerResponse =
   | { type: 'pong'; id: string; timestamp: number }
   | { type: 'webgpu-init-result'; id: string; ok: boolean; message: string }
@@ -227,5 +239,5 @@ export type WorkerResponse =
   | { type: 'error'; id: string; message: string }
   | { type: 'run-first-pool-optimizer-result'; id: string; ok: true; losses: number[]; finalValues: number[] }
   | { type: 'run-first-pool-optimizer-result'; id: string; ok: false; message: string }
-  | { type: 'run-style-transfer-result'; id: string; ok: true; losses: number[]; finalValues: number[] }
+  | { type: 'run-style-transfer-result'; id: string; ok: true; losses: number[]; finalValues: number[]; stats: WorkerRunStats }
   | { type: 'run-style-transfer-result'; id: string; ok: false; message: string }

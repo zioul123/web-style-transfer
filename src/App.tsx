@@ -2,7 +2,7 @@ import { Canvas, useLoader } from '@react-three/fiber'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import { TextureLoader } from 'three'
-import type { WorkerRequest, WorkerResponse } from './types'
+import type { WorkerRequest, WorkerResponse, WorkerRunStats } from './types'
 
 type ResolutionPreset = 128 | 256
 type FullWeights = Record<string, number[] | [number, number, number, number]>
@@ -95,6 +95,7 @@ function App() {
   const [contentTensor, setContentTensor] = useState<number[] | null>(null)
   const [styleTensor, setStyleTensor] = useState<number[] | null>(null)
   const [inputTensor, setInputTensor] = useState<number[] | null>(null)
+  const [runStats, setRunStats] = useState<WorkerRunStats | null>(null)
 
   const workerRef = useRef<Worker | null>(null)
   const hasWebGpuOnMainThread = useMemo<boolean>(() => 'gpu' in navigator, [])
@@ -125,6 +126,7 @@ function App() {
         setOutputImage(tensorValuesToDataUrl(nextValues, resolution))
         setIterations((value) => value + stepsPerChunk)
         if (payload.losses.length > 0) setLastLoss(payload.losses[payload.losses.length - 1])
+        setRunStats(payload.stats)
       }
     }
     worker.addEventListener('message', onMessage)
@@ -189,6 +191,7 @@ function App() {
     }
     setIterations(0)
     setLastLoss(null)
+    setRunStats(null)
   }
 
   return (
@@ -237,6 +240,25 @@ function App() {
         <p>Iterations: {iterations}</p>
         <p>Loss: {lastLoss === null ? '—' : lastLoss.toFixed(4)}</p>
       </section>
+
+
+      <details className="rounded-xl border border-slate-700 bg-slate-900/60 p-4">
+        <summary className="cursor-pointer font-semibold">View stats</summary>
+        {runStats === null ? (
+          <p className="mt-3 text-slate-400">No stats yet. Run at least one chunk.</p>
+        ) : (
+          <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
+            <p>Chunk steps: {runStats.steps}</p>
+            <p>Total: {runStats.elapsedMs.toFixed(1)} ms</p>
+            <p>Avg step: {runStats.avgStepMs.toFixed(1)} ms</p>
+            <p>Forward: {runStats.forwardMs.toFixed(1)} ms</p>
+            <p>Loss: {runStats.lossMs.toFixed(1)} ms</p>
+            <p>Backward: {runStats.backwardMs.toFixed(1)} ms</p>
+            <p>Update: {runStats.updateMs.toFixed(1)} ms</p>
+            <p>Clamp (GPU): {runStats.clampMs.toFixed(1)} ms</p>
+          </div>
+        )}
+      </details>
 
       <section className="grid gap-4 md:grid-cols-3">
         <img className="aspect-square w-full rounded border border-slate-700 object-cover" src={contentImage ?? undefined} alt="Content" />
