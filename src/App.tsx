@@ -65,14 +65,6 @@ const tensorValuesToDataUrl = (values: number[], resolution: ResolutionPreset): 
 }
 
 
-const makeNoisyInitialization = (contentValues: number[], noiseAmplitude: number): number[] => {
-  const out = new Array<number>(contentValues.length)
-  for (let i = 0; i < contentValues.length; i += 1) {
-    const noise = (Math.random() * 2 - 1) * noiseAmplitude
-    out[i] = Math.max(0, Math.min(1, contentValues[i] + noise))
-  }
-  return out
-}
 const Plane = ({ url, x }: { url: string; x: number }): ReactElement => {
   const texture = useLoader(TextureLoader, url)
   return <mesh position={[x, 0, 0]}><planeGeometry args={[1.75, 1.75]} /><meshBasicMaterial map={texture} /></mesh>
@@ -187,14 +179,84 @@ function App() {
     const previewUrl = URL.createObjectURL(file)
     const tensor = imageToTensorValues(image, resolution)
     if (target === 'content') {
-      setContentImage(previewUrl); setContentTensor(tensor); const seededInput = makeNoisyInitialization(tensor, 0.12); setInputTensor(seededInput); setOutputImage(tensorValuesToDataUrl(seededInput, resolution))
+      setContentImage(previewUrl)
+      setContentTensor(tensor)
+      setInputTensor(tensor)
+      setOutputImage(tensorValuesToDataUrl(tensor, resolution))
     } else {
-      setStyleImage(previewUrl); setStyleTensor(tensor)
+      setStyleImage(previewUrl)
+      setStyleTensor(tensor)
     }
-    setIterations(0); setLastLoss(null)
+    setIterations(0)
+    setLastLoss(null)
   }
 
-  return <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-6 py-8 text-slate-100"><h1 className="text-3xl font-semibold">WebGPU Style Transfer — Phase 6 UI</h1><section className="grid gap-4 rounded-xl border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-2"><p>{workerStatus}</p><p>{gpuStatus}</p><p className="md:col-span-2 text-slate-300">{gpuInfo}</p></section><section className="grid gap-4 rounded-xl border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3"><label className="flex flex-col gap-1">Content image<input type="file" accept="image/*" onChange={(event) => void onUpload(event, 'content')} /></label><label className="flex flex-col gap-1">Style image<input type="file" accept="image/*" onChange={(event) => void onUpload(event, 'style')} /></label><label className="flex flex-col gap-1">Resolution<select value={resolution} onChange={(event) => setResolution(Number(event.target.value) as ResolutionPreset)}><option value={128}>128</option><option value={256}>256</option></select></label><label className="flex flex-col gap-1">Chunk steps<input type="number" min={1} max={20} value={stepsPerChunk} onChange={(event) => setStepsPerChunk(Number(event.target.value))} /></label><label className="flex flex-col gap-1">Style weight<input type="number" value={styleWeight} onChange={(event) => setStyleWeight(Number(event.target.value))} /></label><label className="flex flex-col gap-1">Content weight<input type="number" value={contentWeight} onChange={(event) => setContentWeight(Number(event.target.value))} /></label><label className="flex flex-col gap-1">Learning rate<input type="number" step={0.001} value={learningRate} onChange={(event) => setLearningRate(Number(event.target.value))} /></label><label className="flex flex-col gap-1">Optimizer<select value={optimizer} onChange={(event) => setOptimizer(event.target.value as OptimizerMode)}><option value="sgd">SGD</option><option value="adam">Adam</option><option value="lbfgs">L-BFGS</option></select></label>{optimizer === 'adam' ? <><label className="flex flex-col gap-1">Adam β1<input type="number" step={0.001} value={adamBeta1} onChange={(event) => setAdamBeta1(Number(event.target.value))} /></label><label className="flex flex-col gap-1">Adam β2<input type="number" step={0.001} value={adamBeta2} onChange={(event) => setAdamBeta2(Number(event.target.value))} /></label><label className="flex flex-col gap-1">Adam ε<input type="number" step={0.00000001} value={adamEpsilon} onChange={(event) => setAdamEpsilon(Number(event.target.value))} /></label></> : null}{optimizer === 'lbfgs' ? <><label className="flex flex-col gap-1">L-BFGS memory<input type="number" min={1} step={1} value={lbfgsMemory} onChange={(event) => setLbfgsMemory(Number(event.target.value))} /></label><label className="flex flex-col gap-1">L-BFGS ε<input type="number" step={0.00000001} value={lbfgsEpsilon} onChange={(event) => setLbfgsEpsilon(Number(event.target.value))} /></label></> : null}</section><section className="flex items-center gap-4"><button className="rounded bg-emerald-500 px-4 py-2 font-semibold text-black" onClick={() => { if (contentTensor !== null && inputTensor !== null && iterations === 0) { const seededInput = makeNoisyInitialization(contentTensor, 0.12); setInputTensor(seededInput); setOutputImage(tensorValuesToDataUrl(seededInput, resolution)); } setIsRunning(true) }} disabled={isRunning || contentTensor === null || styleTensor === null || weights === null}>▶ Play</button><button className="rounded bg-amber-500 px-4 py-2 font-semibold text-black" onClick={() => setIsRunning(false)} disabled={!isRunning}>⏸ Pause</button><p>Iterations: {iterations}</p><p>Loss: {lastLoss === null ? '—' : lastLoss.toFixed(4)}</p></section><section className="grid gap-4 md:grid-cols-3"><img className="aspect-square w-full rounded border border-slate-700 object-cover" src={contentImage ?? undefined} alt="Content" /><img className="aspect-square w-full rounded border border-slate-700 object-cover" src={styleImage ?? undefined} alt="Style" /><img className="aspect-square w-full rounded border border-slate-700 object-cover" src={outputImage ?? undefined} alt="Output" /></section><section className="h-72 overflow-hidden rounded-xl border border-slate-700 bg-black/40"><Canvas camera={{ position: [0, 0, 3] }}>{contentImage !== null ? <Plane url={contentImage} x={-2} /> : null}{styleImage !== null ? <Plane url={styleImage} x={0} /> : null}{outputImage !== null ? <Plane url={outputImage} x={2} /> : null}</Canvas></section><section className="rounded-xl border border-dashed border-sky-400/50 bg-sky-400/5 p-4 text-sky-200">📝 Reserved: add “How we made it” blog post link/teaser here.</section></main>
+  return (
+    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-6 py-8 text-slate-100">
+      <h1 className="text-3xl font-semibold">WebGPU Style Transfer — Phase 6 UI</h1>
+
+      <section className="grid gap-4 rounded-xl border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-2">
+        <p>{workerStatus}</p>
+        <p>{gpuStatus}</p>
+        <p className="md:col-span-2 text-slate-300">{gpuInfo}</p>
+      </section>
+
+      <section className="grid gap-4 rounded-xl border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
+        <label className="flex flex-col gap-1">Content image<input type="file" accept="image/*" onChange={(event) => void onUpload(event, 'content')} /></label>
+        <label className="flex flex-col gap-1">Style image<input type="file" accept="image/*" onChange={(event) => void onUpload(event, 'style')} /></label>
+        <label className="flex flex-col gap-1">Resolution<select value={resolution} onChange={(event) => setResolution(Number(event.target.value) as ResolutionPreset)}><option value={128}>128</option><option value={256}>256</option></select></label>
+        <label className="flex flex-col gap-1">Chunk steps<input type="number" min={1} max={20} value={stepsPerChunk} onChange={(event) => setStepsPerChunk(Number(event.target.value))} /></label>
+        <label className="flex flex-col gap-1">Style weight<input type="number" value={styleWeight} onChange={(event) => setStyleWeight(Number(event.target.value))} /></label>
+        <label className="flex flex-col gap-1">Content weight<input type="number" value={contentWeight} onChange={(event) => setContentWeight(Number(event.target.value))} /></label>
+        <label className="flex flex-col gap-1">Learning rate<input type="number" step={0.001} value={learningRate} onChange={(event) => setLearningRate(Number(event.target.value))} /></label>
+        <label className="flex flex-col gap-1">Optimizer<select value={optimizer} onChange={(event) => setOptimizer(event.target.value as OptimizerMode)}><option value="sgd">SGD</option><option value="adam">Adam</option><option value="lbfgs">L-BFGS</option></select></label>
+        {optimizer === 'adam' ? (
+          <>
+            <label className="flex flex-col gap-1">Adam β1<input type="number" step={0.001} value={adamBeta1} onChange={(event) => setAdamBeta1(Number(event.target.value))} /></label>
+            <label className="flex flex-col gap-1">Adam β2<input type="number" step={0.001} value={adamBeta2} onChange={(event) => setAdamBeta2(Number(event.target.value))} /></label>
+            <label className="flex flex-col gap-1">Adam ε<input type="number" step={0.00000001} value={adamEpsilon} onChange={(event) => setAdamEpsilon(Number(event.target.value))} /></label>
+          </>
+        ) : null}
+        {optimizer === 'lbfgs' ? (
+          <>
+            <label className="flex flex-col gap-1">L-BFGS memory<input type="number" min={1} step={1} value={lbfgsMemory} onChange={(event) => setLbfgsMemory(Number(event.target.value))} /></label>
+            <label className="flex flex-col gap-1">L-BFGS ε<input type="number" step={0.00000001} value={lbfgsEpsilon} onChange={(event) => setLbfgsEpsilon(Number(event.target.value))} /></label>
+          </>
+        ) : null}
+      </section>
+
+      <section className="flex items-center gap-4">
+        <button
+          className="rounded bg-emerald-500 px-4 py-2 font-semibold text-black"
+          onClick={() => setIsRunning(true)}
+          disabled={isRunning || contentTensor === null || styleTensor === null || weights === null}
+        >
+          ▶ Play
+        </button>
+        <button className="rounded bg-amber-500 px-4 py-2 font-semibold text-black" onClick={() => setIsRunning(false)} disabled={!isRunning}>⏸ Pause</button>
+        <p>Iterations: {iterations}</p>
+        <p>Loss: {lastLoss === null ? '—' : lastLoss.toFixed(4)}</p>
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-3">
+        <img className="aspect-square w-full rounded border border-slate-700 object-cover" src={contentImage ?? undefined} alt="Content" />
+        <img className="aspect-square w-full rounded border border-slate-700 object-cover" src={styleImage ?? undefined} alt="Style" />
+        <img className="aspect-square w-full rounded border border-slate-700 object-cover" src={outputImage ?? undefined} alt="Output" />
+      </section>
+
+      <section className="h-72 overflow-hidden rounded-xl border border-slate-700 bg-black/40">
+        <Canvas camera={{ position: [0, 0, 3] }}>
+          {contentImage !== null ? <Plane url={contentImage} x={-2} /> : null}
+          {styleImage !== null ? <Plane url={styleImage} x={0} /> : null}
+          {outputImage !== null ? <Plane url={outputImage} x={2} /> : null}
+        </Canvas>
+      </section>
+
+      <section className="rounded-xl border border-dashed border-sky-400/50 bg-sky-400/5 p-4 text-sky-200">
+        📝 Reserved: add “How we made it” blog post link/teaser here.
+      </section>
+    </main>
+  )
 }
 
 export default App
