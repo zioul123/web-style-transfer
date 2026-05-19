@@ -763,10 +763,11 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
   const poolLayers: readonly number[] = [4, 9, 18, 27]
   const contentNorm = await runNormalizeForward(new Float32Array(payload.contentImageValues), payload.inputShape, payload.mean, payload.std)
   const styleNorm = await runNormalizeForward(new Float32Array(payload.styleImageValues), payload.inputShape, payload.mean, payload.std)
-  const runForward = async (start: Float32Array): Promise<{ reluOut: Record<number, Float32Array>; convInShape: Record<number, readonly [number, number, number, number]>; reluPre: Record<number, Float32Array>; layerInput: Record<number, Float32Array>; layerInputShape: Record<number, readonly [number, number, number, number]>; final: Float32Array }> => {
+  const runForward = async (start: Float32Array): Promise<{ reluOut: Record<number, Float32Array>; reluShape: Record<number, readonly [number, number, number, number]>; convInShape: Record<number, readonly [number, number, number, number]>; reluPre: Record<number, Float32Array>; layerInput: Record<number, Float32Array>; layerInputShape: Record<number, readonly [number, number, number, number]>; final: Float32Array }> => {
     let shape: readonly [number, number, number, number] = payload.inputShape
     let values = start
     const reluOut: Record<number, Float32Array> = {}
+    const reluShape: Record<number, readonly [number, number, number, number]> = {}
     const convInShape: Record<number, readonly [number, number, number, number]> = {}
     const reluPre: Record<number, Float32Array> = {}
     const layerInput: Record<number, Float32Array> = {}
@@ -787,13 +788,14 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
         reluPre[layerIndex] = values
         values = await runReluForward(values)
         reluOut[layerIndex] = values
+        reluShape[layerIndex] = shape
       }
       if (poolLayers.includes(layerIndex)) {
         values = await runMaxPool2dForward(values, shape)
         shape = [1, shape[1], Math.floor(shape[2] / 2), Math.floor(shape[3] / 2)]
       }
     }
-    return { reluOut, convInShape, reluPre, layerInput, layerInputShape, final: values }
+    return { reluOut, reluShape, convInShape, reluPre, layerInput, layerInputShape, final: values }
   }
 
   const contentTargets = await runForward(contentNorm)
@@ -808,8 +810,7 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
       const inputRelu = run.reluOut[reluLayerIndex]
       const styleRelu = styleTargets.reluOut[reluLayerIndex]
       if (inputRelu === undefined || styleRelu === undefined) throw new Error(`Missing ReLU activation for style layer index ${reluLayerIndex}.`)
-      const reluShapeByLayer: Record<number, readonly [number, number, number, number]> = { 1: [1, 64, 16, 16], 6: [1, 128, 8, 8], 11: [1, 256, 4, 4], 20: [1, 512, 2, 2], 29: [1, 512, 1, 1] }
-      const reluShape = reluShapeByLayer[reluLayerIndex]
+      const reluShape = run.reluShape[reluLayerIndex]
       if (reluShape === undefined) throw new Error(`Unsupported ReLU style layer index ${reluLayerIndex}.`)
       totalStyle += await runMse(await runGramMatrix(inputRelu, reluShape), await runGramMatrix(styleRelu, reluShape))
     }
@@ -823,8 +824,7 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
       const inputRelu = run.reluOut[reluLayerIndex]
       const styleRelu = styleTargets.reluOut[reluLayerIndex]
       if (inputRelu === undefined || styleRelu === undefined) throw new Error(`Missing ReLU activation for style gradient layer index ${reluLayerIndex}.`)
-      const reluShapeByLayer: Record<number, readonly [number, number, number, number]> = { 1: [1, 64, 16, 16], 6: [1, 128, 8, 8], 11: [1, 256, 4, 4], 20: [1, 512, 2, 2], 29: [1, 512, 1, 1] }
-      const reluShape = reluShapeByLayer[reluLayerIndex]
+      const reluShape = run.reluShape[reluLayerIndex]
       if (reluShape === undefined) throw new Error(`Unsupported ReLU style gradient layer index ${reluLayerIndex}.`)
       const styleGrad = await runStyleLossBackward(inputRelu, reluShape, styleRelu)
       const weightedStyleGrad = payload.styleWeight === 1 ? styleGrad : await runScalarBinaryOp('mul', styleGrad, payload.styleWeight, false)
