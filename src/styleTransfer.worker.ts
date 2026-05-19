@@ -800,8 +800,88 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
 
   const contentTargets = await runForward(contentNorm)
   const styleTargets = await runForward(styleNorm)
-  let inputValues = new Float32Array(payload.inputImageValues)
+  let inputValues: Float32Array<ArrayBufferLike> = new Float32Array(payload.inputImageValues)
   const losses: number[] = []
+  const optimizer = payload.optimizer ?? 'sgd'
+  const adamBeta1 = payload.adamBeta1 ?? 0.9
+  const adamBeta2 = payload.adamBeta2 ?? 0.999
+  const adamEps = payload.adamEpsilon ?? 1e-8
+  const lbfgsMemory = payload.lbfgsMemory ?? 10
+  const lbfgsEps = payload.lbfgsEpsilon ?? 1e-8
+  const adamM = new Float32Array(inputValues.length)
+  const adamV = new Float32Array(inputValues.length)
+  const lbfgsHistory: { s: Float32Array; y: Float32Array; rho: number }[] = []
+  let previousInput: Float32Array | null = null
+  let previousGrad: Float32Array | null = null
+
+  const updateInput = async (grad: Float32Array, step: number): Promise<Float32Array<ArrayBufferLike>> => {
+    const nextValues = new Float32Array(inputValues.length)
+    if (optimizer === 'sgd') {
+      for (let i = 0; i < inputValues.length; i += 1) nextValues[i] = inputValues[i] - payload.learningRate * grad[i]
+    } else if (optimizer === 'adam') {
+      const t = step + 1
+      const b1Correction = 1 - Math.pow(adamBeta1, t)
+      const b2Correction = 1 - Math.pow(adamBeta2, t)
+      for (let i = 0; i < inputValues.length; i += 1) {
+        const g = grad[i]
+        adamM[i] = adamBeta1 * adamM[i] + (1 - adamBeta1) * g
+        adamV[i] = adamBeta2 * adamV[i] + (1 - adamBeta2) * g * g
+        const mHat = adamM[i] / b1Correction
+        const vHat = adamV[i] / b2Correction
+        nextValues[i] = inputValues[i] - payload.learningRate * (mHat / (Math.sqrt(vHat) + adamEps))
+      }
+    } else {
+      if (previousInput !== null && previousGrad !== null) {
+        const s = new Float32Array(inputValues.length)
+        const y = new Float32Array(inputValues.length)
+        let sy = 0
+        for (let i = 0; i < inputValues.length; i += 1) {
+          s[i] = inputValues[i] - previousInput[i]
+          y[i] = grad[i] - previousGrad[i]
+          sy += s[i] * y[i]
+        }
+        if (sy > lbfgsEps) {
+          lbfgsHistory.push({ s, y, rho: 1 / sy })
+          if (lbfgsHistory.length > lbfgsMemory) lbfgsHistory.shift()
+        }
+      }
+      const q = new Float32Array(grad)
+      const alphas = new Float32Array(lbfgsHistory.length)
+      for (let i = lbfgsHistory.length - 1; i >= 0; i -= 1) {
+        const { s, y, rho } = lbfgsHistory[i]
+        let sq = 0
+        for (let j = 0; j < q.length; j += 1) sq += s[j] * q[j]
+        const alpha = rho * sq
+        alphas[i] = alpha
+        for (let j = 0; j < q.length; j += 1) q[j] -= alpha * y[j]
+      }
+      let scale = 1
+      if (lbfgsHistory.length > 0) {
+        const last = lbfgsHistory[lbfgsHistory.length - 1]
+        let ys = 0
+        let yy = 0
+        for (let i = 0; i < q.length; i += 1) {
+          ys += last.y[i] * last.s[i]
+          yy += last.y[i] * last.y[i]
+        }
+        if (yy > lbfgsEps) scale = ys / yy
+      }
+      for (let i = 0; i < q.length; i += 1) q[i] *= scale
+      for (let i = 0; i < lbfgsHistory.length; i += 1) {
+        const { s, y, rho } = lbfgsHistory[i]
+        let yq = 0
+        for (let j = 0; j < q.length; j += 1) yq += y[j] * q[j]
+        const beta = rho * yq
+        for (let j = 0; j < q.length; j += 1) q[j] += s[j] * (alphas[i] - beta)
+      }
+      for (let i = 0; i < inputValues.length; i += 1) nextValues[i] = inputValues[i] - payload.learningRate * q[i]
+    }
+    const clamped = new Float32Array(await runClamp(nextValues, 0, 1))
+    previousInput = new Float32Array(inputValues)
+    previousGrad = new Float32Array(grad)
+    return clamped
+  }
+
   for (let step = 0; step < payload.steps; step += 1) {
     const norm = await runNormalizeForward(inputValues, payload.inputShape, payload.mean, payload.std)
     const run = await runForward(norm)
@@ -853,11 +933,7 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
     if (grad === null) throw new Error('No gradient path reached the input image.')
     const gInput = await runNormalizeBackward(grad, payload.inputShape, payload.std)
 
-    const nextValues = new Float32Array(inputValues.length)
-    for (let i = 0; i < inputValues.length; i += 1) {
-      nextValues[i] = inputValues[i] - payload.learningRate * gInput[i]
-    }
-    inputValues = new Float32Array(await runClamp(nextValues, 0, 1))
+    inputValues = await updateInput(gInput, step)
   }
   return { losses, finalValues: Array.from(inputValues) }
 }
