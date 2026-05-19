@@ -138,6 +138,12 @@ type WorkerTensorNormalizeForwardOpRequest = {
 type WorkerRunStyleTransferRequest = {
   type: 'run-style-transfer'
   id: string
+  optimizer: 'sgd' | 'adam' | 'lbfgs'
+  adamBeta1?: number
+  adamBeta2?: number
+  adamEpsilon?: number
+  lbfgsMemory?: number
+  lbfgsEpsilon?: number
   inputShape: TensorShape
   inputImageValues: number[]
   contentImageValues: number[]
