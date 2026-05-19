@@ -45,7 +45,7 @@ def export() -> None:
     content = load_image(ASSET_CONTENT_PATH, 16)
     style = load_image(ASSET_STYLE_PATH, 16)
     noise = (torch.rand_like(content) * 2.0 - 1.0) * 0.05
-    input_image = torch.clamp(content + noise, 0.0, 1.0)
+    input_image = torch.clamp(content + noise, 0.0, 1.0).clone().detach().requires_grad_(True)
 
     mean_vec = [0.485, 0.456, 0.406]
     std_vec = [0.229, 0.224, 0.225]
@@ -68,7 +68,9 @@ def export() -> None:
     style_features = style_norm
     input_features = input_norm
     style_losses: dict[str, float] = {}
+    style_loss_tensors: dict[int, torch.Tensor] = {}
     content_loss: float = 0.0
+    content_loss_tensor: torch.Tensor | None = None
 
     for layer_index, layer in enumerate(truncated_layers):
       content_features = layer(content_features)
@@ -76,9 +78,32 @@ def export() -> None:
       input_features = layer(input_features)
 
       if layer_index in STYLE_LAYER_INDICES:
-        style_losses[f'relu{layer_index}'] = torch.nn.functional.mse_loss(gram_matrix(input_features), gram_matrix(style_features)).item()
+        layer_style_loss = torch.nn.functional.mse_loss(gram_matrix(input_features), gram_matrix(style_features))
+        style_losses[f'relu{layer_index}'] = layer_style_loss.item()
+        style_loss_tensors[layer_index] = layer_style_loss
       if layer_index == CONTENT_LAYER_INDEX:
-        content_loss = torch.nn.functional.mse_loss(input_features, content_features).item()
+        content_loss_tensor = torch.nn.functional.mse_loss(input_features, content_features)
+        content_loss = content_loss_tensor.item()
+
+    if content_loss_tensor is None:
+      raise RuntimeError('Content loss tensor was not computed.')
+
+    total_style_loss_tensor = sum(style_loss_tensors[layer] for layer in STYLE_LAYER_INDICES)
+    total_loss_tensor = content_loss_tensor + total_style_loss_tensor
+
+    total_loss_tensor.backward(retain_graph=True)
+    total_grad_input = input_image.grad.detach().clone()
+    input_image.grad.zero_()
+
+    content_loss_tensor.backward(retain_graph=True)
+    content_grad_input = input_image.grad.detach().clone()
+    input_image.grad.zero_()
+
+    style_grad_by_layer: dict[str, list[float]] = {}
+    for layer in STYLE_LAYER_INDICES:
+      style_loss_tensors[layer].backward(retain_graph=True)
+      style_grad_by_layer[f'relu{layer}'] = tensor_to_list(input_image.grad.detach().clone())
+      input_image.grad.zero_()
 
     fixture_payload = {
       'imageSize': 16,
@@ -94,6 +119,11 @@ def export() -> None:
       'expectedStyleLossTotal': sum(style_losses.values()),
       'expectedContentLoss': content_loss,
       'expectedTotalLoss': content_loss + sum(style_losses.values()),
+      'expectedGradients': {
+        'content': tensor_to_list(content_grad_input),
+        'styleByLayer': style_grad_by_layer,
+        'total': tensor_to_list(total_grad_input),
+      },
     }
 
     (OUTPUT_DIR / 'vgg19_conv0_to_conv28_weights.json').write_text(json.dumps(weights_payload))
