@@ -1,0 +1,50 @@
+export const makeGramBackwardShader = (count: number): string => `
+struct GramBackwardUniforms {
+  channels: u32,
+  spatial: u32,
+  norm: u32,
+  _pad: u32,
+}
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<storage, read> gradOutValues: array<f32>;
+@group(0) @binding(2) var<uniform> uniforms: GramBackwardUniforms;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let a = i / uniforms.spatial;
+  let p = i % uniforms.spatial;
+  var sum: f32 = 0.0;
+  for (var b: u32 = 0u; b < uniforms.channels; b = b + 1u) {
+    let gradAB = gradOutValues[a * uniforms.channels + b];
+    let gradBA = gradOutValues[b * uniforms.channels + a];
+    let inputBP = inputValues[b * uniforms.spatial + p];
+    sum = sum + ((gradAB + gradBA) * inputBP);
+  }
+  out[i] = sum / f32(uniforms.norm);
+}`
+
+export const makeGramMatrixShader = (count: number): string => `
+struct GramUniforms {
+  channels: u32,
+  spatial: u32,
+}
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<uniform> uniforms: GramUniforms;
+@group(0) @binding(2) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let row = i / uniforms.channels;
+  let col = i % uniforms.channels;
+  var sum = 0.0;
+  let rowBase = row * uniforms.spatial;
+  let colBase = col * uniforms.spatial;
+  for (var s: u32 = 0u; s < uniforms.spatial; s = s + 1u) {
+    sum = sum + inputValues[rowBase + s] * inputValues[colBase + s];
+  }
+  let norm = f32(uniforms.channels * uniforms.spatial);
+  out[i] = sum / norm;
+}`

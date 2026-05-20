@@ -32,7 +32,7 @@ test('phase 5 optimizer loop decreases first-pool graph objective', async ({ pag
     }
     const weights = await loadJson<VggWeightsFixture>('/vgg19-first-pool/vgg19_first_pool_weights.json')
     const caseData = await loadJson<VggCaseFixture>('/vgg19-first-pool/vgg19_first_pool_case_madeira16.json')
-    if (weights === null || caseData === null) return { ok: false as const }
+    if (weights === null || caseData === null) return { ok: false as const, reason: 'missing-fixtures' as const }
 
     const worker = new Worker(new URL('/src/styleTransfer.worker.ts', window.location.origin), { type: 'module' })
     const ask = (payload: WorkerRequest): Promise<WorkerResponse> => new Promise((resolve) => {
@@ -66,11 +66,15 @@ test('phase 5 optimizer loop decreases first-pool graph objective', async ({ pag
       steps: 6,
     })
     worker.terminate()
-    if (optimized.type !== 'run-first-pool-optimizer-result' || !optimized.ok) return { ok: false as const }
+    if (optimized.type !== 'run-first-pool-optimizer-result') return { ok: false as const, reason: 'unexpected-response' as const, responseType: optimized.type }
+    if (!optimized.ok) return { ok: false as const, reason: 'worker-failed' as const, message: optimized.message }
     return { ok: true as const, init, losses: optimized.losses }
   })
 
-  test.skip(!result.ok, 'Missing VGG19 first-pool fixtures. Run python-reference/export_vgg19_first_pool.py first.')
+  test.skip(!result.ok && result.reason === 'missing-fixtures', 'Missing VGG19 first-pool fixtures. Run python-reference/export_vgg19_first_pool.py first.')
+  if (!result.ok) {
+    throw new Error(`${result.reason}${'message' in result && result.message !== undefined ? `: ${result.message}` : ''}${'responseType' in result && result.responseType !== undefined ? ` (responseType=${String(result.responseType)})` : ''}`)
+  }
   if (!result.ok) return
   expect(result.init.type).toBe('webgpu-init-result')
   if (result.init.type !== 'webgpu-init-result') throw new Error('init failure')
