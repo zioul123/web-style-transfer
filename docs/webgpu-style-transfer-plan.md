@@ -258,3 +258,27 @@ When encoding uniforms for backward kernels in WGSL, ensure 16-byte alignment fo
 - Move backward kernels into dedicated shader modules for easier profiling.
 - Add small shared helper(s) for shape compatibility checks to keep handler logic compact.
 - Add a full phase-4 end-to-end fixture/spec that verifies chained gradient routing from multiple taps in one pass.
+
+
+## Implementation update (May 19, 2026)
+
+### Added optimization modes
+
+- `fusedOps`: fused conv+ReLU path in worker forward execution.
+- `superFusedOps`: stage-block scheduling for conv/relu sequences grouped by pool boundaries:
+  - block1: conv0..conv1 (pool at 4)
+  - block2: conv2..conv3 (pool at 9)
+  - block3/4: conv5..conv8 and conv10..conv13
+  - block5/6: conv14..conv17 and conv19..conv22
+  - block7/8: conv23..conv26 and conv28..conv29
+
+Both modes preserve style/content tap extraction for configured ReLU layers.
+
+### Readability and transfer-focused cleanup
+
+- Conv layer metadata is cached once per run (`weight`, `shape`, `bias`) to avoid repeated `Float32Array` conversion/allocation in forward/backward loops.
+- Backward routing in fused mode uses stored ReLU outputs directly to keep logic consistent with fused forward.
+
+### Remaining easy optimization target
+
+The worker currently performs per-op GPU->CPU readback in `runUnaryShader`. This keeps correctness straightforward but creates serialization overhead. The next pragmatic performance milestone is introducing GPU-resident intermediate buffers and only reading back at required boundaries (loss scalar extraction and final/output snapshots).
