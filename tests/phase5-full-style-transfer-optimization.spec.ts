@@ -143,14 +143,22 @@ test('phase 5 super fused forward path matches baseline for single step', async 
     const base = await ask({ ...common, id: 'phase5-super-base', fusedOps: false, superFusedOps: false })
     const superFused = await ask({ ...common, id: 'phase5-super-fused', fusedOps: true, superFusedOps: true })
     worker.terminate()
-    if (base.type !== 'run-style-transfer-result' || !base.ok) return { ok: false as const, reason: 'base-failed' as const }
-    if (superFused.type !== 'run-style-transfer-result' || !superFused.ok) return { ok: false as const, reason: 'super-failed' as const }
+    if (base.type !== 'run-style-transfer-result') return { ok: false as const, reason: 'base-wrong-response' as const, responseType: base.type }
+    if (!base.ok) return { ok: false as const, reason: 'base-failed' as const, message: base.message }
+    if (superFused.type !== 'run-style-transfer-result') return { ok: false as const, reason: 'super-wrong-response' as const, responseType: superFused.type }
+    if (!superFused.ok) return { ok: false as const, reason: 'super-failed' as const, message: superFused.message }
     let maxDiff = 0
-    for (let i = 0; i < base.finalValues.length; i += 1) maxDiff = Math.max(maxDiff, Math.abs(base.finalValues[i] - superFused.finalValues[i]))
-    return { ok: true as const, maxDiff }
+    let maxDiffIndex = -1
+    for (let i = 0; i < base.finalValues.length; i += 1) {
+      const diff = Math.abs(base.finalValues[i] - superFused.finalValues[i])
+      if (diff > maxDiff) { maxDiff = diff; maxDiffIndex = i }
+    }
+    return { ok: true as const, maxDiff, maxDiffIndex, baseLoss: base.losses[0] ?? null, superLoss: superFused.losses[0] ?? null, baseStats: base.stats, superStats: superFused.stats }
   })
   test.skip(!result.ok && result.reason === 'missing-fixtures', 'Missing phase3 full-pass fixtures.')
-  if (!result.ok && result.reason !== 'missing-fixtures') throw new Error(result.reason)
+  if (!result.ok && result.reason !== 'missing-fixtures') {
+    throw new Error(`${result.reason}${'message' in result && result.message !== undefined ? `: ${result.message}` : ''}${'responseType' in result && result.responseType !== undefined ? ` (responseType=${String(result.responseType)})` : ''}`)
+  }
   if (!result.ok) return
   expect(result.maxDiff).toBeLessThan(2e-3)
 })

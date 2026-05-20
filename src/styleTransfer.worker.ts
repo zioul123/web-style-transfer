@@ -833,15 +833,20 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
     const layerInputShape: Record<number, readonly [number, number, number, number]> = {}
     if (superFusedOps) {
       for (const block of superFusedBlocks) {
+        let blockShape: readonly [number, number, number, number] = shape
         for (const layerIndex of block) {
           layerInput[layerIndex] = values
           layerInputShape[layerIndex] = shape
-          convInShape[layerIndex] = shape
+          const convLayer = convLayerCache[layerIndex]
+          if (convLayer !== undefined) {
+            convInShape[layerIndex] = blockShape
+            blockShape = [1, convLayer.shape[0], blockShape[2], blockShape[3]]
+          }
         }
-        const blockLayers: { layerIndex: number; shape: readonly [number, number, number, number]; values: Float32Array; bias: Float32Array }[] = []
+        const blockLayers: { layerIndex: number; reluLayerIndex: number | null; shape: readonly [number, number, number, number]; values: Float32Array; bias: Float32Array }[] = []
         for (const layerIndex of block) {
           const convLayer = convLayerCache[layerIndex]
-          if (convLayer !== undefined) blockLayers.push({ layerIndex, shape: convLayer.shape, values: convLayer.values, bias: convLayer.bias })
+          if (convLayer !== undefined) blockLayers.push({ layerIndex, reluLayerIndex: reluLayerSet.has(layerIndex + 1) ? layerIndex + 1 : null, shape: convLayer.shape, values: convLayer.values, bias: convLayer.bias })
         }
         const tapLayers = block.filter((layerIndex) => reluLayerSet.has(layerIndex))
         if (fusedOps && blockLayers.length > 0) {
@@ -850,7 +855,7 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
           shape = blockResult.finalShape
           for (const layerIndex of tapLayers) {
             const tap = blockResult.reluOutByLayer[layerIndex]
-            const convLayer = convLayerCache[layerIndex]
+            const convLayer = convLayerCache[layerIndex - 1]
             if (tap !== undefined) {
               reluOut[layerIndex] = tap
               reluShape[layerIndex] = convLayer === undefined ? shape : [1, convLayer.shape[0], layerInputShape[layerIndex][2], layerInputShape[layerIndex][3]]
@@ -1307,7 +1312,7 @@ const readGpuBuffer = async (device: GPUDevice, sourceBuffer: GPUBuffer, floatCo
 const runSuperFusedConvReluBlock = async (
   input: Float32Array,
   inputShape: readonly [number, number, number, number],
-  layers: readonly { layerIndex: number; shape: readonly [number, number, number, number]; values: Float32Array; bias: Float32Array }[],
+  layers: readonly { layerIndex: number; reluLayerIndex: number | null; shape: readonly [number, number, number, number]; values: Float32Array; bias: Float32Array }[],
   tapLayers: readonly number[],
 ): Promise<{ finalValues: Float32Array; reluOutByLayer: Record<number, Float32Array>; finalShape: readonly [number, number, number, number] }> => {
   if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
@@ -1346,7 +1351,7 @@ const runSuperFusedConvReluBlock = async (
     pass.dispatchWorkgroups(Math.ceil(outCount / 64))
     pass.end()
     device.queue.submit([encoder.finish()])
-    if (tapLayers.includes(layer.layerIndex)) reluOutByLayer[layer.layerIndex] = await readGpuBuffer(device, outBuffer, outCount)
+    if (layer.reluLayerIndex !== null && tapLayers.includes(layer.reluLayerIndex)) reluOutByLayer[layer.reluLayerIndex] = await readGpuBuffer(device, outBuffer, outCount)
     currentBuffer = outBuffer
     currentCount = outCount
     shape = [1, outChannels, shape[2], shape[3]]
