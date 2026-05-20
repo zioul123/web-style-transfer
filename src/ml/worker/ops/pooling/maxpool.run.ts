@@ -1,1 +1,11 @@
-export {}
+import { makeMaxPool2dShader } from './maxpool.shader'
+
+export const runMaxPool2dForward = async (gpuDevice: GPUDevice | null, runUnaryShader: (code: string, input: Float32Array, outCount: number, extraEntries?: GPUBindGroupEntry[]) => Promise<Float32Array>, input: Float32Array, shape: readonly [number, number, number, number], BUFFER_USAGE_UNIFORM_COPY_DST: number): Promise<Float32Array> => {
+  if (shape[0] !== 1) throw new Error('maxpool2d-forward currently expects batch size 1.')
+  const channels: number = shape[1]; const inHeight: number = shape[2]; const inWidth: number = shape[3]
+  const outHeight: number = Math.floor(inHeight / 2); const outWidth: number = Math.floor(inWidth / 2); const outCount: number = channels * outHeight * outWidth
+  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 5 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST })
+  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, inHeight, inWidth, outHeight, outWidth]))
+  return runUnaryShader(makeMaxPool2dShader(outCount), input, outCount, [{ binding: 1, resource: { buffer: uniformBuffer } }])
+}
