@@ -776,6 +776,12 @@ const runStyleLossBackward = async (input: Float32Array, shape: readonly [number
   const gramGrad: Float32Array = await runContentLossBackward(inputGram, targetGram)
   return await runGramBackward(input, shape, gramGrad)
 }
+
+const runStyleLossBackwardFromTargetGram = async (input: Float32Array, shape: readonly [number, number, number, number], targetGram: Float32Array): Promise<Float32Array> => {
+  const inputGram = await runGramMatrix(input, shape)
+  const gramGrad: Float32Array = await runContentLossBackward(inputGram, targetGram)
+  return await runGramBackward(input, shape, gramGrad)
+}
 const runFirstPoolOptimizer = async (payload: Extract<WorkerRequest, { type: 'run-first-pool-optimizer' }>): Promise<{ losses: number[]; finalValues: number[] }> => {
   const convForward = async (inputValues: Float32Array, inputShape: readonly [number, number, number, number], weightValues: Float32Array, weightShape: readonly [number, number, number, number], bias: number[]): Promise<Float32Array> =>
     await runConv2dForward(inputValues, inputShape, weightValues, weightShape, bias)
@@ -960,6 +966,13 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
 
   const contentTargets = await runForward(contentNorm)
   const styleTargets = await runForward(styleNorm)
+  const styleGramTargets: Record<number, Float32Array> = {}
+  for (const reluLayerIndex of payload.styleLayerIndices) {
+    const styleRelu = styleTargets.reluOut[reluLayerIndex]
+    const styleShape = styleTargets.reluShape[reluLayerIndex]
+    if (styleRelu === undefined || styleShape === undefined) throw new Error(`Missing precomputed style activation for ReLU layer index ${reluLayerIndex}.`)
+    styleGramTargets[reluLayerIndex] = await runGramMatrix(styleRelu, styleShape)
+  }
   let inputValues: Float32Array<ArrayBufferLike> = new Float32Array(payload.inputImageValues)
   const losses: number[] = []
   const optimizer = payload.optimizer ?? 'sgd'
@@ -1060,11 +1073,12 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
     let totalStyle = 0
     for (const reluLayerIndex of payload.styleLayerIndices) {
       const inputRelu = run.reluOut[reluLayerIndex]
-      const styleRelu = styleTargets.reluOut[reluLayerIndex]
-      if (inputRelu === undefined || styleRelu === undefined) throw new Error(`Missing ReLU activation for style layer index ${reluLayerIndex}.`)
+      if (inputRelu === undefined) throw new Error(`Missing ReLU activation for style layer index ${reluLayerIndex}.`)
       const reluShape = run.reluShape[reluLayerIndex]
       if (reluShape === undefined) throw new Error(`Unsupported ReLU style layer index ${reluLayerIndex}.`)
-      totalStyle += await runMse(await runGramMatrix(inputRelu, reluShape), await runGramMatrix(styleRelu, reluShape))
+      const targetGram = styleGramTargets[reluLayerIndex]
+      if (targetGram === undefined) throw new Error(`Missing precomputed style gram target for ReLU layer index ${reluLayerIndex}.`)
+      totalStyle += await runMse(await runGramMatrix(inputRelu, reluShape), targetGram)
     }
     const contentRelu = run.reluOut[payload.contentLayerIndex]
     const contentTargetRelu = contentTargets.reluOut[payload.contentLayerIndex]
@@ -1075,11 +1089,12 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
     const gradByReluLayer: Record<number, Float32Array> = {}
     for (const reluLayerIndex of payload.styleLayerIndices) {
       const inputRelu = run.reluOut[reluLayerIndex]
-      const styleRelu = styleTargets.reluOut[reluLayerIndex]
-      if (inputRelu === undefined || styleRelu === undefined) throw new Error(`Missing ReLU activation for style gradient layer index ${reluLayerIndex}.`)
+      if (inputRelu === undefined) throw new Error(`Missing ReLU activation for style gradient layer index ${reluLayerIndex}.`)
       const reluShape = run.reluShape[reluLayerIndex]
       if (reluShape === undefined) throw new Error(`Unsupported ReLU style gradient layer index ${reluLayerIndex}.`)
-      const styleGrad = await runStyleLossBackward(inputRelu, reluShape, styleRelu)
+      const targetGram = styleGramTargets[reluLayerIndex]
+      if (targetGram === undefined) throw new Error(`Missing precomputed style gram gradient target for ReLU layer index ${reluLayerIndex}.`)
+      const styleGrad = await runStyleLossBackwardFromTargetGram(inputRelu, reluShape, targetGram)
       const weightedStyleGrad = payload.styleWeight === 1 ? styleGrad : await runScalarBinaryOp('mul', styleGrad, payload.styleWeight, false)
       gradByReluLayer[reluLayerIndex] = gradByReluLayer[reluLayerIndex] === undefined ? weightedStyleGrad : await runBinaryOp('add', gradByReluLayer[reluLayerIndex], weightedStyleGrad, 'tensorTensor')
     }
