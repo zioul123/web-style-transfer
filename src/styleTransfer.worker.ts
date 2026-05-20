@@ -252,6 +252,49 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }`
 
 
+
+const makeConv2dReluShader = (count: number): string => `
+struct Conv2dReluUniforms {
+  inChannels: u32,
+  outChannels: u32,
+  height: u32,
+  width: u32,
+}
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<storage, read> weightValues: array<f32>;
+@group(0) @binding(2) var<storage, read> biasValues: array<f32>;
+@group(0) @binding(3) var<uniform> uniforms: Conv2dReluUniforms;
+@group(0) @binding(4) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let hw = uniforms.height * uniforms.width;
+  let oc = (i / hw) % uniforms.outChannels;
+  let outOffset = i % hw;
+  let oh = outOffset / uniforms.width;
+  let ow = outOffset % uniforms.width;
+  var sum = biasValues[oc];
+  for (var ic: u32 = 0u; ic < uniforms.inChannels; ic = ic + 1u) {
+    let inputBase = ic * hw;
+    let weightBase = (oc * uniforms.inChannels + ic) * 9u;
+    for (var kh: u32 = 0u; kh < 3u; kh = kh + 1u) {
+      let khSigned = i32(kh) - 1;
+      let ihSigned = i32(oh) + khSigned;
+      if (ihSigned < 0 || ihSigned >= i32(uniforms.height)) { continue; }
+      for (var kw: u32 = 0u; kw < 3u; kw = kw + 1u) {
+        let kwSigned = i32(kw) - 1;
+        let iwSigned = i32(ow) + kwSigned;
+        if (iwSigned < 0 || iwSigned >= i32(uniforms.width)) { continue; }
+        let inputIndex = inputBase + u32(ihSigned) * uniforms.width + u32(iwSigned);
+        let weightIndex = weightBase + kh * 3u + kw;
+        sum = sum + inputValues[inputIndex] * weightValues[weightIndex];
+      }
+    }
+  }
+  out[i] = max(0.0, sum);
+}`
+
 const makeMseBackwardShader = (count: number): string => `
 @group(0) @binding(0) var<storage, read> inputValues: array<f32>;
 @group(0) @binding(1) var<storage, read> targetValues: array<f32>;
@@ -764,6 +807,7 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
   const reluLayerSet = new Set(reluLayers)
   const poolLayerSet = new Set(poolLayers)
   const convWeightCache: Record<number, { shape: [number, number, number, number]; values: Float32Array } | undefined> = {}
+  const fusedOps = payload.fusedOps ?? false
   for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
     const weightShapeRaw = payload.weights[`conv${layerIndex}.weightShape`]
     const weightValues = payload.weights[`conv${layerIndex}.weightValues`]
@@ -785,12 +829,20 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
       layerInputShape[layerIndex] = shape
       const convWeight = convWeightCache[layerIndex]
       const biasValues = payload.weights[`conv${layerIndex}.biasValues`]
+      const hasRelu = reluLayerSet.has(layerIndex)
       if (convWeight !== undefined && Array.isArray(biasValues)) {
         convInShape[layerIndex] = shape
-        values = await runConv2dForward(values, shape, convWeight.values, convWeight.shape, biasValues)
+        if (fusedOps && hasRelu) {
+          values = await runConv2dReluForward(values, shape, convWeight.values, convWeight.shape, biasValues)
+          reluPre[layerIndex] = values
+          reluOut[layerIndex] = values
+          reluShape[layerIndex] = [1, convWeight.shape[0], shape[2], shape[3]]
+        } else {
+          values = await runConv2dForward(values, shape, convWeight.values, convWeight.shape, biasValues)
+        }
         shape = [1, convWeight.shape[0], shape[2], shape[3]]
       }
-      if (reluLayerSet.has(layerIndex)) {
+      if (hasRelu && !(fusedOps && convWeight !== undefined && Array.isArray(biasValues))) {
         reluPre[layerIndex] = values
         values = await runReluForward(values)
         reluOut[layerIndex] = values
@@ -1005,10 +1057,12 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
       void (async (): Promise<void> => {
         try {
 
-          if (payload.op === 'conv2d-forward') {
+          if (payload.op === 'conv2d-forward' || payload.op === 'conv2d-relu-forward') {
             const input = createTensor(payload.input.shape, payload.input.values)
             const weight = createTensor(payload.weight.shape, payload.weight.values)
-            const output = await runConv2dForward(input.values, input.shape, weight.values, weight.shape, payload.bias)
+            const output = payload.op === 'conv2d-relu-forward'
+              ? await runConv2dReluForward(input.values, input.shape, weight.values, weight.shape, payload.bias)
+              : await runConv2dForward(input.values, input.shape, weight.values, weight.shape, payload.bias)
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output) })
             return
           }
@@ -1164,3 +1218,23 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
     }
   }
 }
+const runConv2dReluForward = async (input: Float32Array, inputShape: readonly [number, number, number, number], weight: Float32Array, weightShape: readonly [number, number, number, number], bias: number[]): Promise<Float32Array> => {
+  const outChannels = weightShape[0]
+  const height = inputShape[2]
+  const width = inputShape[3]
+  const outputCount = outChannels * height * width
+  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
+  const weightBuffer: GPUBuffer = gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  const biasBuffer: GPUBuffer = gpuDevice.createBuffer({ size: new Float32Array(bias).byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST })
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST })
+  gpuDevice.queue.writeBuffer(weightBuffer, 0, weight)
+  gpuDevice.queue.writeBuffer(biasBuffer, 0, new Float32Array(bias))
+  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inputShape[1], outChannels, height, width]))
+  return runUnaryShader(makeConv2dReluShader(outputCount), input, outputCount, [
+    { binding: 1, resource: { buffer: weightBuffer } },
+    { binding: 2, resource: { buffer: biasBuffer } },
+    { binding: 3, resource: { buffer: uniformBuffer } },
+  ])
+}
+
+

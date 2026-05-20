@@ -34,7 +34,7 @@ type WorkerTensorClampOpRequest = {
 type WorkerTensorConv2dForwardOpRequest = {
   type: 'tensor-op'
   id: string
-  op: 'conv2d-forward'
+  op: 'conv2d-forward' | 'conv2d-relu-forward'
   input: WorkerTensor
   weight: WorkerTensor
   bias: number[]
@@ -139,6 +139,7 @@ type WorkerRunStyleTransferRequest = {
   type: 'run-style-transfer'
   id: string
   optimizer: 'sgd' | 'adam' | 'lbfgs'
+  fusedOps?: boolean
   adamBeta1?: number
   adamBeta2?: number
   adamEpsilon?: number
