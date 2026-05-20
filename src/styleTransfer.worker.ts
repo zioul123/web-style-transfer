@@ -607,9 +607,6 @@ const runReluBackward = async (input: Float32Array, gradOut: Float32Array): Prom
   return runUnaryShader(makeReluBackwardShader(input.length), input, input.length, [{ binding: 1, resource: { buffer: gradOutBuffer } }])
 }
 
-const runReluBackwardFromOutput = async (reluOutput: Float32Array, gradOut: Float32Array): Promise<Float32Array> =>
-  runReluBackward(reluOutput, gradOut)
-
 const runMaxPool2dBackward = async (input: Float32Array, shape: readonly [number, number, number, number], gradOut: Float32Array): Promise<Float32Array> => {
   if (shape[0] !== 1) throw new Error('maxpool2d-backward currently expects batch size 1.')
   const channels = shape[1]
@@ -681,7 +678,7 @@ const runNormalizeForward = async (input: Float32Array, shape: readonly [number,
   ])
 }
 
-const runConv2dForward = async (input: Float32Array, inputShape: readonly [number, number, number, number], weight: Float32Array, weightShape: readonly [number, number, number, number], bias: readonly number[]): Promise<Float32Array> => {
+const runConv2dForward = async (input: Float32Array, inputShape: readonly [number, number, number, number], weight: Float32Array, weightShape: readonly [number, number, number, number], bias: ArrayLike<number>): Promise<Float32Array> => {
   const [batch, inChannels, height, width] = inputShape
   const [outChannels, weightInChannels, kernelHeight, kernelWidth] = weightShape
   if (batch !== 1 || kernelHeight !== 3 || kernelWidth !== 3 || inChannels !== weightInChannels || bias.length !== outChannels) throw new Error('conv2d-forward only supports VGG-compatible params.')
@@ -810,14 +807,17 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
   const poolLayers: readonly number[] = [4, 9, 18, 27]
   const reluLayerSet = new Set(reluLayers)
   const poolLayerSet = new Set(poolLayers)
-  const convWeightCache: Record<number, { shape: [number, number, number, number]; values: Float32Array } | undefined> = {}
+  const convLayerCache: Record<number, { shape: [number, number, number, number]; values: Float32Array; bias: Float32Array } | undefined> = {}
   const fusedOps = payload.fusedOps ?? false
   const superFusedOps = payload.superFusedOps ?? false
   const superFusedBlocks: readonly (readonly number[])[] = [[0, 1], [2, 3], [5, 6, 7, 8], [10, 11, 12, 13], [14, 15, 16, 17], [19, 20, 21, 22], [23, 24, 25, 26], [28, 29]]
   for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
     const weightShapeRaw = payload.weights[`conv${layerIndex}.weightShape`]
     const weightValues = payload.weights[`conv${layerIndex}.weightValues`]
-    if (Array.isArray(weightShapeRaw) && Array.isArray(weightValues)) convWeightCache[layerIndex] = { shape: weightShapeRaw as [number, number, number, number], values: new Float32Array(weightValues) }
+    const biasValues = payload.weights[`conv${layerIndex}.biasValues`]
+    if (Array.isArray(weightShapeRaw) && Array.isArray(weightValues) && Array.isArray(biasValues)) {
+      convLayerCache[layerIndex] = { shape: weightShapeRaw as [number, number, number, number], values: new Float32Array(weightValues), bias: new Float32Array(biasValues) }
+    }
   }
 
   const contentNorm = await runNormalizeForward(new Float32Array(payload.contentImageValues), payload.inputShape, payload.mean, payload.std)
@@ -832,31 +832,31 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
     const layerInput: Record<number, Float32Array> = {}
     const layerInputShape: Record<number, readonly [number, number, number, number]> = {}
     if (superFusedOps) {
-      for (const block of superFusedBlocks) {
-        for (const layerIndex of block) {
+      const applyLayer = async (layerIndex: number): Promise<void> => {
           layerInput[layerIndex] = values
           layerInputShape[layerIndex] = shape
-          const convWeight = convWeightCache[layerIndex]
-          const biasValues = payload.weights[`conv${layerIndex}.biasValues`]
+          const convLayer = convLayerCache[layerIndex]
           const hasRelu = reluLayerSet.has(layerIndex)
-          if (convWeight !== undefined && Array.isArray(biasValues)) {
+          if (convLayer !== undefined) {
             convInShape[layerIndex] = shape
             if (fusedOps && hasRelu) {
-              values = await runConv2dReluForward(values, shape, convWeight.values, convWeight.shape, biasValues)
+              values = await runConv2dReluForward(values, shape, convLayer.values, convLayer.shape, convLayer.bias)
               reluOut[layerIndex] = values
-              reluShape[layerIndex] = [1, convWeight.shape[0], shape[2], shape[3]]
+              reluShape[layerIndex] = [1, convLayer.shape[0], shape[2], shape[3]]
             } else {
-              values = await runConv2dForward(values, shape, convWeight.values, convWeight.shape, biasValues)
+              values = await runConv2dForward(values, shape, convLayer.values, convLayer.shape, convLayer.bias)
             }
-            shape = [1, convWeight.shape[0], shape[2], shape[3]]
+            shape = [1, convLayer.shape[0], shape[2], shape[3]]
           }
-          if (hasRelu && !(fusedOps && convWeight !== undefined && Array.isArray(biasValues))) {
+          if (hasRelu && !(fusedOps && convLayer !== undefined)) {
             reluPre[layerIndex] = values
             values = await runReluForward(values)
             reluOut[layerIndex] = values
             reluShape[layerIndex] = shape
           }
-        }
+      }
+      for (const block of superFusedBlocks) {
+        for (const layerIndex of block) await applyLayer(layerIndex)
         const poolLayerIndex = block[block.length - 1] + 1
         if (poolLayerSet.has(poolLayerIndex)) {
           layerInput[poolLayerIndex] = values
@@ -869,21 +869,20 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
       for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
         layerInput[layerIndex] = values
         layerInputShape[layerIndex] = shape
-        const convWeight = convWeightCache[layerIndex]
-        const biasValues = payload.weights[`conv${layerIndex}.biasValues`]
+        const convLayer = convLayerCache[layerIndex]
         const hasRelu = reluLayerSet.has(layerIndex)
-        if (convWeight !== undefined && Array.isArray(biasValues)) {
+        if (convLayer !== undefined) {
           convInShape[layerIndex] = shape
           if (fusedOps && hasRelu) {
-            values = await runConv2dReluForward(values, shape, convWeight.values, convWeight.shape, biasValues)
+            values = await runConv2dReluForward(values, shape, convLayer.values, convLayer.shape, convLayer.bias)
             reluOut[layerIndex] = values
-            reluShape[layerIndex] = [1, convWeight.shape[0], shape[2], shape[3]]
+            reluShape[layerIndex] = [1, convLayer.shape[0], shape[2], shape[3]]
           } else {
-            values = await runConv2dForward(values, shape, convWeight.values, convWeight.shape, biasValues)
+            values = await runConv2dForward(values, shape, convLayer.values, convLayer.shape, convLayer.bias)
           }
-          shape = [1, convWeight.shape[0], shape[2], shape[3]]
+          shape = [1, convLayer.shape[0], shape[2], shape[3]]
         }
-        if (hasRelu && !(fusedOps && convWeight !== undefined && Array.isArray(biasValues))) {
+        if (hasRelu && !(fusedOps && convLayer !== undefined)) {
           reluPre[layerIndex] = values
           values = await runReluForward(values)
           reluOut[layerIndex] = values
@@ -1036,11 +1035,11 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
       if (reluLayerSet.has(layerIndex)) {
         const tapGrad = gradByReluLayer[layerIndex]
         if (tapGrad !== undefined) grad = grad === null ? tapGrad : await runBinaryOp('add', grad, tapGrad, 'tensorTensor')
-        if (grad !== null) grad = fusedOps ? await runReluBackwardFromOutput(run.reluOut[layerIndex], grad) : await runReluBackward(run.reluPre[layerIndex], grad)
+        if (grad !== null) grad = fusedOps ? await runReluBackward(run.reluOut[layerIndex], grad) : await runReluBackward(run.reluPre[layerIndex], grad)
       }
-      const convWeight = convWeightCache[layerIndex]
-      if (convWeight !== undefined && grad !== null) {
-        grad = await runConv2dBackwardInput(run.convInShape[layerIndex], grad, convWeight.values, convWeight.shape)
+      const convLayer = convLayerCache[layerIndex]
+      if (convLayer !== undefined && grad !== null) {
+        grad = await runConv2dBackwardInput(run.convInShape[layerIndex], grad, convLayer.values, convLayer.shape)
       }
     }
     if (grad === null) throw new Error('No gradient path reached the input image.')
@@ -1260,7 +1259,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
     }
   }
 }
-const runConv2dReluForward = async (input: Float32Array, inputShape: readonly [number, number, number, number], weight: Float32Array, weightShape: readonly [number, number, number, number], bias: number[]): Promise<Float32Array> => {
+const runConv2dReluForward = async (input: Float32Array, inputShape: readonly [number, number, number, number], weight: Float32Array, weightShape: readonly [number, number, number, number], bias: ArrayLike<number>): Promise<Float32Array> => {
   const outChannels = weightShape[0]
   const height = inputShape[2]
   const width = inputShape[3]
@@ -1278,5 +1277,4 @@ const runConv2dReluForward = async (input: Float32Array, inputShape: readonly [n
     { binding: 3, resource: { buffer: uniformBuffer } },
   ])
 }
-
 
