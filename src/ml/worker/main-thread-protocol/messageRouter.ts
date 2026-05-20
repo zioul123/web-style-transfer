@@ -18,7 +18,10 @@ import { acquireReusableBuffer, releaseReusableBuffer } from "../runtime/bufferP
 import { BUFFER_USAGE_MAP_READ_COPY_DST, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_UNIFORM_COPY_DST, MAP_MODE_READ } from "../runtime/gpuFlags";
 import { getTensorFromOperand, getValuesFromOperand, isBinaryTensorOpPayload } from "../runtime/operands";
 import { runBinaryOp, runClamp, runScalarBinaryOp } from "../runtime/shaderRunner";
-import { gpuDevice, initWebGpu, postResponse, runFirstPoolOptimizer, runStyleTransfer, runUnary } from "../legacyWorker";
+import { runFirstPoolOptimizer, runStyleTransfer, runUnary } from "../legacyWorker";
+import { getGpuDevice } from "../runtime/deviceState";
+import { initWebGpu } from "./initWebGpu";
+import { postResponse, sendErrorResponse, sendRunFirstPoolOptimizerResult, sendRunStyleTransferResult, sendTensorOpError, sendTensorOpResult } from "./responses";
 
 export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => {
 
@@ -64,23 +67,9 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
       void (async (): Promise<void> => {
         try {
           const result = await runFirstPoolOptimizer(payload);
-          postResponse({
-            type: "run-first-pool-optimizer-result",
-            id: payload.id,
-            ok: true,
-            losses: result.losses,
-            finalValues: result.finalValues,
-          });
+          sendRunFirstPoolOptimizerResult(payload.id, { ok: true, losses: result.losses, finalValues: result.finalValues });
         } catch (error: unknown) {
-          postResponse({
-            type: "run-first-pool-optimizer-result",
-            id: payload.id,
-            ok: false,
-            message:
-              error instanceof Error
-                ? error.message
-                : "First-pool optimizer failed.",
-          });
+          sendRunFirstPoolOptimizerResult(payload.id, { ok: false, message: error instanceof Error ? error.message : "First-pool optimizer failed." });
         }
       })();
       break;
@@ -89,24 +78,9 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
       void (async (): Promise<void> => {
         try {
           const result = await runStyleTransfer(payload);
-          postResponse({
-            type: "run-style-transfer-result",
-            id: payload.id,
-            ok: true,
-            losses: result.losses,
-            finalValues: result.finalValues,
-            stats: result.stats,
-          });
+          sendRunStyleTransferResult(payload.id, { ok: true, losses: result.losses, finalValues: result.finalValues, stats: result.stats });
         } catch (error: unknown) {
-          postResponse({
-            type: "run-style-transfer-result",
-            id: payload.id,
-            ok: false,
-            message:
-              error instanceof Error
-                ? error.message
-                : "Style transfer run failed.",
-          });
+          sendRunStyleTransferResult(payload.id, { ok: false, message: error instanceof Error ? error.message : "Style transfer run failed." });
         }
       })();
       break;
@@ -129,7 +103,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
             const output =
               payload.op === "conv2d-relu-forward"
                 ? await runConv2dReluForward(
-                    gpuDevice,
+                    getGpuDevice(),
                     runUnary,
                     input.values,
                     input.shape,
@@ -140,7 +114,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
                     BUFFER_USAGE_UNIFORM_COPY_DST,
                   )
                 : await runConv2dForward(
-                    gpuDevice,
+                    getGpuDevice(),
                     runUnary,
                     input.values,
                     input.shape,
@@ -178,7 +152,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
               payload.input.values,
             );
             const output = await runMaxPool2dForward(
-              gpuDevice,
+              getGpuDevice(),
               runUnary,
               input.values,
               input.shape,
@@ -198,7 +172,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
               payload.input.values,
             );
             const output = await runNormalizeForward(
-              gpuDevice,
+              getGpuDevice(),
               runUnary,
               input.values,
               input.shape,
@@ -234,7 +208,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
               payload.input.values,
             );
             const output = await runGramMatrix(
-              gpuDevice,
+              getGpuDevice(),
               runUnary,
               input.values,
               input.shape,
@@ -261,16 +235,11 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
               (value, index) => value === target.shape[index],
             );
             if (!sameShape) {
-              postResponse({
-                type: "tensor-op-result",
-                id: payload.id,
-                ok: true,
-                scalar: 0,
-              });
+              sendTensorOpResult(payload.id, { scalar: 0 });
               return;
             }
             const mse = await runMse(
-              gpuDevice,
+              getGpuDevice(),
               acquireReusableBuffer,
               releaseReusableBuffer,
               input.values,
@@ -299,7 +268,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
               payload.gradOut.values,
             );
             const gradIn = await runReluBackward(
-              gpuDevice,
+              getGpuDevice(),
               runUnary,
               input.values,
               gradOut.values,
@@ -322,7 +291,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
               payload.gradOut.values,
             );
             const gradIn = await runMaxPool2dBackward(
-              gpuDevice,
+              getGpuDevice(),
               runUnary,
               input.values,
               input.shape,
@@ -344,7 +313,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
               payload.gradOut.values,
             );
             const gradIn = await runNormalizeBackward(
-              gpuDevice,
+              getGpuDevice(),
               runUnary,
               gradOut.values,
               gradOut.shape,
@@ -370,7 +339,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
               payload.weight.values,
             );
             const gradIn = await runConv2dBackwardInput(
-              gpuDevice,
+              getGpuDevice(),
               runUnary,
               payload.inputShape,
               gradOut.values,
@@ -397,7 +366,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
               payload.target.values,
             );
             const gradIn = await runContentLossBackward(
-              gpuDevice,
+              getGpuDevice(),
               runUnary,
               input.values,
               target.values,
@@ -408,7 +377,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
               contentWeight === 1
                 ? gradIn
                 : await runScalarBinaryOp(
-                    gpuDevice,
+                    getGpuDevice(),
                     "mul",
                     gradIn,
                     contentWeight,
@@ -432,7 +401,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
               payload.gradOut.values,
             );
             const gradIn = await runGramBackward(
-              gpuDevice,
+              getGpuDevice(),
               runUnary,
               input.values,
               input.shape,
@@ -458,7 +427,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
               payload.target.values,
             );
             const gradIn = await runStyleLossBackward(
-              gpuDevice,
+              getGpuDevice(),
               runUnary,
               input.values,
               input.shape,
@@ -471,7 +440,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
               styleWeight === 1
                 ? gradIn
                 : await runScalarBinaryOp(
-                    gpuDevice,
+                    getGpuDevice(),
                     "mul",
                     gradIn,
                     styleWeight,
@@ -495,21 +464,21 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
               payload.target.values,
             );
             const inputGram = await runGramMatrix(
-              gpuDevice,
+              getGpuDevice(),
               runUnary,
               input.values,
               input.shape,
               BUFFER_USAGE_UNIFORM_COPY_DST,
             );
             const targetGram = await runGramMatrix(
-              gpuDevice,
+              getGpuDevice(),
               runUnary,
               target.values,
               target.shape,
               BUFFER_USAGE_UNIFORM_COPY_DST,
             );
             const mse = await runMse(
-              gpuDevice,
+              getGpuDevice(),
               acquireReusableBuffer,
               releaseReusableBuffer,
               inputGram,
@@ -536,7 +505,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
             if (!bOperand.ok)
               throw new Error("MSE requires both operands to be tensors.");
             const mse = await runMse(
-              gpuDevice,
+              getGpuDevice(),
               acquireReusableBuffer,
               releaseReusableBuffer,
               aOperand.values,
@@ -556,7 +525,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
           }
           if (payload.op === "clamp") {
             const v = await runClamp(
-              gpuDevice,
+              getGpuDevice(),
               getValuesFromOperand(payload.a),
               payload.clampMin,
               payload.clampMax,
@@ -580,7 +549,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
           let v: Float32Array;
           if (payload.a.kind === "tensor" && payload.b.kind === "tensor") {
             v = await runBinaryOp(
-              gpuDevice,
+              getGpuDevice(),
               payload.op,
               createTensor(payload.a.tensor.shape, payload.a.tensor.values)
                 .values,
@@ -593,7 +562,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
             payload.b.kind === "scalar"
           ) {
             v = await runScalarBinaryOp(
-              gpuDevice,
+              getGpuDevice(),
               payload.op,
               createTensor(payload.a.tensor.shape, payload.a.tensor.values)
                 .values,
@@ -605,7 +574,7 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
             payload.b.kind === "tensor"
           ) {
             v = await runScalarBinaryOp(
-              gpuDevice,
+              getGpuDevice(),
               payload.op,
               createTensor(payload.b.tensor.shape, payload.b.tensor.values)
                 .values,

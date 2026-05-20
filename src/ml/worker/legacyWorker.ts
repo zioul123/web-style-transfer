@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import type { WorkerRequest, WorkerResponse } from "../../types";
+import type { WorkerRequest } from "../../types";
 import { createTensor } from "../index";
 import { makeConv2dReluShader } from "./ops/convolution/conv2d.shader";
 import { runReluForward, runReluBackward } from "./ops/relu/relu.run";
@@ -27,7 +27,6 @@ import {
 import {
   acquireReusableBuffer,
   releaseReusableBuffer,
-  reusableBufferPool,
 } from "./runtime/bufferPool";
 import {
   BUFFER_USAGE_MAP_READ_COPY_DST,
@@ -47,41 +46,8 @@ import {
   runScalarBinaryOp,
   runUnaryShader,
 } from "./runtime/shaderRunner";
-
-export let gpuDevice: GPUDevice | null = null;
-export const postResponse = (response: WorkerResponse): void => {
-  self.postMessage(response);
-};
-
-export const initWebGpu = async (id: string): Promise<void> => {
-  if (!("gpu" in navigator)) {
-    postResponse({
-      type: "webgpu-init-result",
-      id,
-      ok: false,
-      message: "navigator.gpu is unavailable in this worker context.",
-    });
-    return;
-  }
-  const adapter: GPUAdapter | null = await navigator.gpu.requestAdapter();
-  if (adapter === null) {
-    postResponse({
-      type: "webgpu-init-result",
-      id,
-      ok: false,
-      message: "WebGPU adapter request returned null.",
-    });
-    return;
-  }
-  gpuDevice = await adapter.requestDevice();
-  reusableBufferPool.clear();
-  postResponse({
-    type: "webgpu-init-result",
-    id,
-    ok: true,
-    message: `WebGPU device initialized: ${gpuDevice.label || "unnamed-device"}`,
-  });
-};
+import { getGpuDevice } from "./runtime/deviceState";
+import { postResponse } from "./main-thread-protocol/responses";
 
 export const runUnary = (
   code: string,
@@ -89,7 +55,7 @@ export const runUnary = (
   outCount: number,
   extraEntries: GPUBindGroupEntry[] = [],
 ): Promise<Float32Array> =>
-  runUnaryShader(gpuDevice, code, input, outCount, extraEntries);
+  runUnaryShader(getGpuDevice(), code, input, outCount, extraEntries);
 
 export const runFirstPoolOptimizer = async (
   payload: Extract<WorkerRequest, { type: "run-first-pool-optimizer" }>,
@@ -102,7 +68,7 @@ export const runFirstPoolOptimizer = async (
     bias: number[],
   ): Promise<Float32Array> =>
     await runConv2dForward(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       inputValues,
       inputShape,
@@ -127,7 +93,7 @@ export const runFirstPoolOptimizer = async (
   );
 
   const contentNorm = await runNormalizeForward(
-    gpuDevice,
+    getGpuDevice(),
     runUnary,
     new Float32Array(payload.contentImageValues),
     payload.inputShape,
@@ -137,7 +103,7 @@ export const runFirstPoolOptimizer = async (
     BUFFER_USAGE_UNIFORM_COPY_DST,
   );
   const styleNorm = await runNormalizeForward(
-    gpuDevice,
+    getGpuDevice(),
     runUnary,
     new Float32Array(payload.styleImageValues),
     payload.inputShape,
@@ -164,7 +130,7 @@ export const runFirstPoolOptimizer = async (
   );
   const styleRelu2 = await runReluForward(runUnary, styleConv2);
   const stylePool = await runMaxPool2dForward(
-    gpuDevice,
+    getGpuDevice(),
     runUnary,
     styleRelu2,
     [1, 64, 16, 16],
@@ -200,7 +166,7 @@ export const runFirstPoolOptimizer = async (
   const losses: number[] = [];
   for (let step = 0; step < payload.steps; step += 1) {
     const norm = await runNormalizeForward(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       inputValues,
       payload.inputShape,
@@ -226,7 +192,7 @@ export const runFirstPoolOptimizer = async (
     );
     const relu2 = await runReluForward(runUnary, conv2);
     const pool = await runMaxPool2dForward(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       relu2,
       [1, 64, 16, 16],
@@ -243,18 +209,18 @@ export const runFirstPoolOptimizer = async (
 
     const styleLoss1 =
       (await runMse(
-        gpuDevice,
+        getGpuDevice(),
         acquireReusableBuffer,
         releaseReusableBuffer,
         await runGramMatrix(
-          gpuDevice,
+          getGpuDevice(),
           runUnary,
           relu1,
           [1, 64, 16, 16],
           BUFFER_USAGE_UNIFORM_COPY_DST,
         ),
         await runGramMatrix(
-          gpuDevice,
+          getGpuDevice(),
           runUnary,
           styleRelu1,
           [1, 64, 16, 16],
@@ -267,18 +233,18 @@ export const runFirstPoolOptimizer = async (
       )) * payload.styleWeightConv1;
     const styleLoss3 =
       (await runMse(
-        gpuDevice,
+        getGpuDevice(),
         acquireReusableBuffer,
         releaseReusableBuffer,
         await runGramMatrix(
-          gpuDevice,
+          getGpuDevice(),
           runUnary,
           relu3,
           [1, 128, 8, 8],
           BUFFER_USAGE_UNIFORM_COPY_DST,
         ),
         await runGramMatrix(
-          gpuDevice,
+          getGpuDevice(),
           runUnary,
           styleRelu3,
           [1, 128, 8, 8],
@@ -291,7 +257,7 @@ export const runFirstPoolOptimizer = async (
       )) * payload.styleWeightConv3;
     const contentLoss =
       (await runMse(
-        gpuDevice,
+        getGpuDevice(),
         acquireReusableBuffer,
         releaseReusableBuffer,
         relu2,
@@ -304,10 +270,10 @@ export const runFirstPoolOptimizer = async (
     losses.push(styleLoss1 + styleLoss3 + contentLoss);
 
     const gStyle1Relu = await runScalarBinaryOp(
-      gpuDevice,
+      getGpuDevice(),
       "mul",
       await runStyleLossBackward(
-        gpuDevice,
+        getGpuDevice(),
         runUnary,
         relu1,
         [1, 64, 16, 16],
@@ -319,10 +285,10 @@ export const runFirstPoolOptimizer = async (
       false,
     );
     const gStyle3Relu = await runScalarBinaryOp(
-      gpuDevice,
+      getGpuDevice(),
       "mul",
       await runStyleLossBackward(
-        gpuDevice,
+        getGpuDevice(),
         runUnary,
         relu3,
         [1, 128, 8, 8],
@@ -334,10 +300,10 @@ export const runFirstPoolOptimizer = async (
       false,
     );
     const gContentRelu = await runScalarBinaryOp(
-      gpuDevice,
+      getGpuDevice(),
       "mul",
       await runContentLossBackward(
-        gpuDevice,
+        getGpuDevice(),
         runUnary,
         relu2,
         contentRelu2,
@@ -347,26 +313,26 @@ export const runFirstPoolOptimizer = async (
       false,
     );
     const gStyle3 = await runReluBackward(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       conv3,
       gStyle3Relu,
     );
     const gContent = await runReluBackward(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       conv2,
       gContentRelu,
     );
     const gStyle1 = await runReluBackward(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       conv1,
       gStyle1Relu,
     );
 
     const gPool = await runConv2dBackwardInput(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       [1, 64, 8, 8],
       gStyle3,
@@ -376,7 +342,7 @@ export const runFirstPoolOptimizer = async (
       BUFFER_USAGE_UNIFORM_COPY_DST,
     );
     const gRelu2 = await runMaxPool2dBackward(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       relu2,
       [1, 64, 16, 16],
@@ -385,20 +351,20 @@ export const runFirstPoolOptimizer = async (
       BUFFER_USAGE_UNIFORM_COPY_DST,
     );
     const gConv2FromPool = await runReluBackward(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       conv2,
       gRelu2,
     );
     const gConv2Total = await runBinaryOp(
-      gpuDevice,
+      getGpuDevice(),
       "add",
       gConv2FromPool,
       gContent,
       "tensorTensor",
     );
     const gRelu1 = await runConv2dBackwardInput(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       [1, 64, 16, 16],
       gConv2Total,
@@ -408,20 +374,20 @@ export const runFirstPoolOptimizer = async (
       BUFFER_USAGE_UNIFORM_COPY_DST,
     );
     const gConv1FromConv2 = await runReluBackward(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       conv1,
       gRelu1,
     );
     const gConv1Total = await runBinaryOp(
-      gpuDevice,
+      getGpuDevice(),
       "add",
       gConv1FromConv2,
       gStyle1,
       "tensorTensor",
     );
     const gNorm = await runConv2dBackwardInput(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       payload.inputShape,
       gConv1Total,
@@ -431,7 +397,7 @@ export const runFirstPoolOptimizer = async (
       BUFFER_USAGE_UNIFORM_COPY_DST,
     );
     const gInput = await runNormalizeBackward(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       gNorm,
       payload.inputShape,
@@ -509,7 +475,7 @@ export const runStyleTransfer = async (
   }
 
   const contentNorm = await runNormalizeForward(
-    gpuDevice,
+    getGpuDevice(),
     runUnary,
     new Float32Array(payload.contentImageValues),
     payload.inputShape,
@@ -519,7 +485,7 @@ export const runStyleTransfer = async (
     BUFFER_USAGE_UNIFORM_COPY_DST,
   );
   const styleNorm = await runNormalizeForward(
-    gpuDevice,
+    getGpuDevice(),
     runUnary,
     new Float32Array(payload.styleImageValues),
     payload.inputShape,
@@ -620,7 +586,7 @@ export const runStyleTransfer = async (
             const hasRelu = reluLayerSet.has(layerIndex);
             if (convLayer !== undefined) {
               values = await runConv2dForward(
-                gpuDevice,
+                getGpuDevice(),
                 runUnary,
                 values,
                 shape,
@@ -645,7 +611,7 @@ export const runStyleTransfer = async (
           layerInput[poolLayerIndex] = values;
           layerInputShape[poolLayerIndex] = shape;
           values = await runMaxPool2dForward(
-            gpuDevice,
+            getGpuDevice(),
             runUnary,
             values,
             shape,
@@ -669,7 +635,7 @@ export const runStyleTransfer = async (
           convInShape[layerIndex] = shape;
           if (fusedOps && hasRelu) {
             values = await runConv2dReluForward(
-              gpuDevice,
+              getGpuDevice(),
               runUnary,
               values,
               shape,
@@ -683,7 +649,7 @@ export const runStyleTransfer = async (
             reluShape[layerIndex] = [1, convLayer.shape[0], shape[2], shape[3]];
           } else {
             values = await runConv2dForward(
-              gpuDevice,
+              getGpuDevice(),
               runUnary,
               values,
               shape,
@@ -704,7 +670,7 @@ export const runStyleTransfer = async (
         }
         if (poolLayerSet.has(layerIndex)) {
           values = await runMaxPool2dForward(
-            gpuDevice,
+            getGpuDevice(),
             runUnary,
             values,
             shape,
@@ -741,7 +707,7 @@ export const runStyleTransfer = async (
         `Missing precomputed style activation for ReLU layer index ${reluLayerIndex}.`,
       );
     styleGramTargets[reluLayerIndex] = await runGramMatrix(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       styleRelu,
       styleShape,
@@ -842,7 +808,7 @@ export const runStyleTransfer = async (
     }
     const clampStart = performance.now();
     const clamped = new Float32Array(
-      await runClamp(gpuDevice, nextValues, 0, 1),
+      await runClamp(getGpuDevice(), nextValues, 0, 1),
     );
     clampMs += performance.now() - clampStart;
     previousInput = new Float32Array(inputValues);
@@ -853,7 +819,7 @@ export const runStyleTransfer = async (
   for (let step = 0; step < payload.steps; step += 1) {
     const forwardStart = performance.now();
     const norm = await runNormalizeForward(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       inputValues,
       payload.inputShape,
@@ -883,11 +849,11 @@ export const runStyleTransfer = async (
           `Missing precomputed style gram target for ReLU layer index ${reluLayerIndex}.`,
         );
       totalStyle += await runMse(
-        gpuDevice,
+        getGpuDevice(),
         acquireReusableBuffer,
         releaseReusableBuffer,
         await runGramMatrix(
-          gpuDevice,
+          getGpuDevice(),
           runUnary,
           inputRelu,
           reluShape,
@@ -907,7 +873,7 @@ export const runStyleTransfer = async (
         `Missing ReLU activation for content layer index ${payload.contentLayerIndex}.`,
       );
     const contentLoss = await runMse(
-      gpuDevice,
+      getGpuDevice(),
       acquireReusableBuffer,
       releaseReusableBuffer,
       contentRelu,
@@ -939,7 +905,7 @@ export const runStyleTransfer = async (
           `Missing precomputed style gram gradient target for ReLU layer index ${reluLayerIndex}.`,
         );
       const styleGrad = await runStyleLossBackwardFromTargetGram(
-        gpuDevice,
+        getGpuDevice(),
         runUnary,
         inputRelu,
         reluShape,
@@ -951,7 +917,7 @@ export const runStyleTransfer = async (
         payload.styleWeight === 1
           ? styleGrad
           : await runScalarBinaryOp(
-              gpuDevice,
+              getGpuDevice(),
               "mul",
               styleGrad,
               payload.styleWeight,
@@ -961,7 +927,7 @@ export const runStyleTransfer = async (
         gradByReluLayer[reluLayerIndex] === undefined
           ? weightedStyleGrad
           : await runBinaryOp(
-              gpuDevice,
+              getGpuDevice(),
               "add",
               gradByReluLayer[reluLayerIndex],
               weightedStyleGrad,
@@ -969,7 +935,7 @@ export const runStyleTransfer = async (
             );
     }
     const contentGrad = await runContentLossBackward(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       contentRelu,
       contentTargetRelu,
@@ -979,7 +945,7 @@ export const runStyleTransfer = async (
       payload.contentWeight === 1
         ? contentGrad
         : await runScalarBinaryOp(
-            gpuDevice,
+            getGpuDevice(),
             "mul",
             contentGrad,
             payload.contentWeight,
@@ -989,7 +955,7 @@ export const runStyleTransfer = async (
       gradByReluLayer[payload.contentLayerIndex] === undefined
         ? weightedContentGrad
         : await runBinaryOp(
-            gpuDevice,
+            getGpuDevice(),
             "add",
             gradByReluLayer[payload.contentLayerIndex],
             weightedContentGrad,
@@ -1002,7 +968,7 @@ export const runStyleTransfer = async (
       if (poolLayerSet.has(layerIndex)) {
         if (grad !== null)
           grad = await runMaxPool2dBackward(
-            gpuDevice,
+            getGpuDevice(),
             runUnary,
             run.layerInput[layerIndex],
             run.layerInputShape[layerIndex],
@@ -1018,7 +984,7 @@ export const runStyleTransfer = async (
             grad === null
               ? tapGrad
               : await runBinaryOp(
-                  gpuDevice,
+                  getGpuDevice(),
                   "add",
                   grad,
                   tapGrad,
@@ -1027,13 +993,13 @@ export const runStyleTransfer = async (
         if (grad !== null)
           grad = fusedOps
             ? await runReluBackward(
-                gpuDevice,
+                getGpuDevice(),
                 runUnary,
                 run.reluOut[layerIndex],
                 grad,
               )
             : await runReluBackward(
-                gpuDevice,
+                getGpuDevice(),
                 runUnary,
                 run.reluPre[layerIndex],
                 grad,
@@ -1042,7 +1008,7 @@ export const runStyleTransfer = async (
       const convLayer = convLayerCache[layerIndex];
       if (convLayer !== undefined && grad !== null) {
         grad = await runConv2dBackwardInput(
-          gpuDevice,
+          getGpuDevice(),
           runUnary,
           run.convInShape[layerIndex],
           grad,
@@ -1056,7 +1022,7 @@ export const runStyleTransfer = async (
     if (grad === null)
       throw new Error("No gradient path reached the input image.");
     const gInput = await runNormalizeBackward(
-      gpuDevice,
+      getGpuDevice(),
       runUnary,
       grad,
       payload.inputShape,
@@ -1122,8 +1088,8 @@ const runSuperFusedConvReluBlock = async (
   reluOutByLayer: Record<number, Float32Array>;
   finalShape: readonly [number, number, number, number];
 }> => {
-  if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
-  const device = gpuDevice;
+  if (getGpuDevice() === null) throw new Error("WebGPU is not initialized.");
+  const device = getGpuDevice();
   const reluOutByLayer: Record<number, Float32Array> = {};
   let shape: readonly [number, number, number, number] = inputShape;
   let currentCount = input.length;
