@@ -140,6 +140,7 @@ type WorkerRunStyleTransferRequest = {
   id: string
   optimizer: 'sgd' | 'adam' | 'lbfgs'
   fusedOps?: boolean
+  superFusedOps?: boolean
   adamBeta1?: number
   adamBeta2?: number
   adamEpsilon?: number

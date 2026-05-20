@@ -115,3 +115,42 @@ test('phase 5 fused conv+relu op matches separate ops', async ({ page }) => {
   if (!result.ok) throw new Error(result.reason)
   expect(result.maxDiff).toBeLessThan(1e-4)
 })
+
+
+test('phase 5 super fused forward path matches baseline for single step', async ({ page }) => {
+  test.setTimeout(300000)
+  await page.goto('/')
+  const result = await page.evaluate(async () => {
+    const loadJson = async <T>(url: string): Promise<T | null> => {
+      const response = await fetch(url)
+      if (!response.ok) return null
+      const text = await response.text()
+      try { return JSON.parse(text) as T } catch (_error) { return null }
+    }
+    const weights = await loadJson<Record<string, number[] | [number, number, number, number]>>('/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json')
+    const fixture = await loadJson<any>('/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json')
+    if (weights === null || fixture === null) return { ok: false as const, reason: 'missing-fixtures' as const }
+    const worker = new Worker(new URL('/src/styleTransfer.worker.ts', window.location.origin), { type: 'module' })
+    const ask = (payload: WorkerRequest): Promise<WorkerResponse> => new Promise((resolve) => {
+      const handler = (event: MessageEvent<WorkerResponse>): void => {
+        if (event.data.id === payload.id) { worker.removeEventListener('message', handler); resolve(event.data) }
+      }
+      worker.addEventListener('message', handler)
+      worker.postMessage(payload)
+    })
+    await ask({ type: 'init-webgpu', id: 'phase5-super-init' })
+    const common = { type: 'run-style-transfer' as const, inputShape: fixture.inputShape, inputImageValues: fixture.inputImageValues, contentImageValues: fixture.contentImageValues, styleImageValues: fixture.styleImageValues, mean: fixture.mean, std: fixture.std, styleLayerIndices: fixture.styleLayerIndices, contentLayerIndex: fixture.contentLayerIndex, weights, contentWeight: 1, styleWeight: 1, learningRate: 1e-5, steps: 1, optimizer: 'sgd' as const }
+    const base = await ask({ ...common, id: 'phase5-super-base', fusedOps: false, superFusedOps: false })
+    const superFused = await ask({ ...common, id: 'phase5-super-fused', fusedOps: true, superFusedOps: true })
+    worker.terminate()
+    if (base.type !== 'run-style-transfer-result' || !base.ok) return { ok: false as const, reason: 'base-failed' as const }
+    if (superFused.type !== 'run-style-transfer-result' || !superFused.ok) return { ok: false as const, reason: 'super-failed' as const }
+    let maxDiff = 0
+    for (let i = 0; i < base.finalValues.length; i += 1) maxDiff = Math.max(maxDiff, Math.abs(base.finalValues[i] - superFused.finalValues[i]))
+    return { ok: true as const, maxDiff }
+  })
+  test.skip(!result.ok && result.reason === 'missing-fixtures', 'Missing phase3 full-pass fixtures.')
+  if (!result.ok && result.reason !== 'missing-fixtures') throw new Error(result.reason)
+  if (!result.ok) return
+  expect(result.maxDiff).toBeLessThan(2e-3)
+})
