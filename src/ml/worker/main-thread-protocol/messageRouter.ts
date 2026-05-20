@@ -18,10 +18,11 @@ import { acquireReusableBuffer, releaseReusableBuffer } from "../runtime/bufferP
 import { BUFFER_USAGE_MAP_READ_COPY_DST, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_UNIFORM_COPY_DST, MAP_MODE_READ } from "../runtime/gpuFlags";
 import { getTensorFromOperand, getValuesFromOperand, isBinaryTensorOpPayload } from "../runtime/operands";
 import { runBinaryOp, runClamp, runScalarBinaryOp } from "../runtime/shaderRunner";
-import { runFirstPoolOptimizer, runStyleTransfer, runUnary } from "../legacyWorker";
+import { runFirstPoolOptimizer, runUnary } from "../pipelines/optimization/firstPoolOptimizer";
+import { runStyleTransfer } from "../pipelines/optimization/styleTransferPipeline";
 import { getGpuDevice } from "../runtime/deviceState";
 import { initWebGpu } from "./initWebGpu";
-import { postResponse, sendErrorResponse, sendRunFirstPoolOptimizerResult, sendRunStyleTransferResult, sendTensorOpError, sendTensorOpResult } from "./responses";
+import { postResponse, sendRunFirstPoolOptimizerResult, sendRunStyleTransferResult, sendTensorOpResult } from "./responses";
 
 export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => {
 
