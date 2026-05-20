@@ -13,6 +13,10 @@ import { runReluForward, runReluBackward } from './ops/relu/relu.run'
 import { runNormalizeForward } from './ops/normalization/normalize.run'
 import { runMaxPool2dForward } from './ops/pooling/maxpool.run'
 import { runConv2dForward, runConv2dReluForward } from './ops/convolution/conv2d.run'
+import { runGramMatrix, runGramBackward } from './ops/gram/gram.run'
+import { runMse } from './ops/loss/mse.run'
+import { runContentLossBackward } from './ops/loss/contentLoss.run'
+import { runStyleLossBackward, runStyleLossBackwardFromTargetGram } from './ops/loss/styleLoss.run'
 
 let gpuDevice: GPUDevice | null = null
 const reusableBufferPool: Map<string, GPUBuffer[]> = new Map()
@@ -168,83 +172,6 @@ const runClamp = async (a: Float32Array, min: number, max: number): Promise<Floa
   return arr
 }
 
-const runMse = async (a: Float32Array, b: Float32Array): Promise<number> => {
-  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
-  const device: GPUDevice = gpuDevice
-  const count: number = a.length
-  const bytes: number = count * 4
-
-  const aBuffer: GPUBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_STORAGE_COPY_DST)
-  const bBuffer: GPUBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_STORAGE_COPY_DST)
-  let currentBuffer: GPUBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_STORAGE_COPY_SRC)
-  let currentBytes: number = bytes
-
-  device.queue.writeBuffer(aBuffer, 0, a)
-  device.queue.writeBuffer(bBuffer, 0, b)
-
-  const diffPipeline: GPUComputePipeline = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: makeMseDiffShader(count) }), entryPoint: 'main' } })
-  const diffBindGroup: GPUBindGroup = device.createBindGroup({
-    layout: diffPipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: aBuffer } },
-      { binding: 1, resource: { buffer: bBuffer } },
-      { binding: 2, resource: { buffer: currentBuffer } },
-    ],
-  })
-
-  {
-    const encoder: GPUCommandEncoder = device.createCommandEncoder()
-    const pass: GPUComputePassEncoder = encoder.beginComputePass()
-    pass.setPipeline(diffPipeline)
-    pass.setBindGroup(0, diffBindGroup)
-    pass.dispatchWorkgroups(Math.ceil(count / 64))
-    pass.end()
-    device.queue.submit([encoder.finish()])
-  }
-
-  let currentCount: number = count
-  // Repeatedly reduce the squared-error buffer by summing each 64-value chunk into one output value.
-  // After each pass, `currentBuffer` holds a smaller partial-sum vector and `currentCount` shrinks to
-  // `ceil(previousCount / 64)`. When `currentCount` reaches 1, the single value is the total SSE.
-  while (currentCount > 1) {
-    const nextCount: number = Math.ceil(currentCount / 64)
-    const nextBytes: number = nextCount * 4
-    const nextBuffer: GPUBuffer = acquireReusableBuffer(device, nextBytes, BUFFER_USAGE_STORAGE_COPY_SRC)
-    const reducePipeline: GPUComputePipeline = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: makeReduceSumShader(currentCount) }), entryPoint: 'main' } })
-    const reduceBindGroup: GPUBindGroup = device.createBindGroup({
-      layout: reducePipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: currentBuffer } },
-        { binding: 1, resource: { buffer: nextBuffer } },
-      ],
-    })
-    const encoder: GPUCommandEncoder = device.createCommandEncoder()
-    const pass: GPUComputePassEncoder = encoder.beginComputePass()
-    pass.setPipeline(reducePipeline)
-    pass.setBindGroup(0, reduceBindGroup)
-    pass.dispatchWorkgroups(nextCount)
-    pass.end()
-    device.queue.submit([encoder.finish()])
-    releaseReusableBuffer(currentBytes, BUFFER_USAGE_STORAGE_COPY_SRC, currentBuffer)
-    currentBuffer = nextBuffer
-    currentBytes = nextBytes
-    currentCount = nextCount
-  }
-
-  const readBuffer: GPUBuffer = acquireReusableBuffer(device, 4, BUFFER_USAGE_MAP_READ_COPY_DST)
-  const encoder: GPUCommandEncoder = device.createCommandEncoder()
-  encoder.copyBufferToBuffer(currentBuffer, 0, readBuffer, 0, 4)
-  device.queue.submit([encoder.finish()])
-  await readBuffer.mapAsync(MAP_MODE_READ)
-  const sumSquaredError: number = new Float32Array(readBuffer.getMappedRange().slice(0))[0]
-  readBuffer.unmap()
-  releaseReusableBuffer(bytes, BUFFER_USAGE_STORAGE_COPY_DST, aBuffer)
-  releaseReusableBuffer(bytes, BUFFER_USAGE_STORAGE_COPY_DST, bBuffer)
-  releaseReusableBuffer(currentBytes, BUFFER_USAGE_STORAGE_COPY_SRC, currentBuffer)
-  releaseReusableBuffer(4, BUFFER_USAGE_MAP_READ_COPY_DST, readBuffer)
-  return sumSquaredError / count
-}
-
 const runUnaryShader = async (code: string, input: Float32Array, outCount: number, extraEntries: GPUBindGroupEntry[] = []): Promise<Float32Array> => {
   if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
   const device: GPUDevice = gpuDevice
@@ -314,117 +241,6 @@ const runConv2dBackwardInput = async (inputShape: readonly [number, number, numb
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]))
   return runUnaryShader(makeConv2dBackwardInputShader(outCount), gradOut, outCount, [{ binding: 1, resource: { buffer: weightBuffer } }, { binding: 2, resource: { buffer: uniformBuffer } }])
 }
-const runGramMatrix = async (input: Float32Array, shape: readonly [number, number, number, number]): Promise<Float32Array> => {
-  if (shape[0] !== 1) throw new Error('gram-matrix expects batch size 1.')
-  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
-  const channels: number = shape[1]
-  const spatial: number = shape[2] * shape[3]
-  const outCount: number = channels * channels
-  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 2 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST })
-  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, spatial]))
-  return runUnaryShader(makeGramMatrixShader(outCount), input, outCount, [{ binding: 1, resource: { buffer: uniformBuffer } }])
-}
-
-
-const runContentLossBackward = async (input: Float32Array, target: Float32Array): Promise<Float32Array> => {
-  if (input.length !== target.length) return new Float32Array(input.length)
-  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
-  const targetBuffer: GPUBuffer = gpuDevice.createBuffer({ size: target.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST })
-  gpuDevice.queue.writeBuffer(targetBuffer, 0, target)
-  return runUnaryShader(makeMseBackwardShader(input.length), input, input.length, [{ binding: 1, resource: { buffer: targetBuffer } }])
-}
-
-const runGramBackward = async (input: Float32Array, shape: readonly [number, number, number, number], gradOut: Float32Array): Promise<Float32Array> => {
-  const channels: number = shape[1]
-  const spatial: number = shape[2] * shape[3]
-  const norm: number = shape[0] * shape[1] * shape[2] * shape[3]
-  if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
-  const gradOutBuffer: GPUBuffer = gpuDevice.createBuffer({ size: gradOut.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST })
-  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST })
-  gpuDevice.queue.writeBuffer(gradOutBuffer, 0, gradOut)
-  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, spatial, norm, 0]))
-  return runUnaryShader(makeGramBackwardShader(input.length), input, input.length, [{ binding: 1, resource: { buffer: gradOutBuffer } }, { binding: 2, resource: { buffer: uniformBuffer } }])
-}
-
-const runStyleLossBackward = async (input: Float32Array, shape: readonly [number, number, number, number], target: Float32Array): Promise<Float32Array> => {
-  const inputGram = await runGramMatrix(input, shape, BUFFER_USAGE_UNIFORM_COPY_DST)
-  const targetGram = await runGramMatrix(target, shape, BUFFER_USAGE_UNIFORM_COPY_DST)
-  const gramGrad: Float32Array = await runContentLossBackward(inputGram, targetGram)
-  return await runGramBackward(input, shape, gramGrad)
-}
-
-const runStyleLossBackwardFromTargetGram = async (input: Float32Array, shape: readonly [number, number, number, number], targetGram: Float32Array): Promise<Float32Array> => {
-  const inputGram = await runGramMatrix(input, shape, BUFFER_USAGE_UNIFORM_COPY_DST)
-  const gramGrad: Float32Array = await runContentLossBackward(inputGram, targetGram)
-  return await runGramBackward(input, shape, gramGrad)
-}
-const runFirstPoolOptimizer = async (payload: Extract<WorkerRequest, { type: 'run-first-pool-optimizer' }>): Promise<{ losses: number[]; finalValues: number[] }> => {
-  const convForward = async (inputValues: Float32Array, inputShape: readonly [number, number, number, number], weightValues: Float32Array, weightShape: readonly [number, number, number, number], bias: number[]): Promise<Float32Array> =>
-    await runConv2dForward(gpuDevice, runUnaryShader, inputValues, inputShape, weightValues, weightShape, bias, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST)
-
-  const conv1Weight = createTensor(payload.conv1Weight.shape, payload.conv1Weight.values)
-  const conv2Weight = createTensor(payload.conv2Weight.shape, payload.conv2Weight.values)
-  const conv3Weight = createTensor(payload.conv3Weight.shape, payload.conv3Weight.values)
-
-
-  const contentNorm = await runNormalizeForward(gpuDevice, runUnaryShader, new Float32Array(payload.contentImageValues), payload.inputShape, payload.mean, payload.std, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST)
-  const styleNorm = await runNormalizeForward(gpuDevice, runUnaryShader, new Float32Array(payload.styleImageValues), payload.inputShape, payload.mean, payload.std, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST)
-
-  const styleConv1 = await convForward(styleNorm, payload.inputShape, conv1Weight.values, conv1Weight.shape, payload.conv1Bias)
-  const styleRelu1 = await runReluForward(runUnaryShader, styleConv1)
-  const styleConv2 = await convForward(styleRelu1, [1, 64, 16, 16], conv2Weight.values, conv2Weight.shape, payload.conv2Bias)
-  const styleRelu2 = await runReluForward(runUnaryShader, styleConv2)
-  const stylePool = await runMaxPool2dForward(gpuDevice, runUnaryShader, styleRelu2, [1, 64, 16, 16], BUFFER_USAGE_UNIFORM_COPY_DST)
-  const styleConv3 = await convForward(stylePool, [1, 64, 8, 8], conv3Weight.values, conv3Weight.shape, payload.conv3Bias)
-  const styleRelu3 = await runReluForward(runUnaryShader, styleConv3)
-
-  const contentConv1 = await convForward(contentNorm, payload.inputShape, conv1Weight.values, conv1Weight.shape, payload.conv1Bias)
-  const contentRelu1 = await runReluForward(runUnaryShader, contentConv1)
-  const contentConv2 = await convForward(contentRelu1, [1, 64, 16, 16], conv2Weight.values, conv2Weight.shape, payload.conv2Bias)
-  const contentRelu2 = await runReluForward(runUnaryShader, contentConv2)
-
-  let inputValues = new Float32Array(payload.initialInputValues)
-  const losses: number[] = []
-  for (let step = 0; step < payload.steps; step += 1) {
-    const norm = await runNormalizeForward(gpuDevice, runUnaryShader, inputValues, payload.inputShape, payload.mean, payload.std, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST)
-    const conv1 = await convForward(norm, payload.inputShape, conv1Weight.values, conv1Weight.shape, payload.conv1Bias)
-    const relu1 = await runReluForward(runUnaryShader, conv1)
-    const conv2 = await convForward(relu1, [1, 64, 16, 16], conv2Weight.values, conv2Weight.shape, payload.conv2Bias)
-    const relu2 = await runReluForward(runUnaryShader, conv2)
-    const pool = await runMaxPool2dForward(gpuDevice, runUnaryShader, relu2, [1, 64, 16, 16], BUFFER_USAGE_UNIFORM_COPY_DST)
-    const conv3 = await convForward(pool, [1, 64, 8, 8], conv3Weight.values, conv3Weight.shape, payload.conv3Bias)
-    const relu3 = await runReluForward(runUnaryShader, conv3)
-
-    const styleLoss1 = (await runMse(await runGramMatrix(relu1, [1, 64, 16, 16]), await runGramMatrix(styleRelu1, [1, 64, 16, 16]))) * payload.styleWeightConv1
-    const styleLoss3 = (await runMse(await runGramMatrix(relu3, [1, 128, 8, 8]), await runGramMatrix(styleRelu3, [1, 128, 8, 8]))) * payload.styleWeightConv3
-    const contentLoss = (await runMse(relu2, contentRelu2)) * payload.contentWeight
-    losses.push(styleLoss1 + styleLoss3 + contentLoss)
-
-    const gStyle1Relu = await runScalarBinaryOp('mul', await runStyleLossBackward(relu1, [1, 64, 16, 16], styleRelu1), payload.styleWeightConv1, false)
-    const gStyle3Relu = await runScalarBinaryOp('mul', await runStyleLossBackward(relu3, [1, 128, 8, 8], styleRelu3), payload.styleWeightConv3, false)
-    const gContentRelu = await runScalarBinaryOp('mul', await runContentLossBackward(relu2, contentRelu2), payload.contentWeight, false)
-    const gStyle3 = await runReluBackward(gpuDevice, runUnaryShader, conv3, gStyle3Relu)
-    const gContent = await runReluBackward(gpuDevice, runUnaryShader, conv2, gContentRelu)
-    const gStyle1 = await runReluBackward(gpuDevice, runUnaryShader, conv1, gStyle1Relu)
-
-    const gPool = await runConv2dBackwardInput([1, 64, 8, 8], gStyle3, conv3Weight.values, conv3Weight.shape)
-    const gRelu2 = await runMaxPool2dBackward(relu2, [1, 64, 16, 16], gPool)
-    const gConv2FromPool = await runReluBackward(gpuDevice, runUnaryShader, conv2, gRelu2)
-    const gConv2Total = await runBinaryOp('add', gConv2FromPool, gContent, 'tensorTensor')
-    const gRelu1 = await runConv2dBackwardInput([1, 64, 16, 16], gConv2Total, conv2Weight.values, conv2Weight.shape)
-    const gConv1FromConv2 = await runReluBackward(gpuDevice, runUnaryShader, conv1, gRelu1)
-    const gConv1Total = await runBinaryOp('add', gConv1FromConv2, gStyle1, 'tensorTensor')
-    const gNorm = await runConv2dBackwardInput(payload.inputShape, gConv1Total, conv1Weight.values, conv1Weight.shape)
-    const gInput = await runNormalizeBackward(gNorm, payload.inputShape, payload.std)
-
-    const next = new Float32Array(inputValues.length)
-    for (let i = 0; i < inputValues.length; i += 1) next[i] = Math.max(0, Math.min(1, inputValues[i] - payload.learningRate * gInput[i]))
-    inputValues = next
-  }
-  return { losses, finalValues: Array.from(inputValues) }
-}
-
-
 const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-style-transfer' }>): Promise<{ losses: number[]; finalValues: number[]; stats: { elapsedMs: number; avgStepMs: number; forwardMs: number; backwardMs: number; lossMs: number; updateMs: number; clampMs: number; steps: number } }> => {
   const reluLayers: readonly number[] = [1, 3, 6, 8, 11, 13, 15, 17, 20, 22, 24, 26, 29]
   const poolLayers: readonly number[] = [4, 9, 18, 27]
@@ -547,7 +363,7 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
     const styleRelu = styleTargets.reluOut[reluLayerIndex]
     const styleShape = styleTargets.reluShape[reluLayerIndex]
     if (styleRelu === undefined || styleShape === undefined) throw new Error(`Missing precomputed style activation for ReLU layer index ${reluLayerIndex}.`)
-    styleGramTargets[reluLayerIndex] = await runGramMatrix(styleRelu, styleShape)
+    styleGramTargets[reluLayerIndex] = await runGramMatrix(gpuDevice, runUnaryShader, styleRelu, styleShape, BUFFER_USAGE_UNIFORM_COPY_DST)
   }
   let inputValues: Float32Array<ArrayBufferLike> = new Float32Array(payload.inputImageValues)
   const losses: number[] = []
@@ -654,12 +470,12 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
       if (reluShape === undefined) throw new Error(`Unsupported ReLU style layer index ${reluLayerIndex}.`)
       const targetGram = styleGramTargets[reluLayerIndex]
       if (targetGram === undefined) throw new Error(`Missing precomputed style gram target for ReLU layer index ${reluLayerIndex}.`)
-      totalStyle += await runMse(await runGramMatrix(inputRelu, reluShape), targetGram)
+      totalStyle += await runMse(gpuDevice, acquireReusableBuffer, releaseReusableBuffer, await runGramMatrix(gpuDevice, runUnaryShader, inputRelu, reluShape, BUFFER_USAGE_UNIFORM_COPY_DST), targetGram, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)
     }
     const contentRelu = run.reluOut[payload.contentLayerIndex]
     const contentTargetRelu = contentTargets.reluOut[payload.contentLayerIndex]
     if (contentRelu === undefined || contentTargetRelu === undefined) throw new Error(`Missing ReLU activation for content layer index ${payload.contentLayerIndex}.`)
-    const contentLoss = await runMse(contentRelu, contentTargetRelu)
+    const contentLoss = await runMse(gpuDevice, acquireReusableBuffer, releaseReusableBuffer, contentRelu, contentTargetRelu, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)
     losses.push(payload.styleWeight * totalStyle + payload.contentWeight * contentLoss)
     lossMs += performance.now() - lossStart
     const gradByReluLayer: Record<number, Float32Array> = {}
@@ -670,11 +486,11 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
       if (reluShape === undefined) throw new Error(`Unsupported ReLU style gradient layer index ${reluLayerIndex}.`)
       const targetGram = styleGramTargets[reluLayerIndex]
       if (targetGram === undefined) throw new Error(`Missing precomputed style gram gradient target for ReLU layer index ${reluLayerIndex}.`)
-      const styleGrad = await runStyleLossBackwardFromTargetGram(inputRelu, reluShape, targetGram)
+      const styleGrad = await runStyleLossBackwardFromTargetGram(gpuDevice, runUnaryShader, inputRelu, reluShape, targetGram, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST)
       const weightedStyleGrad = payload.styleWeight === 1 ? styleGrad : await runScalarBinaryOp('mul', styleGrad, payload.styleWeight, false)
       gradByReluLayer[reluLayerIndex] = gradByReluLayer[reluLayerIndex] === undefined ? weightedStyleGrad : await runBinaryOp('add', gradByReluLayer[reluLayerIndex], weightedStyleGrad, 'tensorTensor')
     }
-    const contentGrad = await runContentLossBackward(contentRelu, contentTargetRelu)
+    const contentGrad = await runContentLossBackward(gpuDevice, runUnaryShader, contentRelu, contentTargetRelu, BUFFER_USAGE_STORAGE_COPY_DST)
     const weightedContentGrad = payload.contentWeight === 1 ? contentGrad : await runScalarBinaryOp('mul', contentGrad, payload.contentWeight, false)
     gradByReluLayer[payload.contentLayerIndex] = gradByReluLayer[payload.contentLayerIndex] === undefined ? weightedContentGrad : await runBinaryOp('add', gradByReluLayer[payload.contentLayerIndex], weightedContentGrad, 'tensorTensor')
 
@@ -784,7 +600,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
           }
           if (payload.op === 'gram-matrix') {
             const input = createTensor(payload.input.shape, payload.input.values)
-            const output = await runGramMatrix(input.values, input.shape, BUFFER_USAGE_UNIFORM_COPY_DST)
+            const output = await runGramMatrix(gpuDevice, runUnaryShader, input.values, input.shape, BUFFER_USAGE_UNIFORM_COPY_DST)
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(output) })
             return
           }
@@ -796,7 +612,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
               postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: 0 })
               return
             }
-            const mse = await runMse(input.values, target.values)
+            const mse = await runMse(gpuDevice, acquireReusableBuffer, releaseReusableBuffer, input.values, target.values, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)
             const contentWeight: number = payload.contentWeight ?? 1
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: mse * contentWeight })
             return
@@ -831,7 +647,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
           if (payload.op === 'content-loss-backward') {
             const input = createTensor(payload.input.shape, payload.input.values)
             const target = createTensor(payload.target.shape, payload.target.values)
-            const gradIn = await runContentLossBackward(input.values, target.values)
+            const gradIn = await runContentLossBackward(gpuDevice, runUnaryShader, input.values, target.values, BUFFER_USAGE_STORAGE_COPY_DST)
             const contentWeight: number = payload.contentWeight ?? 1
             const weightedGradIn = contentWeight === 1 ? gradIn : await runScalarBinaryOp('mul', gradIn, contentWeight, false)
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(weightedGradIn) })
@@ -840,14 +656,14 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
           if (payload.op === 'gram-backward') {
             const input = createTensor(payload.input.shape, payload.input.values)
             const gradOut = createTensor(payload.gradOut.shape, payload.gradOut.values)
-            const gradIn = await runGramBackward(input.values, input.shape, gradOut.values)
+            const gradIn = await runGramBackward(gpuDevice, runUnaryShader, input.values, input.shape, gradOut.values, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST)
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(gradIn) })
             return
           }
           if (payload.op === 'style-loss-backward') {
             const input = createTensor(payload.input.shape, payload.input.values)
             const target = createTensor(payload.target.shape, payload.target.values)
-            const gradIn = await runStyleLossBackward(input.values, input.shape, target.values)
+            const gradIn = await runStyleLossBackward(gpuDevice, runUnaryShader, input.values, input.shape, target.values, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST)
             const styleWeight: number = payload.styleWeight ?? 1
             const weightedGradIn = styleWeight === 1 ? gradIn : await runScalarBinaryOp('mul', gradIn, styleWeight, false)
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, values: Array.from(weightedGradIn) })
@@ -856,9 +672,9 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
           if (payload.op === 'style-loss') {
             const input = createTensor(payload.input.shape, payload.input.values)
             const target = createTensor(payload.target.shape, payload.target.values)
-            const inputGram = await runGramMatrix(input.values, input.shape, BUFFER_USAGE_UNIFORM_COPY_DST)
-            const targetGram = await runGramMatrix(target.values, target.shape)
-            const mse = await runMse(inputGram, targetGram)
+            const inputGram = await runGramMatrix(gpuDevice, runUnaryShader, input.values, input.shape, BUFFER_USAGE_UNIFORM_COPY_DST)
+            const targetGram = await runGramMatrix(gpuDevice, runUnaryShader, target.values, target.shape, BUFFER_USAGE_UNIFORM_COPY_DST)
+            const mse = await runMse(gpuDevice, acquireReusableBuffer, releaseReusableBuffer, inputGram, targetGram, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)
             const styleWeight: number = payload.styleWeight ?? 1
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: mse * styleWeight })
             return
@@ -868,7 +684,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
             if (!aOperand.ok) throw new Error('MSE requires both operands to be tensors.')
             const bOperand = getTensorFromOperand(payload.b)
             if (!bOperand.ok) throw new Error('MSE requires both operands to be tensors.')
-            const mse = await runMse(aOperand.values, bOperand.values)
+            const mse = await runMse(gpuDevice, acquireReusableBuffer, releaseReusableBuffer, aOperand.values, bOperand.values, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)
             postResponse({ type: 'tensor-op-result', id: payload.id, ok: true, scalar: mse })
             return
           }
