@@ -241,6 +241,75 @@ const runConv2dBackwardInput = async (inputShape: readonly [number, number, numb
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]))
   return runUnaryShader(makeConv2dBackwardInputShader(outCount), gradOut, outCount, [{ binding: 1, resource: { buffer: weightBuffer } }, { binding: 2, resource: { buffer: uniformBuffer } }])
 }
+
+
+const runFirstPoolOptimizer = async (payload: Extract<WorkerRequest, { type: 'run-first-pool-optimizer' }>): Promise<{ losses: number[]; finalValues: number[] }> => {
+  const convForward = async (inputValues: Float32Array, inputShape: readonly [number, number, number, number], weightValues: Float32Array, weightShape: readonly [number, number, number, number], bias: number[]): Promise<Float32Array> =>
+    await runConv2dForward(gpuDevice, runUnaryShader, inputValues, inputShape, weightValues, weightShape, bias, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST)
+
+  const conv1Weight = createTensor(payload.conv1Weight.shape, payload.conv1Weight.values)
+  const conv2Weight = createTensor(payload.conv2Weight.shape, payload.conv2Weight.values)
+  const conv3Weight = createTensor(payload.conv3Weight.shape, payload.conv3Weight.values)
+
+
+  const contentNorm = await runNormalizeForward(gpuDevice, runUnaryShader, new Float32Array(payload.contentImageValues), payload.inputShape, payload.mean, payload.std, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST)
+  const styleNorm = await runNormalizeForward(gpuDevice, runUnaryShader, new Float32Array(payload.styleImageValues), payload.inputShape, payload.mean, payload.std, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST)
+
+  const styleConv1 = await convForward(styleNorm, payload.inputShape, conv1Weight.values, conv1Weight.shape, payload.conv1Bias)
+  const styleRelu1 = await runReluForward(runUnaryShader, styleConv1)
+  const styleConv2 = await convForward(styleRelu1, [1, 64, 16, 16], conv2Weight.values, conv2Weight.shape, payload.conv2Bias)
+  const styleRelu2 = await runReluForward(runUnaryShader, styleConv2)
+  const stylePool = await runMaxPool2dForward(gpuDevice, runUnaryShader, styleRelu2, [1, 64, 16, 16], BUFFER_USAGE_UNIFORM_COPY_DST)
+  const styleConv3 = await convForward(stylePool, [1, 64, 8, 8], conv3Weight.values, conv3Weight.shape, payload.conv3Bias)
+  const styleRelu3 = await runReluForward(runUnaryShader, styleConv3)
+
+  const contentConv1 = await convForward(contentNorm, payload.inputShape, conv1Weight.values, conv1Weight.shape, payload.conv1Bias)
+  const contentRelu1 = await runReluForward(runUnaryShader, contentConv1)
+  const contentConv2 = await convForward(contentRelu1, [1, 64, 16, 16], conv2Weight.values, conv2Weight.shape, payload.conv2Bias)
+  const contentRelu2 = await runReluForward(runUnaryShader, contentConv2)
+
+  let inputValues = new Float32Array(payload.initialInputValues)
+  const losses: number[] = []
+  for (let step = 0; step < payload.steps; step += 1) {
+    const norm = await runNormalizeForward(gpuDevice, runUnaryShader, inputValues, payload.inputShape, payload.mean, payload.std, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST)
+    const conv1 = await convForward(norm, payload.inputShape, conv1Weight.values, conv1Weight.shape, payload.conv1Bias)
+    const relu1 = await runReluForward(runUnaryShader, conv1)
+    const conv2 = await convForward(relu1, [1, 64, 16, 16], conv2Weight.values, conv2Weight.shape, payload.conv2Bias)
+    const relu2 = await runReluForward(runUnaryShader, conv2)
+    const pool = await runMaxPool2dForward(gpuDevice, runUnaryShader, relu2, [1, 64, 16, 16], BUFFER_USAGE_UNIFORM_COPY_DST)
+    const conv3 = await convForward(pool, [1, 64, 8, 8], conv3Weight.values, conv3Weight.shape, payload.conv3Bias)
+    const relu3 = await runReluForward(runUnaryShader, conv3)
+
+    const styleLoss1 = (await runMse(gpuDevice, acquireReusableBuffer, releaseReusableBuffer, await runGramMatrix(gpuDevice, runUnaryShader, relu1, [1, 64, 16, 16], BUFFER_USAGE_UNIFORM_COPY_DST), await runGramMatrix(gpuDevice, runUnaryShader, styleRelu1, [1, 64, 16, 16], BUFFER_USAGE_UNIFORM_COPY_DST), BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.styleWeightConv1
+    const styleLoss3 = (await runMse(gpuDevice, acquireReusableBuffer, releaseReusableBuffer, await runGramMatrix(gpuDevice, runUnaryShader, relu3, [1, 128, 8, 8], BUFFER_USAGE_UNIFORM_COPY_DST), await runGramMatrix(gpuDevice, runUnaryShader, styleRelu3, [1, 128, 8, 8], BUFFER_USAGE_UNIFORM_COPY_DST), BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.styleWeightConv3
+    const contentLoss = (await runMse(gpuDevice, acquireReusableBuffer, releaseReusableBuffer, relu2, contentRelu2, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.contentWeight
+    losses.push(styleLoss1 + styleLoss3 + contentLoss)
+
+    const gStyle1Relu = await runScalarBinaryOp('mul', await runStyleLossBackward(gpuDevice, runUnaryShader, relu1, [1, 64, 16, 16], styleRelu1, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST), payload.styleWeightConv1, false)
+    const gStyle3Relu = await runScalarBinaryOp('mul', await runStyleLossBackward(gpuDevice, runUnaryShader, relu3, [1, 128, 8, 8], styleRelu3, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST), payload.styleWeightConv3, false)
+    const gContentRelu = await runScalarBinaryOp('mul', await runContentLossBackward(gpuDevice, runUnaryShader, relu2, contentRelu2, BUFFER_USAGE_STORAGE_COPY_DST), payload.contentWeight, false)
+    const gStyle3 = await runReluBackward(gpuDevice, runUnaryShader, conv3, gStyle3Relu)
+    const gContent = await runReluBackward(gpuDevice, runUnaryShader, conv2, gContentRelu)
+    const gStyle1 = await runReluBackward(gpuDevice, runUnaryShader, conv1, gStyle1Relu)
+
+    const gPool = await runConv2dBackwardInput([1, 64, 8, 8], gStyle3, conv3Weight.values, conv3Weight.shape)
+    const gRelu2 = await runMaxPool2dBackward(relu2, [1, 64, 16, 16], gPool)
+    const gConv2FromPool = await runReluBackward(gpuDevice, runUnaryShader, conv2, gRelu2)
+    const gConv2Total = await runBinaryOp('add', gConv2FromPool, gContent, 'tensorTensor')
+    const gRelu1 = await runConv2dBackwardInput([1, 64, 16, 16], gConv2Total, conv2Weight.values, conv2Weight.shape)
+    const gConv1FromConv2 = await runReluBackward(gpuDevice, runUnaryShader, conv1, gRelu1)
+    const gConv1Total = await runBinaryOp('add', gConv1FromConv2, gStyle1, 'tensorTensor')
+    const gNorm = await runConv2dBackwardInput(payload.inputShape, gConv1Total, conv1Weight.values, conv1Weight.shape)
+    const gInput = await runNormalizeBackward(gNorm, payload.inputShape, payload.std)
+
+    const next = new Float32Array(inputValues.length)
+    for (let i = 0; i < inputValues.length; i += 1) next[i] = Math.max(0, Math.min(1, inputValues[i] - payload.learningRate * gInput[i]))
+    inputValues = next
+  }
+  return { losses, finalValues: Array.from(inputValues) }
+}
+
+
 const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-style-transfer' }>): Promise<{ losses: number[]; finalValues: number[]; stats: { elapsedMs: number; avgStepMs: number; forwardMs: number; backwardMs: number; lossMs: number; updateMs: number; clampMs: number; steps: number } }> => {
   const reluLayers: readonly number[] = [1, 3, 6, 8, 11, 13, 15, 17, 20, 22, 24, 26, 29]
   const poolLayers: readonly number[] = [4, 9, 18, 27]
