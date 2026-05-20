@@ -4,6 +4,29 @@ import type { WorkerRequest, WorkerResponse, WorkerTensorOperand } from './types
 import { createTensor } from './ml'
 
 let gpuDevice: GPUDevice | null = null
+const reusableBufferPool: Map<string, GPUBuffer[]> = new Map()
+
+const getBufferPoolKey = (size: number, usage: number): string => `${size}:${usage}`
+
+const acquireReusableBuffer = (device: GPUDevice, size: number, usage: number): GPUBuffer => {
+  const key = getBufferPoolKey(size, usage)
+  const pool = reusableBufferPool.get(key)
+  if (pool !== undefined && pool.length > 0) {
+    const buffer = pool.pop()
+    if (buffer !== undefined) return buffer
+  }
+  return device.createBuffer({ size, usage })
+}
+
+const releaseReusableBuffer = (size: number, usage: number, buffer: GPUBuffer): void => {
+  const key = getBufferPoolKey(size, usage)
+  const pool = reusableBufferPool.get(key)
+  if (pool === undefined) {
+    reusableBufferPool.set(key, [buffer])
+    return
+  }
+  pool.push(buffer)
+}
 
 // Numeric bitflags are used because `GPUBufferUsage`/`GPUMapMode` ambient globals are not consistently
 // available in TS worker builds. Flag values reference:
@@ -421,6 +444,7 @@ const initWebGpu = async (id: string): Promise<void> => {
     return
   }
   gpuDevice = await adapter.requestDevice()
+  reusableBufferPool.clear()
   postResponse({ type: 'webgpu-init-result', id, ok: true, message: `WebGPU device initialized: ${gpuDevice.label || 'unnamed-device'}` })
 }
 
@@ -430,10 +454,10 @@ const runBinaryOp = async (op: 'add' | 'sub' | 'mul' | 'div', a: Float32Array, b
   const count: number = a.length
   const code: string = makeBinaryOpShader(op, count, mode)
   const bytes: number = count * 4
-  const aBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_DST })
-  const bBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_DST })
-  const outBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_SRC })
-  const readBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_MAP_READ_COPY_DST })
+  const aBuffer: GPUBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_STORAGE_COPY_DST)
+  const bBuffer: GPUBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_STORAGE_COPY_DST)
+  const outBuffer: GPUBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_STORAGE_COPY_SRC)
+  const readBuffer: GPUBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_MAP_READ_COPY_DST)
   device.queue.writeBuffer(aBuffer, 0, a)
   device.queue.writeBuffer(bBuffer, 0, b)
   const pipeline: GPUComputePipeline = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code }), entryPoint: 'main' } })
@@ -456,6 +480,10 @@ const runBinaryOp = async (op: 'add' | 'sub' | 'mul' | 'div', a: Float32Array, b
   await readBuffer.mapAsync(MAP_MODE_READ)
   const arr: Float32Array = new Float32Array(readBuffer.getMappedRange().slice(0))
   readBuffer.unmap()
+  releaseReusableBuffer(bytes, BUFFER_USAGE_STORAGE_COPY_DST, aBuffer)
+  releaseReusableBuffer(bytes, BUFFER_USAGE_STORAGE_COPY_DST, bBuffer)
+  releaseReusableBuffer(bytes, BUFFER_USAGE_STORAGE_COPY_SRC, outBuffer)
+  releaseReusableBuffer(bytes, BUFFER_USAGE_MAP_READ_COPY_DST, readBuffer)
   return arr
 }
 
@@ -481,9 +509,9 @@ const runClamp = async (a: Float32Array, min: number, max: number): Promise<Floa
   const count: number = a.length
   const code: string = makeClampShader(count, min, max)
   const bytes: number = count * 4
-  const aBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_DST })
-  const outBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_SRC })
-  const readBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_MAP_READ_COPY_DST })
+  const aBuffer: GPUBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_STORAGE_COPY_DST)
+  const outBuffer: GPUBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_STORAGE_COPY_SRC)
+  const readBuffer: GPUBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_MAP_READ_COPY_DST)
   device.queue.writeBuffer(aBuffer, 0, a)
   const pipeline: GPUComputePipeline = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code }), entryPoint: 'main' } })
   const bindGroup: GPUBindGroup = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: aBuffer } }, { binding: 1, resource: { buffer: outBuffer } }] })
@@ -498,6 +526,9 @@ const runClamp = async (a: Float32Array, min: number, max: number): Promise<Floa
   await readBuffer.mapAsync(MAP_MODE_READ)
   const arr: Float32Array = new Float32Array(readBuffer.getMappedRange().slice(0))
   readBuffer.unmap()
+  releaseReusableBuffer(bytes, BUFFER_USAGE_STORAGE_COPY_DST, aBuffer)
+  releaseReusableBuffer(bytes, BUFFER_USAGE_STORAGE_COPY_SRC, outBuffer)
+  releaseReusableBuffer(bytes, BUFFER_USAGE_MAP_READ_COPY_DST, readBuffer)
   return arr
 }
 
@@ -507,9 +538,10 @@ const runMse = async (a: Float32Array, b: Float32Array): Promise<number> => {
   const count: number = a.length
   const bytes: number = count * 4
 
-  const aBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_DST })
-  const bBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_DST })
-  let currentBuffer: GPUBuffer = device.createBuffer({ size: bytes, usage: BUFFER_USAGE_STORAGE_COPY_SRC })
+  const aBuffer: GPUBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_STORAGE_COPY_DST)
+  const bBuffer: GPUBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_STORAGE_COPY_DST)
+  let currentBuffer: GPUBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_STORAGE_COPY_SRC)
+  let currentBytes: number = bytes
 
   device.queue.writeBuffer(aBuffer, 0, a)
   device.queue.writeBuffer(bBuffer, 0, b)
@@ -541,7 +573,7 @@ const runMse = async (a: Float32Array, b: Float32Array): Promise<number> => {
   while (currentCount > 1) {
     const nextCount: number = Math.ceil(currentCount / 64)
     const nextBytes: number = nextCount * 4
-    const nextBuffer: GPUBuffer = device.createBuffer({ size: nextBytes, usage: BUFFER_USAGE_STORAGE_COPY_SRC })
+    const nextBuffer: GPUBuffer = acquireReusableBuffer(device, nextBytes, BUFFER_USAGE_STORAGE_COPY_SRC)
     const reducePipeline: GPUComputePipeline = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: makeReduceSumShader(currentCount) }), entryPoint: 'main' } })
     const reduceBindGroup: GPUBindGroup = device.createBindGroup({
       layout: reducePipeline.getBindGroupLayout(0),
@@ -557,26 +589,32 @@ const runMse = async (a: Float32Array, b: Float32Array): Promise<number> => {
     pass.dispatchWorkgroups(nextCount)
     pass.end()
     device.queue.submit([encoder.finish()])
+    releaseReusableBuffer(currentBytes, BUFFER_USAGE_STORAGE_COPY_SRC, currentBuffer)
     currentBuffer = nextBuffer
+    currentBytes = nextBytes
     currentCount = nextCount
   }
 
-  const readBuffer: GPUBuffer = device.createBuffer({ size: 4, usage: BUFFER_USAGE_MAP_READ_COPY_DST })
+  const readBuffer: GPUBuffer = acquireReusableBuffer(device, 4, BUFFER_USAGE_MAP_READ_COPY_DST)
   const encoder: GPUCommandEncoder = device.createCommandEncoder()
   encoder.copyBufferToBuffer(currentBuffer, 0, readBuffer, 0, 4)
   device.queue.submit([encoder.finish()])
   await readBuffer.mapAsync(MAP_MODE_READ)
   const sumSquaredError: number = new Float32Array(readBuffer.getMappedRange().slice(0))[0]
   readBuffer.unmap()
+  releaseReusableBuffer(bytes, BUFFER_USAGE_STORAGE_COPY_DST, aBuffer)
+  releaseReusableBuffer(bytes, BUFFER_USAGE_STORAGE_COPY_DST, bBuffer)
+  releaseReusableBuffer(currentBytes, BUFFER_USAGE_STORAGE_COPY_SRC, currentBuffer)
+  releaseReusableBuffer(4, BUFFER_USAGE_MAP_READ_COPY_DST, readBuffer)
   return sumSquaredError / count
 }
 
 const runUnaryShader = async (code: string, input: Float32Array, outCount: number, extraEntries: GPUBindGroupEntry[] = []): Promise<Float32Array> => {
   if (gpuDevice === null) throw new Error('WebGPU is not initialized.')
   const device: GPUDevice = gpuDevice
-  const inputBuffer: GPUBuffer = device.createBuffer({ size: input.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST })
-  const outBuffer: GPUBuffer = device.createBuffer({ size: outCount * 4, usage: BUFFER_USAGE_STORAGE_COPY_SRC })
-  const readBuffer: GPUBuffer = device.createBuffer({ size: outCount * 4, usage: BUFFER_USAGE_MAP_READ_COPY_DST })
+  const inputBuffer: GPUBuffer = acquireReusableBuffer(device, input.byteLength, BUFFER_USAGE_STORAGE_COPY_DST)
+  const outBuffer: GPUBuffer = acquireReusableBuffer(device, outCount * 4, BUFFER_USAGE_STORAGE_COPY_SRC)
+  const readBuffer: GPUBuffer = acquireReusableBuffer(device, outCount * 4, BUFFER_USAGE_MAP_READ_COPY_DST)
   device.queue.writeBuffer(inputBuffer, 0, input)
   const pipeline: GPUComputePipeline = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code }), entryPoint: 'main' } })
   const bindGroup: GPUBindGroup = device.createBindGroup({
@@ -594,6 +632,9 @@ const runUnaryShader = async (code: string, input: Float32Array, outCount: numbe
   await readBuffer.mapAsync(MAP_MODE_READ)
   const out: Float32Array = new Float32Array(readBuffer.getMappedRange().slice(0))
   readBuffer.unmap()
+  releaseReusableBuffer(input.byteLength, BUFFER_USAGE_STORAGE_COPY_DST, inputBuffer)
+  releaseReusableBuffer(outCount * 4, BUFFER_USAGE_STORAGE_COPY_SRC, outBuffer)
+  releaseReusableBuffer(outCount * 4, BUFFER_USAGE_MAP_READ_COPY_DST, readBuffer)
   return out
 }
 
@@ -732,6 +773,12 @@ const runGramBackward = async (input: Float32Array, shape: readonly [number, num
 const runStyleLossBackward = async (input: Float32Array, shape: readonly [number, number, number, number], target: Float32Array): Promise<Float32Array> => {
   const inputGram = await runGramMatrix(input, shape)
   const targetGram = await runGramMatrix(target, shape)
+  const gramGrad: Float32Array = await runContentLossBackward(inputGram, targetGram)
+  return await runGramBackward(input, shape, gramGrad)
+}
+
+const runStyleLossBackwardFromTargetGram = async (input: Float32Array, shape: readonly [number, number, number, number], targetGram: Float32Array): Promise<Float32Array> => {
+  const inputGram = await runGramMatrix(input, shape)
   const gramGrad: Float32Array = await runContentLossBackward(inputGram, targetGram)
   return await runGramBackward(input, shape, gramGrad)
 }
@@ -919,6 +966,13 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
 
   const contentTargets = await runForward(contentNorm)
   const styleTargets = await runForward(styleNorm)
+  const styleGramTargets: Record<number, Float32Array> = {}
+  for (const reluLayerIndex of payload.styleLayerIndices) {
+    const styleRelu = styleTargets.reluOut[reluLayerIndex]
+    const styleShape = styleTargets.reluShape[reluLayerIndex]
+    if (styleRelu === undefined || styleShape === undefined) throw new Error(`Missing precomputed style activation for ReLU layer index ${reluLayerIndex}.`)
+    styleGramTargets[reluLayerIndex] = await runGramMatrix(styleRelu, styleShape)
+  }
   let inputValues: Float32Array<ArrayBufferLike> = new Float32Array(payload.inputImageValues)
   const losses: number[] = []
   const optimizer = payload.optimizer ?? 'sgd'
@@ -1019,11 +1073,12 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
     let totalStyle = 0
     for (const reluLayerIndex of payload.styleLayerIndices) {
       const inputRelu = run.reluOut[reluLayerIndex]
-      const styleRelu = styleTargets.reluOut[reluLayerIndex]
-      if (inputRelu === undefined || styleRelu === undefined) throw new Error(`Missing ReLU activation for style layer index ${reluLayerIndex}.`)
+      if (inputRelu === undefined) throw new Error(`Missing ReLU activation for style layer index ${reluLayerIndex}.`)
       const reluShape = run.reluShape[reluLayerIndex]
       if (reluShape === undefined) throw new Error(`Unsupported ReLU style layer index ${reluLayerIndex}.`)
-      totalStyle += await runMse(await runGramMatrix(inputRelu, reluShape), await runGramMatrix(styleRelu, reluShape))
+      const targetGram = styleGramTargets[reluLayerIndex]
+      if (targetGram === undefined) throw new Error(`Missing precomputed style gram target for ReLU layer index ${reluLayerIndex}.`)
+      totalStyle += await runMse(await runGramMatrix(inputRelu, reluShape), targetGram)
     }
     const contentRelu = run.reluOut[payload.contentLayerIndex]
     const contentTargetRelu = contentTargets.reluOut[payload.contentLayerIndex]
@@ -1034,11 +1089,12 @@ const runStyleTransfer = async (payload: Extract<WorkerRequest, { type: 'run-sty
     const gradByReluLayer: Record<number, Float32Array> = {}
     for (const reluLayerIndex of payload.styleLayerIndices) {
       const inputRelu = run.reluOut[reluLayerIndex]
-      const styleRelu = styleTargets.reluOut[reluLayerIndex]
-      if (inputRelu === undefined || styleRelu === undefined) throw new Error(`Missing ReLU activation for style gradient layer index ${reluLayerIndex}.`)
+      if (inputRelu === undefined) throw new Error(`Missing ReLU activation for style gradient layer index ${reluLayerIndex}.`)
       const reluShape = run.reluShape[reluLayerIndex]
       if (reluShape === undefined) throw new Error(`Unsupported ReLU style gradient layer index ${reluLayerIndex}.`)
-      const styleGrad = await runStyleLossBackward(inputRelu, reluShape, styleRelu)
+      const targetGram = styleGramTargets[reluLayerIndex]
+      if (targetGram === undefined) throw new Error(`Missing precomputed style gram gradient target for ReLU layer index ${reluLayerIndex}.`)
+      const styleGrad = await runStyleLossBackwardFromTargetGram(inputRelu, reluShape, targetGram)
       const weightedStyleGrad = payload.styleWeight === 1 ? styleGrad : await runScalarBinaryOp('mul', styleGrad, payload.styleWeight, false)
       gradByReluLayer[reluLayerIndex] = gradByReluLayer[reluLayerIndex] === undefined ? weightedStyleGrad : await runBinaryOp('add', gradByReluLayer[reluLayerIndex], weightedStyleGrad, 'tensorTensor')
     }
