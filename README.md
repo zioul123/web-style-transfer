@@ -94,7 +94,6 @@ Important design choice: gradients are computed for the **input image tensor onl
 
 This keeps implementation deterministic and reviewable while preserving a direct numerical baseline against PyTorch.
 
-
 ### Fused execution modes (Phase 6+)
 
 `run-style-transfer` now supports two optional performance flags:

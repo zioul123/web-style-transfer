@@ -38,7 +38,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
   }
   out[i] = select(0.0, gradOutValues[outIdx], ih == maxH && iw == maxW);
-}`
+}`;
 
 export const makeMaxPool2dShader = (count: number): string => `
 struct MaxPoolUniforms {
@@ -71,4 +71,4 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let m0 = max(inputValues[idx00], inputValues[idx01]);
   let m1 = max(inputValues[idx10], inputValues[idx11]);
   out[i] = max(m0, m1);
-}`
+}`;

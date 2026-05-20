@@ -7,6 +7,7 @@ python python-reference/export_vgg19_first_pool.py
 ```
 
 This writes:
+
 - `vgg19_first_pool_weights.json`
 - `vgg19_first_pool_case_madeira16.json`
 

@@ -16,7 +16,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let spatial = uniforms.height * uniforms.width;
   let c = (i / spatial) % uniforms.channels;
   out[i] = (inputValues[i] - meanValues[c]) / stdValues[c];
-}`
+}`;
 
 export const makeNormalizeBackwardShader = (count: number): string => `
 struct NormalizeBackwardUniforms { channels: u32, height: u32, width: u32, _pad: u32 }
@@ -31,4 +31,4 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let spatial = uniforms.height * uniforms.width;
   let c = (i / spatial) % uniforms.channels;
   out[i] = gradOutValues[i] / stdValues[c];
-}`
+}`;

@@ -29,7 +29,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
   }
   out[i] = sum;
-}`
+}`;
 
 export const makeConv2dReluShader = (count: number): string => `
 struct Conv2dReluUniforms { inChannels: u32, outChannels: u32, height: u32, width: u32 }
@@ -66,7 +66,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
   }
   out[i] = max(0.0, sum);
-}`
+}`;
 
 export const makeConv2dShader = (count: number): string => `
 struct Conv2dUniforms { inChannels: u32, outChannels: u32, height: u32, width: u32 }
@@ -105,4 +105,4 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
   }
   out[i] = sum;
-}`
+}`;

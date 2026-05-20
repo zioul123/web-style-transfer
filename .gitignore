@@ -29,6 +29,7 @@ __pycache__
 *.tsbuildinfo
 .vite
 test-results
+public/vgg19-phase3-full-pass
 
 # Output folder
 expt

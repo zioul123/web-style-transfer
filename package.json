@@ -7,8 +7,13 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
     "preview": "vite preview",
     "test": "playwright test"
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx,json,css,md,html,yml,yaml}": "prettier --write"
   },
   "dependencies": {
     "@react-three/fiber": "^9.6.1",
@@ -29,6 +34,9 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.6.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "prettier": "^3.8.3",
     "tailwindcss": "^4.3.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",

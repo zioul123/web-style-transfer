@@ -23,7 +23,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     sum = sum + ((gradAB + gradBA) * inputBP);
   }
   out[i] = sum / f32(uniforms.norm);
-}`
+}`;
 
 export const makeGramMatrixShader = (count: number): string => `
 struct GramUniforms {
@@ -47,4 +47,4 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   }
   let norm = f32(uniforms.channels * uniforms.spatial);
   out[i] = sum / norm;
-}`
+}`;

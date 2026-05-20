@@ -6,7 +6,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= ${count}u) { return; }
   out[i] = max(0.0, inputValues[i]);
-}`
+}`;
 
 export const makeReluBackwardShader = (count: number): string => `
 @group(0) @binding(0) var<storage, read> inputValues: array<f32>;
@@ -17,4 +17,4 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= ${count}u) { return; }
   out[i] = select(0.0, gradOutValues[i], inputValues[i] > 0.0);
-}`
+}`;

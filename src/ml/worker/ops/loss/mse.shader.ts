@@ -8,7 +8,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (i >= ${count}u) { return; }
   let d = a[i] - b[i];
   out[i] = d * d;
-}`
+}`;
 
 export const makeReduceSumShader = (count: number): string => `
 @group(0) @binding(0) var<storage, read> inputValues: array<f32>;
@@ -40,7 +40,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(global_invocation
   if (localIndex == 0u) {
     out[wid.x] = cache[0];
   }
-}`
+}`;
 
 export const makeMseBackwardShader = (count: number): string => `
 @group(0) @binding(0) var<storage, read> inputValues: array<f32>;
@@ -51,4 +51,4 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= ${count}u) { return; }
   out[i] = (2.0 * (inputValues[i] - targetValues[i])) / ${count}.0;
-}`
+}`;
