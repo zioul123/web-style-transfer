@@ -35,17 +35,9 @@ import {
 import {
   runBinaryOp,
   runScalarBinaryOp,
-  runUnaryShader,
 } from "../../runtime/shaderRunner";
 import { getGpuDevice } from "../../runtime/deviceState";
-
-export const runUnary = (
-  code: string,
-  input: Float32Array,
-  outCount: number,
-  extraEntries: GPUBindGroupEntry[] = [],
-): Promise<Float32Array> =>
-  runUnaryShader(getGpuDevice(), code, input, outCount, extraEntries);
+import { runUnary } from "../../runtime/computeContext";
 
 export const runFirstPoolOptimizer = async (
   payload: Extract<WorkerRequest, { type: "run-first-pool-optimizer" }>,

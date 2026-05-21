@@ -34,7 +34,7 @@ import {
 import { runBinaryOp, runClamp, runScalarBinaryOp } from "../../runtime/shaderRunner";
 import { getGpuDevice } from "../../runtime/deviceState";
 import { SUPER_FUSED_BLOCKS, POOL_LAYERS, RELU_LAYERS } from "./layerSchedules";
-import { runUnary } from "./firstPoolOptimizer";
+import { runUnary } from "../../runtime/computeContext";
 
 
 export const runStyleTransfer = async (
