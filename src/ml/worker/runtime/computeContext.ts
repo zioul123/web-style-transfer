@@ -5,9 +5,14 @@ import { getGpuDevice } from "./deviceState";
 import {
   BUFFER_USAGE_MAP_READ_COPY_DST,
   BUFFER_USAGE_STORAGE_COPY_DST,
+  BUFFER_USAGE_STORAGE_COPY_SRC,
   MAP_MODE_READ,
 } from "./gpuFlags";
-import { runClamp, runScalarBinaryOp, runUnaryShader } from "./shaderRunner";
+import {
+  makeBinaryOpShader,
+  makeClampShader,
+  runUnaryShader,
+} from "./shaderRunner";
 
 /**
  * Canonical shape type used by runtime tensor handles.
@@ -149,36 +154,86 @@ export const runUnary = (
   runUnaryShader(getGpuDevice(), code, input, outCount, extraEntries);
 
 /**
+ * Internal chain primitive for handle -> handle compute dispatch.
+ *
+ * Unlike `runUnary`, this never maps the output buffer back to CPU.
+ * The caller gets a new runtime-owned tensor handle and can keep chaining
+ * GPU-side ops until they intentionally cross a readback boundary.
+ */
+const runUnaryOnHandle = (
+  input: RuntimeTensorHandle,
+  code: string,
+  extraEntries: GPUBindGroupEntry[] = [],
+): RuntimeTensorHandle => {
+  const device = requireGpuDevice();
+  const outBuffer = acquireReusableBuffer(
+    device,
+    input.byteLength,
+    BUFFER_USAGE_STORAGE_COPY_SRC,
+  );
+  const pipeline = device.createComputePipeline({
+    layout: "auto",
+    compute: {
+      module: device.createShaderModule({ code }),
+      entryPoint: "main",
+    },
+  });
+  const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: input.buffer } },
+      ...extraEntries,
+      { binding: extraEntries.length + 1, resource: { buffer: outBuffer } },
+    ],
+  });
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.dispatchWorkgroups(Math.ceil(input.elementCount / 64));
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  return makeHandle(input.shape, outBuffer, BUFFER_USAGE_STORAGE_COPY_SRC, "runtime");
+};
+
+/**
  * Chain helper: apply a scalar op to a tensor-handle value and return a new
  * runtime-owned handle.
  *
  * Implementation note:
- * - This currently reuses `runScalarBinaryOp` from `shaderRunner.ts` to avoid
- *   duplicate WGSL generation in this module.
- * - Today `runScalarBinaryOp` still returns CPU data, so this helper performs
- *   one temporary readback+reupload internally. The boundary is now centralized
- *   here so later fully-GPU chaining can be swapped in without changing callers.
+ * - The scalar is uploaded as a 1-value GPU buffer and dispatched via the
+ *   existing `makeBinaryOpShader(..., "tensorScalar")` generator.
+ * - Input and output remain GPU-resident; there is no implicit readback here.
  */
 export const chainTensorScalarOp = async (
   input: RuntimeTensorHandle,
   op: "sub" | "add" | "mul",
   scalar: number,
 ): Promise<RuntimeTensorHandle> => {
-  const inputCpu = await readTensorHandleToCpu(input);
-  const out = await runScalarBinaryOp(getGpuDevice(), op, inputCpu, scalar, false);
-  return acquireTensorHandleFromCpu(input.shape, out);
+  const device = requireGpuDevice();
+  const scalarBuffer = acquireReusableBuffer(
+    device,
+    4,
+    BUFFER_USAGE_STORAGE_COPY_DST,
+  );
+  device.queue.writeBuffer(scalarBuffer, 0, new Float32Array([scalar]));
+  const outHandle = runUnaryOnHandle(
+    input,
+    makeBinaryOpShader(op, input.elementCount, "tensorScalar"),
+    [{ binding: 1, resource: { buffer: scalarBuffer } }],
+  );
+  releaseReusableBuffer(4, BUFFER_USAGE_STORAGE_COPY_DST, scalarBuffer);
+  return outHandle;
 };
 
 /**
  * Chain helper: clamp tensor values into the image-valid range `[0, 1]` and
  * return a new runtime-owned handle.
  *
- * Uses shared `runClamp` implementation from `shaderRunner.ts` for consistency.
+ * Uses shared `makeClampShader` shader generator from `shaderRunner.ts`.
  */
 export const chainClamp01 = async (
   input: RuntimeTensorHandle,
 ): Promise<RuntimeTensorHandle> => {
-  const inputCpu = await readTensorHandleToCpu(input);
-  const out = await runClamp(getGpuDevice(), inputCpu, 0, 1);
-  return acquireTensorHandleFromCpu(input.shape, out);
+  return runUnaryOnHandle(input, makeClampShader(input.elementCount, 0, 1));
 };
