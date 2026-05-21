@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import type { WorkerRunStats } from "../../../types";
+import type { WorkerRunStats } from "../../../types/worker-protocol/pipelines";
 
 export type ResolutionPreset = 128 | 256;
 export type OptimizerMode = "sgd" | "adam" | "lbfgs";

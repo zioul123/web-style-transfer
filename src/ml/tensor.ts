@@ -1,4 +1,4 @@
-import type { TensorData, TensorShape } from "../types";
+import type { TensorData, TensorShape } from "../types/worker-protocol/core";
 
 const elementCount = (shape: TensorShape): number =>
   shape[0] * shape[1] * shape[2] * shape[3];
