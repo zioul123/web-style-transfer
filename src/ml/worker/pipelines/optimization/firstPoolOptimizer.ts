@@ -32,7 +32,14 @@ import {
 } from "../../runtime/gpuFlags";
 import { runBinaryOp, runScalarBinaryOp } from "../../runtime/shaderRunner";
 import { getGpuDevice } from "../../runtime/deviceState";
-import { runUnary } from "../../runtime/computeContext";
+import {
+  acquireTensorHandleFromCpu,
+  chainClamp01,
+  chainTensorScalarOp,
+  readImageSnapshotBoundary,
+  releaseTensorHandle,
+  runUnary,
+} from "../../runtime/computeContext";
 
 export const runFirstPoolOptimizer = async (
   payload: Extract<WorkerRequest, { type: "run-first-pool-optimizer" }>,
@@ -383,13 +390,30 @@ export const runFirstPoolOptimizer = async (
       BUFFER_USAGE_UNIFORM_COPY_DST,
     );
 
-    const next = new Float32Array(inputValues.length);
-    for (let i = 0; i < inputValues.length; i += 1)
-      next[i] = Math.max(
-        0,
-        Math.min(1, inputValues[i] - payload.learningRate * gInput[i]),
-      );
-    inputValues = next;
+    const inputHandle = acquireTensorHandleFromCpu(payload.inputShape, inputValues);
+    const gradScaledHandle = acquireTensorHandleFromCpu(payload.inputShape, gInput);
+    const lrScaledGradHandle = await chainTensorScalarOp(
+      gradScaledHandle,
+      "mul",
+      payload.learningRate,
+    );
+    releaseTensorHandle(gradScaledHandle);
+    const gradCpu = await readImageSnapshotBoundary(lrScaledGradHandle);
+    releaseTensorHandle(lrScaledGradHandle);
+    const nextCpu = await runBinaryOp(
+      getGpuDevice(),
+      "sub",
+      inputValues,
+      gradCpu,
+      "tensorTensor",
+    );
+    const nextHandle = acquireTensorHandleFromCpu(payload.inputShape, nextCpu);
+    releaseTensorHandle(inputHandle);
+    const clampedHandle = await chainClamp01(nextHandle);
+    releaseTensorHandle(nextHandle);
+    const clampedSnapshot = await readImageSnapshotBoundary(clampedHandle);
+    inputValues = new Float32Array(clampedSnapshot);
+    releaseTensorHandle(clampedHandle);
   }
   return { losses, finalValues: Array.from(inputValues) };
 };

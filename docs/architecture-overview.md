@@ -311,3 +311,40 @@ Steps:
 4. Update buffer-pool ownership/release rules to prevent leaks when handles survive across multiple ops.
 5. Document the new boundary model in `docs/architecture-overview.md` and/or runtime module docs so contributors can reason about when data is on GPU vs CPU.
 :::
+
+## 12. Runtime GPU-resident boundary model (May 21, 2026)
+
+To make GPU/CPU transitions explicit, runtime now introduces a small tensor-handle IR in `src/ml/worker/runtime/computeContext.ts`:
+
+- `RuntimeTensorHandle`
+  - wraps GPU `buffer`, logical `shape`, byte/element metadata, and ownership marker.
+- Ownership is explicit:
+  - `owner: "runtime"` means the handle must be released back to the reusable pool.
+  - `owner: "external"` can represent buffers managed elsewhere.
+
+### Boundary helpers
+
+`computeContext.ts` now exposes explicit boundary APIs:
+
+- **GPU-chain helpers**
+  - `chainTensorScalarOp(...)`
+  - `chainClamp01(...)`
+- **Readback boundaries**
+  - `readScalarBoundary(...)` for scalar/loss extraction.
+  - `readImageSnapshotBoundary(...)` for preview/final image snapshots.
+
+### Lifecycle helpers
+
+- `acquireTensorHandleFromCpu(...)` uploads CPU values into a handle.
+- `releaseTensorHandle(...)` returns runtime-owned buffers to the pool.
+
+### First constrained migration
+
+`runFirstPoolOptimizer(...)` now uses the handle boundary model for the image-update tail:
+
+1. upload input + gradient to handles,
+2. chain scalar gradient scaling and clamp through runtime helpers,
+3. perform explicit image snapshot readback only at the boundary where the next CPU-side iteration value is needed,
+4. release runtime-owned handles at each step.
+
+This does not yet remove all per-op readbacks in the full pipeline, but it makes readback boundaries and ownership rules visible in code and provides a path for broader migration.
