@@ -1,4 +1,4 @@
-import type { WorkerResponse, WorkerRunStats } from "../../../types";
+import type { WorkerResponse, WorkerRunStats, WorkerTensor } from "../../../types";
 
 export const postResponse = (response: WorkerResponse): void => {
   self.postMessage(response);
@@ -7,7 +7,7 @@ export const postResponse = (response: WorkerResponse): void => {
 const getErrorMessage = (error: unknown, fallback: string): string =>
   error instanceof Error ? error.message : fallback;
 
-export const sendErrorResponse = (
+export const sendWorkerErrorResponse = (
   id: string,
   error: unknown,
   fallbackMessage = "Unknown worker error",
@@ -15,6 +15,32 @@ export const sendErrorResponse = (
   postResponse({
     type: "error",
     id,
+    message: getErrorMessage(error, fallbackMessage),
+  });
+};
+
+export const sendPongResponse = (id: string, timestamp: number): void => {
+  postResponse({ type: "pong", id, timestamp });
+};
+
+export const sendTensorRoundtripResult = (id: string, tensor: WorkerTensor): void => {
+  postResponse({
+    type: "tensor-roundtrip-result",
+    id,
+    ok: true,
+    tensor,
+  });
+};
+
+export const sendTensorRoundtripError = (
+  id: string,
+  error: unknown,
+  fallbackMessage = "Tensor roundtrip failed.",
+): void => {
+  postResponse({
+    type: "tensor-roundtrip-result",
+    id,
+    ok: false,
     message: getErrorMessage(error, fallbackMessage),
   });
 };
