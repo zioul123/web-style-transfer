@@ -1,4 +1,4 @@
-import type { TensorData, TensorShape } from "../../types";
+import type { TensorData, TensorShape } from "../../types/worker-protocol/core";
 import { assertSameLength } from "../tensor";
 
 const indexNchw = (
