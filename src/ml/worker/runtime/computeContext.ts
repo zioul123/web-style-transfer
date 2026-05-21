@@ -227,6 +227,27 @@ export const chainTensorScalarOp = async (
 };
 
 /**
+ * Chain helper: apply elementwise binary op between two same-shaped handles.
+ *
+ * This keeps both operands and the result on GPU until the caller chooses an
+ * explicit boundary helper.
+ */
+export const chainTensorBinaryOp = async (
+  a: RuntimeTensorHandle,
+  b: RuntimeTensorHandle,
+  op: "add" | "sub" | "mul" | "div",
+): Promise<RuntimeTensorHandle> => {
+  if (a.elementCount !== b.elementCount) {
+    throw new Error("chainTensorBinaryOp expects tensors with equal element count.");
+  }
+  return runUnaryOnHandle(
+    a,
+    makeBinaryOpShader(op, a.elementCount, "tensorTensor"),
+    [{ binding: 1, resource: { buffer: b.buffer } }],
+  );
+};
+
+/**
  * Chain helper: clamp tensor values into the image-valid range `[0, 1]` and
  * return a new runtime-owned handle.
  *

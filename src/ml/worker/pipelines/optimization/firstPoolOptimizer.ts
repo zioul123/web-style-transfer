@@ -34,6 +34,7 @@ import { runBinaryOp, runScalarBinaryOp } from "../../runtime/shaderRunner";
 import { getGpuDevice } from "../../runtime/deviceState";
 import {
   acquireTensorHandleFromCpu,
+  chainTensorBinaryOp,
   chainClamp01,
   chainTensorScalarOp,
   readImageSnapshotBoundary,
@@ -391,24 +392,20 @@ export const runFirstPoolOptimizer = async (
     );
 
     const inputHandle = acquireTensorHandleFromCpu(payload.inputShape, inputValues);
-    const gradScaledHandle = acquireTensorHandleFromCpu(payload.inputShape, gInput);
+    const gradHandle = acquireTensorHandleFromCpu(payload.inputShape, gInput);
     const lrScaledGradHandle = await chainTensorScalarOp(
-      gradScaledHandle,
+      gradHandle,
       "mul",
       payload.learningRate,
     );
-    releaseTensorHandle(gradScaledHandle);
-    const gradCpu = await readImageSnapshotBoundary(lrScaledGradHandle);
-    releaseTensorHandle(lrScaledGradHandle);
-    const nextCpu = await runBinaryOp(
-      getGpuDevice(),
+    releaseTensorHandle(gradHandle);
+    const nextHandle = await chainTensorBinaryOp(
+      inputHandle,
+      lrScaledGradHandle,
       "sub",
-      inputValues,
-      gradCpu,
-      "tensorTensor",
     );
-    const nextHandle = acquireTensorHandleFromCpu(payload.inputShape, nextCpu);
     releaseTensorHandle(inputHandle);
+    releaseTensorHandle(lrScaledGradHandle);
     const clampedHandle = await chainClamp01(nextHandle);
     releaseTensorHandle(nextHandle);
     const clampedSnapshot = await readImageSnapshotBoundary(clampedHandle);
