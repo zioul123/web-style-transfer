@@ -5,10 +5,16 @@ import { createTensor } from "../../index";
 import { runFirstPoolOptimizer } from "../pipelines/optimization/firstPoolOptimizer";
 import { runStyleTransfer } from "../pipelines/optimization/styleTransferPipeline";
 import { initWebGpu } from "./initWebGpu";
-import { postResponse, sendRunFirstPoolOptimizerResult, sendRunStyleTransferResult } from "./responses";
+import {
+  postResponse,
+  sendRunFirstPoolOptimizerResult,
+  sendRunStyleTransferResult,
+} from "./responses";
 import { routeTensorOp } from "./tensorOpRouter";
 
-export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => {
+export const routeWorkerMessage = (
+  event: MessageEvent<WorkerRequest>,
+): void => {
   const payload: WorkerRequest = event.data;
   switch (payload.type) {
     case "ping":
@@ -19,13 +25,17 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
         postResponse({
           type: "error",
           id: payload.id,
-          message: error instanceof Error ? error.message : "Unknown worker error",
+          message:
+            error instanceof Error ? error.message : "Unknown worker error",
         }),
       );
       break;
     case "tensor-roundtrip": {
       try {
-        const tensor = createTensor(payload.tensor.shape, payload.tensor.values);
+        const tensor = createTensor(
+          payload.tensor.shape,
+          payload.tensor.values,
+        );
         postResponse({
           type: "tensor-roundtrip-result",
           id: payload.id,
@@ -37,7 +47,8 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
           type: "tensor-roundtrip-result",
           id: payload.id,
           ok: false,
-          message: error instanceof Error ? error.message : "Tensor roundtrip failed.",
+          message:
+            error instanceof Error ? error.message : "Tensor roundtrip failed.",
         });
       }
       break;
@@ -46,9 +57,19 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
       void (async (): Promise<void> => {
         try {
           const result = await runFirstPoolOptimizer(payload);
-          sendRunFirstPoolOptimizerResult(payload.id, { ok: true, losses: result.losses, finalValues: result.finalValues });
+          sendRunFirstPoolOptimizerResult(payload.id, {
+            ok: true,
+            losses: result.losses,
+            finalValues: result.finalValues,
+          });
         } catch (error: unknown) {
-          sendRunFirstPoolOptimizerResult(payload.id, { ok: false, message: error instanceof Error ? error.message : "First-pool optimizer failed." });
+          sendRunFirstPoolOptimizerResult(payload.id, {
+            ok: false,
+            message:
+              error instanceof Error
+                ? error.message
+                : "First-pool optimizer failed.",
+          });
         }
       })();
       break;
@@ -57,9 +78,20 @@ export const routeWorkerMessage = (event: MessageEvent<WorkerRequest>): void => 
       void (async (): Promise<void> => {
         try {
           const result = await runStyleTransfer(payload);
-          sendRunStyleTransferResult(payload.id, { ok: true, losses: result.losses, finalValues: result.finalValues, stats: result.stats });
+          sendRunStyleTransferResult(payload.id, {
+            ok: true,
+            losses: result.losses,
+            finalValues: result.finalValues,
+            stats: result.stats,
+          });
         } catch (error: unknown) {
-          sendRunStyleTransferResult(payload.id, { ok: false, message: error instanceof Error ? error.message : "Style transfer run failed." });
+          sendRunStyleTransferResult(payload.id, {
+            ok: false,
+            message:
+              error instanceof Error
+                ? error.message
+                : "Style transfer run failed.",
+          });
         }
       })();
       break;

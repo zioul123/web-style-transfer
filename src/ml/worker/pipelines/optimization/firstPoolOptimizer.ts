@@ -18,9 +18,7 @@ import {
 import { runGramMatrix } from "../../ops/gram/gram.run";
 import { runMse } from "../../ops/loss/mse.run";
 import { runContentLossBackward } from "../../ops/loss/contentLoss.run";
-import {
-  runStyleLossBackward,
-} from "../../ops/loss/styleLoss.run";
+import { runStyleLossBackward } from "../../ops/loss/styleLoss.run";
 import {
   acquireReusableBuffer,
   releaseReusableBuffer,
@@ -32,10 +30,7 @@ import {
   BUFFER_USAGE_UNIFORM_COPY_DST,
   MAP_MODE_READ,
 } from "../../runtime/gpuFlags";
-import {
-  runBinaryOp,
-  runScalarBinaryOp,
-} from "../../runtime/shaderRunner";
+import { runBinaryOp, runScalarBinaryOp } from "../../runtime/shaderRunner";
 import { getGpuDevice } from "../../runtime/deviceState";
 import { runUnary } from "../../runtime/computeContext";
 
@@ -398,4 +393,3 @@ export const runFirstPoolOptimizer = async (
   }
   return { losses, finalValues: Array.from(inputValues) };
 };
-

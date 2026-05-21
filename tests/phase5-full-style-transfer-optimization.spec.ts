@@ -2,6 +2,20 @@ import { expect, test } from "@playwright/test";
 import type { WorkerRequest, WorkerResponse } from "../src/types";
 import { gotoStableApp } from "./helpers/appPage";
 
+type Phase3FullPassFixture = {
+  inputShape: [number, number, number, number];
+  inputImageValues: number[];
+  contentImageValues: number[];
+  styleImageValues: number[];
+  mean: [number, number, number];
+  std: [number, number, number];
+  styleLayerIndices: number[];
+  contentLayerIndex: number;
+  expectedGradients?: {
+    total?: number[];
+  };
+};
+
 test("phase 5 full style transfer endpoint returns losses", async ({
   page,
 }) => {
@@ -14,14 +28,14 @@ test("phase 5 full style transfer endpoint returns losses", async ({
       const text = await response.text();
       try {
         return JSON.parse(text) as T;
-      } catch (_error) {
+      } catch {
         return null;
       }
     };
     const weights = await loadJson<
       Record<string, number[] | [number, number, number, number]>
     >("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
-    const fixture = await loadJson<any>(
+    const fixture = await loadJson<Phase3FullPassFixture>(
       "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
     );
     if (weights === null || fixture === null)
@@ -96,14 +110,14 @@ test("phase 5 run-style-transfer first-step gradient matches pytorch oracle", as
       const text = await response.text();
       try {
         return JSON.parse(text) as T;
-      } catch (_error) {
+      } catch {
         return null;
       }
     };
     const weights = await loadJson<
       Record<string, number[] | [number, number, number, number]>
     >("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
-    const fixture = await loadJson<any>(
+    const fixture = await loadJson<Phase3FullPassFixture>(
       "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
     );
     if (weights === null || fixture === null)
@@ -272,14 +286,14 @@ test("phase 5 super fused forward path matches baseline for single step", async 
       const text = await response.text();
       try {
         return JSON.parse(text) as T;
-      } catch (_error) {
+      } catch {
         return null;
       }
     };
     const weights = await loadJson<
       Record<string, number[] | [number, number, number, number]>
     >("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
-    const fixture = await loadJson<any>(
+    const fixture = await loadJson<Phase3FullPassFixture>(
       "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
     );
     if (weights === null || fixture === null)

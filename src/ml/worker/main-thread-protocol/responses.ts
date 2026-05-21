@@ -7,7 +7,11 @@ export const postResponse = (response: WorkerResponse): void => {
 const getErrorMessage = (error: unknown, fallback: string): string =>
   error instanceof Error ? error.message : fallback;
 
-export const sendErrorResponse = (id: string, error: unknown, fallbackMessage = "Unknown worker error"): void => {
+export const sendErrorResponse = (
+  id: string,
+  error: unknown,
+  fallbackMessage = "Unknown worker error",
+): void => {
   postResponse({
     type: "error",
     id,
@@ -36,7 +40,11 @@ export const sendTensorOpResult = (
   });
 };
 
-export const sendTensorOpError = (id: string, error: unknown, fallbackMessage = "Tensor operation failed."): void => {
+export const sendTensorOpError = (
+  id: string,
+  error: unknown,
+  fallbackMessage = "Tensor operation failed.",
+): void => {
   postResponse({
     type: "tensor-op-result",
     id,
@@ -45,7 +53,11 @@ export const sendTensorOpError = (id: string, error: unknown, fallbackMessage = 
   });
 };
 
-export const sendWebGpuInitResult = (id: string, ok: boolean, message: string): void => {
+export const sendWebGpuInitResult = (
+  id: string,
+  ok: boolean,
+  message: string,
+): void => {
   postResponse({ type: "webgpu-init-result", id, ok, message });
 };
 
@@ -61,7 +73,12 @@ export const sendRunFirstPoolOptimizerResult = (
 export const sendRunStyleTransferResult = (
   id: string,
   result:
-    | { ok: true; losses: number[]; finalValues: number[]; stats: WorkerRunStats }
+    | {
+        ok: true;
+        losses: number[];
+        finalValues: number[];
+        stats: WorkerRunStats;
+      }
     | { ok: false; message: string },
 ): void => {
   postResponse({ type: "run-style-transfer-result", id, ...result });
