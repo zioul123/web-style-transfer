@@ -6,9 +6,12 @@ import { runFirstPoolOptimizer } from "../pipelines/optimization/firstPoolOptimi
 import { runStyleTransfer } from "../pipelines/optimization/styleTransferPipeline";
 import { initWebGpu } from "./initWebGpu";
 import {
-  postResponse,
+  sendPongResponse,
   sendRunFirstPoolOptimizerResult,
   sendRunStyleTransferResult,
+  sendTensorRoundtripError,
+  sendTensorRoundtripResult,
+  sendWorkerErrorResponse,
 } from "./responses";
 import { routeTensorOp } from "./tensorOpRouter";
 
@@ -18,16 +21,11 @@ export const routeWorkerMessage = (
   const payload: WorkerRequest = event.data;
   switch (payload.type) {
     case "ping":
-      postResponse({ type: "pong", id: payload.id, timestamp: Date.now() });
+      sendPongResponse(payload.id, Date.now());
       break;
     case "init-webgpu":
       void initWebGpu(payload.id).catch((error: unknown) =>
-        postResponse({
-          type: "error",
-          id: payload.id,
-          message:
-            error instanceof Error ? error.message : "Unknown worker error",
-        }),
+        sendWorkerErrorResponse(payload.id, error),
       );
       break;
     case "tensor-roundtrip": {
@@ -36,20 +34,12 @@ export const routeWorkerMessage = (
           payload.tensor.shape,
           payload.tensor.values,
         );
-        postResponse({
-          type: "tensor-roundtrip-result",
-          id: payload.id,
-          ok: true,
-          tensor: { shape: tensor.shape, values: Array.from(tensor.values) },
+        sendTensorRoundtripResult(payload.id, {
+          shape: tensor.shape,
+          values: Array.from(tensor.values),
         });
       } catch (error: unknown) {
-        postResponse({
-          type: "tensor-roundtrip-result",
-          id: payload.id,
-          ok: false,
-          message:
-            error instanceof Error ? error.message : "Tensor roundtrip failed.",
-        });
+        sendTensorRoundtripError(payload.id, error);
       }
       break;
     }
@@ -102,11 +92,12 @@ export const routeWorkerMessage = (
     }
     default: {
       const exhaustivenessCheck: never = payload;
-      postResponse({
-        type: "error",
-        id: "unknown",
-        message: `Received unsupported message type: ${String(exhaustivenessCheck)}`,
-      });
+      sendWorkerErrorResponse(
+        "unknown",
+        new Error(
+          `Received unsupported message type: ${String(exhaustivenessCheck)}`,
+        ),
+      );
     }
   }
 };

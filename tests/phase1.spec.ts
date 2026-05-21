@@ -348,3 +348,68 @@ test("phase 1 mse GPU reduction parity for >64 lengths", async ({ page }) => {
     expect(result.response.scalar).toBeCloseTo(expectedMse, 6);
   }
 });
+
+
+test("worker protocol emits typed responses for success and failure paths", async ({ page }) => {
+  await gotoStableApp(page);
+
+  const result = await page.evaluate(async () => {
+    const worker = new Worker(
+      new URL("/src/styleTransfer.worker.ts", window.location.origin),
+      { type: "module" },
+    );
+
+    const ask = (payload: WorkerRequest): Promise<WorkerResponse> =>
+      new Promise((resolve) => {
+        const handler = (event: MessageEvent<WorkerResponse>): void => {
+          if (event.data.id === payload.id) {
+            worker.removeEventListener("message", handler);
+            resolve(event.data);
+          }
+        };
+        worker.addEventListener("message", handler);
+        worker.postMessage(payload);
+      });
+
+    const askUnknown = (payload: Record<string, unknown>): Promise<WorkerResponse> =>
+      new Promise((resolve) => {
+        const handler = (event: MessageEvent<WorkerResponse>): void => {
+          if (event.data.type === "error") {
+            worker.removeEventListener("message", handler);
+            resolve(event.data);
+          }
+        };
+        worker.addEventListener("message", handler);
+        worker.postMessage(payload);
+      });
+
+    const pong = await ask({ type: "ping", id: `${Date.now()}-ping` });
+    const tensorRoundtrip = await ask({
+      type: "tensor-roundtrip",
+      id: `${Date.now()}-tensor-roundtrip`,
+      tensor: { shape: [1, 1, 1, 2] as const, values: [2, 4] },
+    });
+    const unknown = await askUnknown({
+      type: "not-a-real-message",
+      id: `${Date.now()}-unknown`,
+    });
+
+    worker.terminate();
+    return { pong, tensorRoundtrip, unknown };
+  });
+
+  expect(result.pong.type).toBe("pong");
+
+  expect(result.tensorRoundtrip.type).toBe("tensor-roundtrip-result");
+  if (result.tensorRoundtrip.type !== "tensor-roundtrip-result") {
+    throw new Error("Expected tensor-roundtrip-result response.");
+  }
+  expect(result.tensorRoundtrip.ok).toBeTruthy();
+
+  expect(result.unknown.type).toBe("error");
+  if (result.unknown.type !== "error") {
+    throw new Error("Expected worker error response.");
+  }
+  expect(typeof result.unknown.message).toBe("string");
+  expect(result.unknown.message.length).toBeGreaterThan(0);
+});
