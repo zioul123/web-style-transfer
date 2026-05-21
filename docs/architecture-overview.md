@@ -253,33 +253,72 @@ Fixture generation scripts in `python-reference/` provide deterministic baseline
 
 ---
 
-## 10. Architectural “fit” review: what appears misplaced
+## 10. Architectural fit review (May 21, 2026)
 
-These are not defects, but strong candidates for follow-up cleanup:
+The two highest-priority refactors from the previous version of this document have been addressed in code:
 
-1. **`runUnary` ownership**
-   - currently exported from `firstPoolOptimizer.ts`; should likely move to runtime facade.
-2. **UI-heavy orchestration in `App.tsx`**
-   - image transforms, worker protocol calls, and run loop should be split into feature modules/hooks.
-3. **Large `messageRouter.ts` tensor-op branch**
-   - extract handler modules to reduce complexity and improve readability.
-4. **Protocol type sprawl in one file**
-   - split `src/types.ts` into protocol submodules.
-5. **Layer schedule/config duplication risk**
-   - pipeline schedules are centralized, but UI/default tap indices still live separately.
-6. **Inconsistent response helper usage**
-   - router partially bypasses helper wrappers despite having shared response helpers.
+1. **`runUnary` ownership moved to runtime** ✅
+   - `runUnary` now lives in `src/ml/worker/runtime/computeContext.ts`.
+   - Both optimization pipelines and `tensorOpRouter` import it from runtime.
+   - `firstPoolOptimizer.ts` no longer owns cross-cutting runtime helpers.
+
+2. **`tensor-op` routing extracted from `messageRouter.ts`** ✅
+   - `src/ml/worker/main-thread-protocol/tensorOpRouter.ts` now owns tensor-op dispatch.
+   - `messageRouter.ts` delegates tensor-op requests to this dedicated router.
+   - The top-level router is materially smaller and easier to scan.
+
+Additional previously-suggested refactors are also now implemented:
+
+- **Protocol type sprawl**: resolved by splitting into `src/types/worker-protocol/{core,messages,pipelines,tensor-ops}.ts`, with `src/types.ts` as a barrel export.
+- **UI-heavy orchestration in `App.tsx`**: largely addressed by `src/features/style-transfer/hooks/useStyleTransferController.ts`, with `App.tsx` now mainly composing UI and controller state.
+
+Still-open architecture concerns are now narrower and are listed as concrete follow-up tasks in section 11.
 
 ---
 
-## 11. Suggested next refactor slice (incremental)
+## 11. Suggested follow-up refactor tasks (remaining confusion points)
 
-A low-risk sequence would be:
+### Issue: Style/content tap indices are duplicated across modules and currently offset by one between UI/controller defaults and canonical VGG constants.
 
-1. Move shared worker compute helpers (`runUnary` + context) into `runtime/computeContext.ts`.
-2. Split tensor-op handling from `messageRouter.ts`.
-3. Extract `useStyleTransferController` from `App.tsx` (worker protocol + run loop + state transitions).
-4. Move image conversion utilities into `src/ml/io/` or `src/features/style-transfer/utils/`.
-5. Split protocol types into multiple files while preserving exported unions.
+:::task-stub{title="Unify VGG tap index definitions and eliminate offset drift"}
+Create a single source of truth for style/content tap layer indices under `src/ml/constants/vgg19.ts`, and make `src/features/style-transfer/hooks/useStyleTransferController.ts` consume that source directly.
 
-This would preserve behavior while making ownership boundaries clearer for future optimization work.
+Steps:
+1. Locate all tap-index definitions and usages:
+   - `src/ml/constants/vgg19.ts` (`VGG19_STYLE_LAYER_INDICES`, `VGG19_CONTENT_LAYER_INDEX`)
+   - `src/features/style-transfer/hooks/useStyleTransferController.ts` (`STYLE_LAYER_INDICES`, `CONTENT_LAYER_INDEX`)
+   - Any payload builders that pass `styleLayerIndices` / `contentLayerIndex`.
+2. Decide and document one canonical indexing scheme (e.g., pre-ReLU conv index, post-ReLU feature index, or schedule index) and encode that meaning in type names/comments.
+3. Replace local literals in the controller with imported constants or a small mapping helper that makes any intentional transform explicit.
+4. Add validation/assertion at request-build time so impossible index combinations fail fast with a clear error.
+5. Update architecture/docs where tap-index semantics are described so future contributors do not reintroduce off-by-one conversions.
+:::
+
+### Issue: Worker request/response posting patterns are still mixed between raw `postResponse` calls and response helper wrappers, which makes error-path behavior harder to reason about.
+
+:::task-stub{title="Standardize worker response emission through shared helper APIs"}
+Normalize message emission in `src/ml/worker/main-thread-protocol/` so success/error pathways use a consistent helper surface.
+
+Steps:
+1. Audit `messageRouter.ts` and `tensorOpRouter.ts` for direct `postResponse(...)` calls and categorize them by response type (`error`, `tensor-op-result`, pipeline result).
+2. Expand `responses.ts` only as needed to cover missing cases with explicit, narrow helper signatures.
+3. Replace ad-hoc response construction with helper calls, preserving existing payload shapes.
+4. Ensure the default/unknown request path and exception path share a uniform error envelope.
+5. Add a small protocol-focused test (or extend existing worker protocol tests) that verifies representative success + failure responses still match `WorkerResponse` unions.
+:::
+
+### Issue: Runtime op execution still relies on per-op GPU→CPU readback (`runUnaryShader`) in many paths, making control flow and performance tradeoffs hard to follow.
+
+:::task-stub{title="Introduce explicit GPU-resident execution boundaries in worker runtime"}
+Refactor runtime execution to model buffer-resident intermediate tensors and explicit readback boundaries, improving both readability and future performance work.
+
+Steps:
+1. In `src/ml/worker/runtime/`, define a minimal intermediate representation for GPU-resident tensor handles (buffer + shape metadata + lifecycle ownership).
+2. Add helper APIs in `computeContext.ts` for:
+   - op-to-op chaining without immediate readback,
+   - explicit scalar readback points (loss extraction),
+   - explicit image snapshot readback points (preview/final output).
+3. Migrate one constrained path first (e.g., first-pool optimizer or a short style-transfer segment) to prove API clarity before broad rollout.
+4. Update buffer-pool ownership/release rules to prevent leaks when handles survive across multiple ops.
+5. Document the new boundary model in `docs/architecture-overview.md` and/or runtime module docs so contributors can reason about when data is on GPU vs CPU.
+:::
