@@ -147,9 +147,13 @@ export const runFirstPoolOptimizer = async (
   );
   const contentRelu2 = await runReluForward(runUnary, contentConv2);
 
-  let inputValues = new Float32Array(payload.initialInputValues);
+  let inputHandle = acquireTensorHandleFromCpu(
+    payload.inputShape,
+    new Float32Array(payload.initialInputValues),
+  );
   const losses: number[] = [];
   for (let step = 0; step < payload.steps; step += 1) {
+    const inputValues = await readImageSnapshotBoundary(inputHandle);
     const norm = await runNormalizeForward(
       getGpuDevice(),
       runUnary,
@@ -391,7 +395,6 @@ export const runFirstPoolOptimizer = async (
       BUFFER_USAGE_UNIFORM_COPY_DST,
     );
 
-    const inputHandle = acquireTensorHandleFromCpu(payload.inputShape, inputValues);
     const gradHandle = acquireTensorHandleFromCpu(payload.inputShape, gInput);
     const lrScaledGradHandle = await chainTensorScalarOp(
       gradHandle,
@@ -408,9 +411,9 @@ export const runFirstPoolOptimizer = async (
     releaseTensorHandle(lrScaledGradHandle);
     const clampedHandle = await chainClamp01(nextHandle);
     releaseTensorHandle(nextHandle);
-    const clampedSnapshot = await readImageSnapshotBoundary(clampedHandle);
-    inputValues = new Float32Array(clampedSnapshot);
-    releaseTensorHandle(clampedHandle);
+    inputHandle = clampedHandle;
   }
-  return { losses, finalValues: Array.from(inputValues) };
+  const finalValues = await readImageSnapshotBoundary(inputHandle);
+  releaseTensorHandle(inputHandle);
+  return { losses, finalValues: Array.from(finalValues) };
 };
