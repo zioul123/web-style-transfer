@@ -36,7 +36,7 @@ Data flow is intentionally message-driven:
 
 Important local constants and knobs include:
 
-- Style/content tap indices (`STYLE_LAYER_INDICES`, `CONTENT_LAYER_INDEX`).
+- Style/content tap indices from `src/ml/constants/vgg19.ts` (`VGG19_RELU_TAP_STYLE_LAYER_INDICES`, `VGG19_RELU_TAP_CONTENT_LAYER_INDEX`) using torch `vgg19.features` post-ReLU indices.
 - Resolution presets.
 - Optimizer mode and hyperparameters (`sgd`, `adam`, `lbfgs`).
 - Fusion flags (`fusedOps`, `superFusedOps`).
@@ -278,21 +278,10 @@ Still-open architecture concerns are now narrower and are listed as concrete fol
 
 ## 11. Suggested follow-up refactor tasks (remaining confusion points)
 
-### Issue: Style/content tap indices are duplicated across modules and currently offset by one between UI/controller defaults and canonical VGG constants.
+### Update: VGG tap indices are now canonicalized and validated at request build time.
 
-:::task-stub{title="Unify VGG tap index definitions and eliminate offset drift"}
-Create a single source of truth for style/content tap layer indices under `src/ml/constants/vgg19.ts`, and make `src/features/style-transfer/hooks/useStyleTransferController.ts` consume that source directly.
+Style/content tap indices now live in `src/ml/constants/vgg19.ts` and are consumed directly by the style transfer controller. The canonical scheme is documented as torch `vgg19.features` **post-ReLU layer indices** (`relu1_1`, `relu2_1`, `relu3_1`, `relu4_1`, `relu5_1`, and `relu4_2`). A shared assertion helper (`assertValidVgg19ReluTapIndices`) fails fast on invalid or duplicate tap-index combinations before request dispatch.
 
-Steps:
-1. Locate all tap-index definitions and usages:
-   - `src/ml/constants/vgg19.ts` (`VGG19_STYLE_LAYER_INDICES`, `VGG19_CONTENT_LAYER_INDEX`)
-   - `src/features/style-transfer/hooks/useStyleTransferController.ts` (`STYLE_LAYER_INDICES`, `CONTENT_LAYER_INDEX`)
-   - Any payload builders that pass `styleLayerIndices` / `contentLayerIndex`.
-2. Decide and document one canonical indexing scheme (e.g., pre-ReLU conv index, post-ReLU feature index, or schedule index) and encode that meaning in type names/comments.
-3. Replace local literals in the controller with imported constants or a small mapping helper that makes any intentional transform explicit.
-4. Add validation/assertion at request-build time so impossible index combinations fail fast with a clear error.
-5. Update architecture/docs where tap-index semantics are described so future contributors do not reintroduce off-by-one conversions.
-:::
 
 ### Issue: Worker request/response posting patterns are still mixed between raw `postResponse` calls and response helper wrappers, which makes error-path behavior harder to reason about.
 
