@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import type { WorkerRequest, WorkerResponse } from "../../../types";
+import {
+  VGG19_RELU_TAP_CONTENT_LAYER_INDEX,
+  VGG19_RELU_TAP_STYLE_LAYER_INDICES,
+  assertValidVgg19ReluTapIndices,
+} from "../../../ml/constants/vgg19";
 import type {
   FullWeights,
   UseStyleTransferControllerResult,
 } from "../types/controller";
-
-const STYLE_LAYER_INDICES: number[] = [1, 6, 11, 20, 29];
-const CONTENT_LAYER_INDEX = 22;
 
 const createMessageId = (): string =>
   `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -220,6 +222,10 @@ export const useStyleTransferController =
         inputTensor === null
       )
         return;
+      assertValidVgg19ReluTapIndices(
+        VGG19_RELU_TAP_STYLE_LAYER_INDICES,
+        VGG19_RELU_TAP_CONTENT_LAYER_INDEX,
+      );
       workerRef.current.postMessage({
         type: "run-style-transfer",
         id: createMessageId(),
@@ -240,8 +246,8 @@ export const useStyleTransferController =
         styleImageValues: styleTensor,
         mean: [0.485, 0.456, 0.406],
         std: [0.229, 0.224, 0.225],
-        styleLayerIndices: STYLE_LAYER_INDICES,
-        contentLayerIndex: CONTENT_LAYER_INDEX,
+        styleLayerIndices: Array.from(VGG19_RELU_TAP_STYLE_LAYER_INDICES),
+        contentLayerIndex: VGG19_RELU_TAP_CONTENT_LAYER_INDEX,
         weights,
         contentWeight,
         styleWeight,
