@@ -6,11 +6,11 @@ This document explains the current architecture of the application end-to-end, f
 
 The app is a **browser-first style transfer system** with three major layers:
 
-1. **UI + orchestration on main thread** (`src/App.tsx`)  
+1. **UI + orchestration on main thread** (`src/App.tsx`)
    - owns controls, image loading, and iterative run loop state.
-2. **Typed request/response protocol** (`src/types.ts`)  
+2. **Typed request/response protocol** (`src/types.ts`)
    - defines all worker messages for op-level tests and pipeline-level optimization runs.
-3. **Worker-side compute stack** (`src/styleTransfer.worker.ts` + `src/ml/worker/**`)  
+3. **Worker-side compute stack** (`src/styleTransfer.worker.ts` + `src/ml/worker/**`)
    - owns WebGPU device lifecycle, message routing, kernels, runtime helpers, and optimization pipelines.
 
 Data flow is intentionally message-driven:
@@ -227,13 +227,13 @@ Some related layer metadata still appears in other modules (e.g., UI tap indices
 
 ## 8. End-to-end execution sequence
 
-1. App loads weights and user images.  
-2. App converts content/style to normalized tensor value arrays.  
-3. App initializes worker and WebGPU device (`init-webgpu`).  
-4. App sends `run-style-transfer` with chunk step count.  
-5. Worker router forwards to `runStyleTransfer`.  
-6. Pipeline executes forward/loss/backward/update loop for `steps`.  
-7. Worker returns losses + updated image tensor + timing stats.  
+1. App loads weights and user images.
+2. App converts content/style to normalized tensor value arrays.
+3. App initializes worker and WebGPU device (`init-webgpu`).
+4. App sends `run-style-transfer` with chunk step count.
+5. Worker router forwards to `runStyleTransfer`.
+6. Pipeline executes forward/loss/backward/update loop for `steps`.
+7. Worker returns losses + updated image tensor + timing stats.
 8. App renders updated preview and may enqueue next chunk while running.
 
 ---
@@ -257,17 +257,17 @@ Fixture generation scripts in `python-reference/` provide deterministic baseline
 
 These are not defects, but strong candidates for follow-up cleanup:
 
-1. **`runUnary` ownership**  
+1. **`runUnary` ownership**
    - currently exported from `firstPoolOptimizer.ts`; should likely move to runtime facade.
-2. **UI-heavy orchestration in `App.tsx`**  
+2. **UI-heavy orchestration in `App.tsx`**
    - image transforms, worker protocol calls, and run loop should be split into feature modules/hooks.
-3. **Large `messageRouter.ts` tensor-op branch**  
+3. **Large `messageRouter.ts` tensor-op branch**
    - extract handler modules to reduce complexity and improve readability.
-4. **Protocol type sprawl in one file**  
+4. **Protocol type sprawl in one file**
    - split `src/types.ts` into protocol submodules.
-5. **Layer schedule/config duplication risk**  
+5. **Layer schedule/config duplication risk**
    - pipeline schedules are centralized, but UI/default tap indices still live separately.
-6. **Inconsistent response helper usage**  
+6. **Inconsistent response helper usage**
    - router partially bypasses helper wrappers despite having shared response helpers.
 
 ---
@@ -276,10 +276,10 @@ These are not defects, but strong candidates for follow-up cleanup:
 
 A low-risk sequence would be:
 
-1. Move shared worker compute helpers (`runUnary` + context) into `runtime/computeContext.ts`.  
-2. Split tensor-op handling from `messageRouter.ts`.  
-3. Extract `useStyleTransferController` from `App.tsx` (worker protocol + run loop + state transitions).  
-4. Move image conversion utilities into `src/ml/io/` or `src/features/style-transfer/utils/`.  
+1. Move shared worker compute helpers (`runUnary` + context) into `runtime/computeContext.ts`.
+2. Split tensor-op handling from `messageRouter.ts`.
+3. Extract `useStyleTransferController` from `App.tsx` (worker protocol + run loop + state transitions).
+4. Move image conversion utilities into `src/ml/io/` or `src/features/style-transfer/utils/`.
 5. Split protocol types into multiple files while preserving exported unions.
 
 This would preserve behavior while making ownership boundaries clearer for future optimization work.

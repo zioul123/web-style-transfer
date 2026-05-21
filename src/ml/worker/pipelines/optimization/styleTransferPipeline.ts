@@ -31,11 +31,14 @@ import {
   BUFFER_USAGE_UNIFORM_COPY_DST,
   MAP_MODE_READ,
 } from "../../runtime/gpuFlags";
-import { runBinaryOp, runClamp, runScalarBinaryOp } from "../../runtime/shaderRunner";
+import {
+  runBinaryOp,
+  runClamp,
+  runScalarBinaryOp,
+} from "../../runtime/shaderRunner";
 import { getGpuDevice } from "../../runtime/deviceState";
 import { SUPER_FUSED_BLOCKS, POOL_LAYERS, RELU_LAYERS } from "./layerSchedules";
 import { runUnary } from "../../runtime/computeContext";
-
 
 export const runStyleTransfer = async (
   payload: Extract<WorkerRequest, { type: "run-style-transfer" }>,
@@ -662,7 +665,6 @@ export const runStyleTransfer = async (
   };
 };
 
-
 const readGpuBuffer = async (
   device: GPUDevice,
   sourceBuffer: GPUBuffer,
@@ -699,7 +701,9 @@ const runSuperFusedConvReluBlock = async (
 }> => {
   if (getGpuDevice() === null) throw new Error("WebGPU is not initialized.");
   const device = getGpuDevice();
-  if (device === null) { throw new Error("WebGPU device is not initialized."); }
+  if (device === null) {
+    throw new Error("WebGPU device is not initialized.");
+  }
   const reluOutByLayer: Record<number, Float32Array> = {};
   let shape: readonly [number, number, number, number] = inputShape;
   let currentCount = input.length;

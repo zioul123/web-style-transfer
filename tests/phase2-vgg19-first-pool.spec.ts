@@ -32,7 +32,7 @@ test("phase 2 vgg19 truncated parity through first pool", async ({ page }) => {
       const text = await response.text();
       try {
         return JSON.parse(text);
-      } catch (_error) {
+      } catch {
         return null;
       }
     };

@@ -18,7 +18,7 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
       try {
         JSON.parse(await response.text());
         return true;
-      } catch (_error) {
+      } catch {
         return false;
       }
     };
