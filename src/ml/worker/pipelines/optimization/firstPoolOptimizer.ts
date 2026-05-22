@@ -45,6 +45,10 @@ import { runConv2dForwardBuffer } from "../../ops/convolution/conv2d.run";
 import { runReluForwardBuffer } from "../../ops/relu/relu.run";
 import { runMaxPool2dForwardBuffer } from "../../ops/pooling/maxpool.run";
 import { runGramMatrixBuffer } from "../../ops/gram/gram.run";
+import { runReluBackward } from "../../ops/relu/relu.run";
+import { runMaxPool2dBackward } from "../../ops/pooling/maxpool.run";
+import { runConv2dBackwardInput } from "../../ops/convolution/conv2d.run";
+import { runNormalizeBackward } from "../../ops/normalization/normalize.run";
 
 type TensorShape4D = readonly [number, number, number, number];
 
@@ -313,6 +317,7 @@ export const runFirstPoolOptimizer = async (
   try {
     for (let step = 0; step < payload.steps; step += 1) {
     const stepOwnedBuffers: GpuBufferRef[] = [];
+    try {
     const inputBuffer = uploadToOwnedBuffer(device, inputValues);
     stepOwnedBuffers.push(inputBuffer);
     const normBuffer = await runNormalizeForwardBuffer(
@@ -533,6 +538,102 @@ export const runFirstPoolOptimizer = async (
       const weightedLegacyStyle = new Float32Array(legacyStyle.length);
       for (let i = 0; i < legacyStyle.length; i += 1) weightedLegacyStyle[i] = legacyStyle[i] * payload.styleWeightConv1;
       assertNear("gStyle1Relu", migratedStyle, weightedLegacyStyle);
+
+      const legacyStyle3 = await runStyleLossBackward(
+        device,
+        runUnary,
+        relu3,
+        [1, 128, 8, 8],
+        context.persistent.styleRelu3,
+        BUFFER_USAGE_STORAGE_COPY_DST,
+        BUFFER_USAGE_UNIFORM_COPY_DST,
+      );
+      const legacyStyle3Weighted = new Float32Array(legacyStyle3.length);
+      for (let i = 0; i < legacyStyle3.length; i += 1) legacyStyle3Weighted[i] = legacyStyle3[i] * payload.styleWeightConv3;
+      const legacyGStyle3 = await runReluBackward(device, runUnary, conv3, legacyStyle3Weighted);
+      const legacyGPool = await runConv2dBackwardInput(
+        device,
+        runUnary,
+        [1, 64, 8, 8],
+        legacyGStyle3,
+        context.persistent.conv3Weight.values,
+        context.persistent.conv3Weight.shape,
+        BUFFER_USAGE_STORAGE_COPY_DST,
+        BUFFER_USAGE_UNIFORM_COPY_DST,
+      );
+      const legacyGRelu2 = await runMaxPool2dBackward(
+        device,
+        runUnary,
+        relu2,
+        [1, 64, 16, 16],
+        legacyGPool,
+        BUFFER_USAGE_STORAGE_COPY_DST,
+        BUFFER_USAGE_UNIFORM_COPY_DST,
+      );
+      const legacyGConv2FromPool = await runReluBackward(
+        device,
+        runUnary,
+        conv2,
+        legacyGRelu2,
+      );
+      const legacyContent = await runContentLossBackwardBuffer(
+        relu2Buffer,
+        context.persistent.contentRelu2Buffer,
+        elementCount([1, 64, 16, 16]),
+      );
+      const legacyContentWeighted = runScalarMulBuffer(
+        device,
+        legacyContent,
+        elementCount([1, 64, 16, 16]),
+        payload.contentWeight,
+      );
+      stepOwnedBuffers.push(legacyContent, legacyContentWeighted);
+      const legacyContentWeightedArray = await readGpuTensor(device, legacyContentWeighted, [1, 64, 16, 16]);
+      const legacyContentArray = await runReluBackward(
+        device,
+        runUnary,
+        conv2,
+        legacyContentWeightedArray,
+      );
+      const legacyGConv2Total = new Float32Array(legacyGConv2FromPool.length);
+      for (let i = 0; i < legacyGConv2Total.length; i += 1) legacyGConv2Total[i] = legacyGConv2FromPool[i] + legacyContentArray[i];
+      const migratedGConv2Total = await readGpuTensor(device, gConv2TotalBuffer, [1, 64, 16, 16]);
+      assertNear("gConv2Total", migratedGConv2Total, legacyGConv2Total);
+
+      const legacyRelu1 = await runConv2dBackwardInput(
+        device,
+        runUnary,
+        [1, 64, 16, 16],
+        legacyGConv2Total,
+        context.persistent.conv2Weight.values,
+        context.persistent.conv2Weight.shape,
+        BUFFER_USAGE_STORAGE_COPY_DST,
+        BUFFER_USAGE_UNIFORM_COPY_DST,
+      );
+      const legacyConv1FromConv2 = await runReluBackward(device, runUnary, conv1, legacyRelu1);
+      const legacyStyle1 = await runReluBackward(device, runUnary, conv1, weightedLegacyStyle);
+      const legacyConv1Total = new Float32Array(legacyConv1FromConv2.length);
+      for (let i = 0; i < legacyConv1Total.length; i += 1) legacyConv1Total[i] = legacyConv1FromConv2[i] + legacyStyle1[i];
+      const legacyGNorm = await runConv2dBackwardInput(
+        device,
+        runUnary,
+        payload.inputShape,
+        legacyConv1Total,
+        context.persistent.conv1Weight.values,
+        context.persistent.conv1Weight.shape,
+        BUFFER_USAGE_STORAGE_COPY_DST,
+        BUFFER_USAGE_UNIFORM_COPY_DST,
+      );
+      const legacyGInput = await runNormalizeBackward(
+        device,
+        runUnary,
+        legacyGNorm,
+        payload.inputShape,
+        payload.std,
+        BUFFER_USAGE_STORAGE_COPY_DST,
+        BUFFER_USAGE_UNIFORM_COPY_DST,
+      );
+      assertNear("gInput", gInput, legacyGInput);
     }
 
     const next = new Float32Array(inputValues.length);
@@ -544,7 +645,9 @@ export const runFirstPoolOptimizer = async (
     inputValues = next;
     context.stepTemps.gInput = gInput;
     assertShape("gInput", gInput, payload.inputShape);
-    for (const ownedBuffer of stepOwnedBuffers) releaseOwnedBuffer(ownedBuffer);
+    } finally {
+      for (const ownedBuffer of stepOwnedBuffers) releaseOwnedBuffer(ownedBuffer);
+    }
     }
     return { losses, finalValues: Array.from(inputValues) };
   } finally {
