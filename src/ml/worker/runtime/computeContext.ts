@@ -160,7 +160,7 @@ export const runUnary = (
  * The caller gets a new runtime-owned tensor handle and can keep chaining
  * GPU-side ops until they intentionally cross a readback boundary.
  */
-const runUnaryOnHandle = (
+export const runUnaryOnHandle = (
   input: RuntimeTensorHandle,
   code: string,
   extraEntries: GPUBindGroupEntry[] = [],
