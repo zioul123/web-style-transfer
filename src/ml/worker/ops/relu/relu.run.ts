@@ -33,10 +33,30 @@ export const runReluForward = async (
 ): Promise<Float32Array> => {
   const inputBuffer = uploadToOwnedBuffer(getGpuDevice(), input);
   const outBuffer = await runReluForwardBuffer(inputBuffer, input.length);
-  const output = await readGpuBufferToArray(getGpuDevice(), outBuffer.buffer, input.length);
+  const output = await readGpuBufferToArray(
+    getGpuDevice(),
+    outBuffer.buffer,
+    input.length,
+  );
   releaseOwnedBuffer(inputBuffer);
   releaseOwnedBuffer(outBuffer);
   return output;
+};
+
+export const runReluBackwardBuffer = async (
+  input: GpuBufferRef,
+  gradOut: GpuBufferRef,
+  count: number,
+): Promise<GpuBufferRef> => {
+  return borrowedBuffer(
+    runUnaryShaderToBuffer(
+      getGpuDevice(),
+      makeReluBackwardShader(count),
+      input.buffer,
+      count,
+      [{ binding: 1, resource: { buffer: gradOut.buffer } }],
+    ),
+  );
 };
 
 export const runReluBackward = async (
@@ -51,15 +71,16 @@ export const runReluBackward = async (
   gradOut: Float32Array,
 ): Promise<Float32Array> => {
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
-  const gradOutBuffer: GPUBuffer = gpuDevice.createBuffer({
-    size: gradOut.byteLength,
-    usage: 0x0080 | 0x0008,
-  });
-  gpuDevice.queue.writeBuffer(gradOutBuffer, 0, gradOut);
-  return _runUnaryShader(
-    makeReluBackwardShader(input.length),
-    input,
+  const inputBuffer = uploadToOwnedBuffer(gpuDevice, input);
+  const gradOutBuffer = uploadToOwnedBuffer(gpuDevice, gradOut);
+  const outputBuffer = await runReluBackwardBuffer(
+    inputBuffer,
+    gradOutBuffer,
     input.length,
-    [{ binding: 1, resource: { buffer: gradOutBuffer } }],
   );
+  const output = await readGpuBufferToArray(gpuDevice, outputBuffer.buffer, input.length);
+  releaseOwnedBuffer(inputBuffer);
+  releaseOwnedBuffer(gradOutBuffer);
+  releaseOwnedBuffer(outputBuffer);
+  return output;
 };
