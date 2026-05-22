@@ -1,9 +1,17 @@
-import { runGramMatrix, runGramBackward } from "../gram/gram.run";
-import { runContentLossBackward } from "./contentLoss.run";
+import {
+  runGramBackwardBuffer,
+  runGramMatrixBuffer,
+} from "../gram/gram.run";
+import { runContentLossBackwardBuffer } from "./contentLoss.run";
+import {
+  readGpuBufferToArray,
+  releaseOwnedBuffer,
+  uploadToOwnedBuffer,
+} from "../../runtime/bufferKernels";
 
 export const runStyleLossBackward = async (
   gpuDevice: GPUDevice | null,
-  runUnaryShader: (
+  _runUnaryShader: (
     code: string,
     input: Float32Array,
     outCount: number,
@@ -12,44 +20,32 @@ export const runStyleLossBackward = async (
   input: Float32Array,
   shape: readonly [number, number, number, number],
   target: Float32Array,
-  BUFFER_USAGE_STORAGE_COPY_DST: number,
-  BUFFER_USAGE_UNIFORM_COPY_DST: number,
+  _BUFFER_USAGE_STORAGE_COPY_DST: number,
+  _BUFFER_USAGE_UNIFORM_COPY_DST: number,
 ): Promise<Float32Array> => {
-  const inputGram = await runGramMatrix(
-    gpuDevice,
-    runUnaryShader,
-    input,
-    shape,
-    BUFFER_USAGE_UNIFORM_COPY_DST,
-  );
-  const targetGram = await runGramMatrix(
-    gpuDevice,
-    runUnaryShader,
-    target,
-    shape,
-    BUFFER_USAGE_UNIFORM_COPY_DST,
-  );
-  const gramGrad = await runContentLossBackward(
-    gpuDevice,
-    runUnaryShader,
+  const inputBuffer = uploadToOwnedBuffer(gpuDevice, input);
+  const targetBuffer = uploadToOwnedBuffer(gpuDevice, target);
+  const inputGram = await runGramMatrixBuffer(inputBuffer, shape);
+  const targetGram = await runGramMatrixBuffer(targetBuffer, shape);
+  const gramGrad = await runContentLossBackwardBuffer(
     inputGram,
     targetGram,
-    BUFFER_USAGE_STORAGE_COPY_DST,
+    shape[1] * shape[1],
   );
-  return runGramBackward(
-    gpuDevice,
-    runUnaryShader,
-    input,
-    shape,
-    gramGrad,
-    BUFFER_USAGE_STORAGE_COPY_DST,
-    BUFFER_USAGE_UNIFORM_COPY_DST,
-  );
+  const gradInBuffer = await runGramBackwardBuffer(inputBuffer, shape, gramGrad);
+  const out = await readGpuBufferToArray(gpuDevice, gradInBuffer.buffer, input.length);
+  releaseOwnedBuffer(inputBuffer);
+  releaseOwnedBuffer(targetBuffer);
+  releaseOwnedBuffer(inputGram);
+  releaseOwnedBuffer(targetGram);
+  releaseOwnedBuffer(gramGrad);
+  releaseOwnedBuffer(gradInBuffer);
+  return out;
 };
 
 export const runStyleLossBackwardFromTargetGram = async (
   gpuDevice: GPUDevice | null,
-  runUnaryShader: (
+  _runUnaryShader: (
     code: string,
     input: Float32Array,
     outCount: number,
@@ -58,30 +54,23 @@ export const runStyleLossBackwardFromTargetGram = async (
   input: Float32Array,
   shape: readonly [number, number, number, number],
   targetGram: Float32Array,
-  BUFFER_USAGE_STORAGE_COPY_DST: number,
-  BUFFER_USAGE_UNIFORM_COPY_DST: number,
+  _BUFFER_USAGE_STORAGE_COPY_DST: number,
+  _BUFFER_USAGE_UNIFORM_COPY_DST: number,
 ): Promise<Float32Array> => {
-  const inputGram = await runGramMatrix(
-    gpuDevice,
-    runUnaryShader,
-    input,
-    shape,
-    BUFFER_USAGE_UNIFORM_COPY_DST,
-  );
-  const gramGrad = await runContentLossBackward(
-    gpuDevice,
-    runUnaryShader,
+  const inputBuffer = uploadToOwnedBuffer(gpuDevice, input);
+  const targetGramBuffer = uploadToOwnedBuffer(gpuDevice, targetGram);
+  const inputGram = await runGramMatrixBuffer(inputBuffer, shape);
+  const gramGrad = await runContentLossBackwardBuffer(
     inputGram,
-    targetGram,
-    BUFFER_USAGE_STORAGE_COPY_DST,
+    targetGramBuffer,
+    shape[1] * shape[1],
   );
-  return runGramBackward(
-    gpuDevice,
-    runUnaryShader,
-    input,
-    shape,
-    gramGrad,
-    BUFFER_USAGE_STORAGE_COPY_DST,
-    BUFFER_USAGE_UNIFORM_COPY_DST,
-  );
+  const gradInBuffer = await runGramBackwardBuffer(inputBuffer, shape, gramGrad);
+  const out = await readGpuBufferToArray(gpuDevice, gradInBuffer.buffer, input.length);
+  releaseOwnedBuffer(inputBuffer);
+  releaseOwnedBuffer(targetGramBuffer);
+  releaseOwnedBuffer(inputGram);
+  releaseOwnedBuffer(gramGrad);
+  releaseOwnedBuffer(gradInBuffer);
+  return out;
 };
