@@ -249,30 +249,25 @@ export const runFirstPoolOptimizer = async (
       payload.styleWeightConv1;
     releaseTensorHandle(relu1GramForLossHandle);
     releaseTensorHandle(styleRelu1GramForLossHandle);
+    const relu3GramInputHandle = acquireTensorHandleFromCpu([1, 128, 8, 8], relu3);
+    const relu3GramHandle = await gramHandle(
+      relu3GramInputHandle,
+      [1, 128, 8, 8],
+      [1, 1, 128, 128],
+    );
+    releaseTensorHandle(relu3GramInputHandle);
+    const styleRelu3GramInputHandle = acquireTensorHandleFromCpu([1, 128, 8, 8], styleRelu3);
+    const styleRelu3GramHandle = await gramHandle(
+      styleRelu3GramInputHandle,
+      [1, 128, 8, 8],
+      [1, 1, 128, 128],
+    );
+    releaseTensorHandle(styleRelu3GramInputHandle);
     const styleLoss3 =
-      (await runMse(
-        getGpuDevice(),
-        acquireReusableBuffer,
-        releaseReusableBuffer,
-        await runGramMatrix(
-          getGpuDevice(),
-          runUnary,
-          relu3,
-          [1, 128, 8, 8],
-          BUFFER_USAGE_UNIFORM_COPY_DST,
-        ),
-        await runGramMatrix(
-          getGpuDevice(),
-          runUnary,
-          styleRelu3,
-          [1, 128, 8, 8],
-          BUFFER_USAGE_UNIFORM_COPY_DST,
-        ),
-        BUFFER_USAGE_STORAGE_COPY_DST,
-        BUFFER_USAGE_STORAGE_COPY_SRC,
-        BUFFER_USAGE_MAP_READ_COPY_DST,
-        MAP_MODE_READ,
-      )) * payload.styleWeightConv3;
+      (await mseScalarFromHandles(relu3GramHandle, styleRelu3GramHandle)) *
+      payload.styleWeightConv3;
+    releaseTensorHandle(relu3GramHandle);
+    releaseTensorHandle(styleRelu3GramHandle);
     const contentLoss =
       (await runMse(
         getGpuDevice(),
