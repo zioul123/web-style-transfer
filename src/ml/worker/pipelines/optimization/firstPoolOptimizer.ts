@@ -15,7 +15,6 @@ import {
   runConv2dBackwardInput,
   runConv2dForward,
 } from "../../ops/convolution/conv2d.run";
-import { runGramMatrix } from "../../ops/gram/gram.run";
 import { runMse } from "../../ops/loss/mse.run";
 import { runContentLossBackward } from "../../ops/loss/contentLoss.run";
 import { runStyleLossBackward } from "../../ops/loss/styleLoss.run";

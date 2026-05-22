@@ -25,7 +25,30 @@ export const conv2dForwardHandle = async (input: RuntimeTensorHandle, inputShape
 export const reluForwardHandle = async (input: RuntimeTensorHandle, shape: RuntimeTensorShape): Promise<RuntimeTensorHandle> => toHandle(shape, await runReluForward(runUnary, await fromHandle(input)));
 export const maxPoolForwardHandle = async (input: RuntimeTensorHandle, inputShape: RuntimeTensorShape, outputShape: RuntimeTensorShape): Promise<RuntimeTensorHandle> => toHandle(outputShape, await runMaxPool2dForward(getGpuDevice(), runUnary, await fromHandle(input), inputShape, BUFFER_USAGE_UNIFORM_COPY_DST));
 export const gramHandle = async (input: RuntimeTensorHandle, inputShape: RuntimeTensorShape, gramShape: RuntimeTensorShape): Promise<RuntimeTensorHandle> => toHandle(gramShape, await runGramMatrix(getGpuDevice(), runUnary, await fromHandle(input), inputShape, BUFFER_USAGE_UNIFORM_COPY_DST));
-export const mseScalarFromHandles = async (a: RuntimeTensorHandle, b: RuntimeTensorHandle): Promise<number> => await runMse(getGpuDevice(), acquireReusableBuffer, releaseReusableBuffer, await fromHandle(a), await fromHandle(b), BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ);
+export const mseScalarFromHandles = async (
+  a: RuntimeTensorHandle,
+  b: RuntimeTensorHandle,
+): Promise<number> => {
+  const device = getGpuDevice();
+  if (device === null) throw new Error("WebGPU is not initialized.");
+  const aValues = await fromHandle(a);
+  await device.queue.onSubmittedWorkDone();
+  const bValues = await fromHandle(b);
+  await device.queue.onSubmittedWorkDone();
+  const aSnapshot = new Float32Array(aValues);
+  const bSnapshot = new Float32Array(bValues);
+  return await runMse(
+    device,
+    acquireReusableBuffer,
+    releaseReusableBuffer,
+    aSnapshot,
+    bSnapshot,
+    BUFFER_USAGE_STORAGE_COPY_DST,
+    BUFFER_USAGE_STORAGE_COPY_SRC,
+    BUFFER_USAGE_MAP_READ_COPY_DST,
+    MAP_MODE_READ,
+  );
+};
 export const styleLossBackwardHandle = async (input: RuntimeTensorHandle, inputShape: RuntimeTensorShape, targetValues: Float32Array): Promise<RuntimeTensorHandle> => toHandle(inputShape, await runStyleLossBackward(getGpuDevice(), runUnary, await fromHandle(input), inputShape, targetValues, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST));
 
 export const styleLossBackwardHandleFromTarget = async (input: RuntimeTensorHandle, inputShape: RuntimeTensorShape, target: RuntimeTensorHandle): Promise<RuntimeTensorHandle> =>
