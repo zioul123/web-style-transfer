@@ -15,19 +15,11 @@ import {
   runConv2dBackwardInput,
   runConv2dForward,
 } from "../../ops/convolution/conv2d.run";
-import { runMse } from "../../ops/loss/mse.run";
 import { runContentLossBackward } from "../../ops/loss/contentLoss.run";
 import { runStyleLossBackward } from "../../ops/loss/styleLoss.run";
 import {
-  acquireReusableBuffer,
-  releaseReusableBuffer,
-} from "../../runtime/bufferPool";
-import {
-  BUFFER_USAGE_MAP_READ_COPY_DST,
   BUFFER_USAGE_STORAGE_COPY_DST,
-  BUFFER_USAGE_STORAGE_COPY_SRC,
   BUFFER_USAGE_UNIFORM_COPY_DST,
-  MAP_MODE_READ,
 } from "../../runtime/gpuFlags";
 import { runBinaryOp, runScalarBinaryOp } from "../../runtime/shaderRunner";
 import { getGpuDevice } from "../../runtime/deviceState";
@@ -154,6 +146,10 @@ export const runFirstPoolOptimizer = async (
     payload.conv2Bias,
   );
   const contentRelu2 = await runReluForward(runUnary, contentConv2);
+  const contentRelu2Handle = acquireTensorHandleFromCpu(
+    [1, 64, 16, 16],
+    contentRelu2,
+  );
 
   let inputHandle = acquireTensorHandleFromCpu(
     payload.inputShape,
@@ -207,6 +203,9 @@ export const runFirstPoolOptimizer = async (
       [1, 64, 16, 16],
     );
     releaseTensorHandle(conv2CpuHandle);
+    const contentLoss =
+      (await mseScalarFromHandles(relu2Handle, contentRelu2Handle)) *
+      payload.contentWeight;
     const relu2 = await readImageSnapshotBoundary(relu2Handle);
     releaseTensorHandle(relu2Handle);
     const relu2CpuHandle = acquireTensorHandleFromCpu([1, 64, 16, 16], relu2);
@@ -302,18 +301,6 @@ export const runFirstPoolOptimizer = async (
       payload.styleWeightConv3;
     releaseTensorHandle(relu3GramHandle);
     releaseTensorHandle(styleRelu3GramHandle);
-    const contentLoss =
-      (await runMse(
-        getGpuDevice(),
-        acquireReusableBuffer,
-        releaseReusableBuffer,
-        relu2,
-        contentRelu2,
-        BUFFER_USAGE_STORAGE_COPY_DST,
-        BUFFER_USAGE_STORAGE_COPY_SRC,
-        BUFFER_USAGE_MAP_READ_COPY_DST,
-        MAP_MODE_READ,
-      )) * payload.contentWeight;
     losses.push(styleLoss1 + styleLoss3 + contentLoss);
 
     const relu1ForStyleGradHandle = acquireTensorHandleFromCpu(
@@ -478,5 +465,6 @@ export const runFirstPoolOptimizer = async (
   }
   const finalValues = await readImageSnapshotBoundary(inputHandle);
   releaseTensorHandle(inputHandle);
+  releaseTensorHandle(contentRelu2Handle);
   return { losses, finalValues: Array.from(finalValues) };
 };

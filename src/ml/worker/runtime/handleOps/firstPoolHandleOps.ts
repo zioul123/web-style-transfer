@@ -118,13 +118,8 @@ export const mseScalarFromHandles = async (
   a: RuntimeTensorHandle,
   b: RuntimeTensorHandle,
 ): Promise<number> => {
-  const device = getGpuDevice();
-  if (device === null) throw new Error("WebGPU is not initialized.");
-  await device.queue.onSubmittedWorkDone();
   const aValues = await fromHandle(a);
-  await device.queue.onSubmittedWorkDone();
   const bValues = await fromHandle(b);
-  await device.queue.onSubmittedWorkDone();
   if (aValues.length !== bValues.length) {
     throw new Error("mseScalarFromHandles expects equal-length tensors.");
   }
