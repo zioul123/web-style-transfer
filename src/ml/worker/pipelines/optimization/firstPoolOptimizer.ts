@@ -41,6 +41,7 @@ import {
   releaseTensorHandle,
   runUnary,
 } from "../../runtime/computeContext";
+import { conv2dForwardHandle, gramHandle, maxPoolForwardHandle, mseScalarFromHandles, normalizeForwardHandle, reluForwardHandle, styleLossBackwardHandle } from "../../runtime/handleOps/firstPoolHandleOps";
 
 export const runFirstPoolOptimizer = async (
   payload: Extract<WorkerRequest, { type: "run-first-pool-optimizer" }>,
@@ -153,73 +154,101 @@ export const runFirstPoolOptimizer = async (
   );
   const losses: number[] = [];
   for (let step = 0; step < payload.steps; step += 1) {
-    const inputValues = await readImageSnapshotBoundary(inputHandle);
-    const norm = await runNormalizeForward(
-      getGpuDevice(),
-      runUnary,
-      inputValues,
+    const normHandle = await normalizeForwardHandle(
+      inputHandle,
       payload.inputShape,
       payload.mean,
       payload.std,
-      BUFFER_USAGE_STORAGE_COPY_DST,
-      BUFFER_USAGE_UNIFORM_COPY_DST,
     );
-    const conv1 = await convForward(
-      norm,
+    const norm = await readImageSnapshotBoundary(normHandle);
+    releaseTensorHandle(normHandle);
+    const normCpuHandle = acquireTensorHandleFromCpu(payload.inputShape, norm);
+    const conv1Handle = await conv2dForwardHandle(
+      normCpuHandle,
       payload.inputShape,
       conv1Weight.values,
       conv1Weight.shape,
       payload.conv1Bias,
+      [1, 64, 16, 16],
     );
-    const relu1 = await runReluForward(runUnary, conv1);
-    const conv2 = await convForward(
-      relu1,
+    releaseTensorHandle(normCpuHandle);
+    const conv1 = await readImageSnapshotBoundary(conv1Handle);
+    releaseTensorHandle(conv1Handle);
+    const conv1CpuHandle = acquireTensorHandleFromCpu([1, 64, 16, 16], conv1);
+    const relu1Handle = await reluForwardHandle(conv1CpuHandle, [1, 64, 16, 16]);
+    releaseTensorHandle(conv1CpuHandle);
+    const relu1 = await readImageSnapshotBoundary(relu1Handle);
+    releaseTensorHandle(relu1Handle);
+    const relu1CpuHandle = acquireTensorHandleFromCpu([1, 64, 16, 16], relu1);
+    const conv2Handle = await conv2dForwardHandle(
+      relu1CpuHandle,
       [1, 64, 16, 16],
       conv2Weight.values,
       conv2Weight.shape,
       payload.conv2Bias,
-    );
-    const relu2 = await runReluForward(runUnary, conv2);
-    const pool = await runMaxPool2dForward(
-      getGpuDevice(),
-      runUnary,
-      relu2,
       [1, 64, 16, 16],
-      BUFFER_USAGE_UNIFORM_COPY_DST,
     );
-    const conv3 = await convForward(
-      pool,
+    releaseTensorHandle(relu1CpuHandle);
+    const conv2 = await readImageSnapshotBoundary(conv2Handle);
+    releaseTensorHandle(conv2Handle);
+    const conv2CpuHandle = acquireTensorHandleFromCpu([1, 64, 16, 16], conv2);
+    const relu2Handle = await reluForwardHandle(conv2CpuHandle, [1, 64, 16, 16]);
+    releaseTensorHandle(conv2CpuHandle);
+    const relu2 = await readImageSnapshotBoundary(relu2Handle);
+    releaseTensorHandle(relu2Handle);
+    const relu2CpuHandle = acquireTensorHandleFromCpu([1, 64, 16, 16], relu2);
+    const poolHandle = await maxPoolForwardHandle(
+      relu2CpuHandle,
+      [1, 64, 16, 16],
+      [1, 64, 8, 8],
+    );
+    releaseTensorHandle(relu2CpuHandle);
+    const pool = await readImageSnapshotBoundary(poolHandle);
+    releaseTensorHandle(poolHandle);
+    const poolCpuHandle = acquireTensorHandleFromCpu([1, 64, 8, 8], pool);
+    const conv3Handle = await conv2dForwardHandle(
+      poolCpuHandle,
       [1, 64, 8, 8],
       conv3Weight.values,
       conv3Weight.shape,
       payload.conv3Bias,
+      [1, 128, 8, 8],
     );
-    const relu3 = await runReluForward(runUnary, conv3);
+    releaseTensorHandle(poolCpuHandle);
+    const conv3 = await readImageSnapshotBoundary(conv3Handle);
+    releaseTensorHandle(conv3Handle);
+    const conv3CpuHandle = acquireTensorHandleFromCpu([1, 128, 8, 8], conv3);
+    const relu3Handle = await reluForwardHandle(conv3CpuHandle, [1, 128, 8, 8]);
+    releaseTensorHandle(conv3CpuHandle);
+    const relu3 = await readImageSnapshotBoundary(relu3Handle);
+    releaseTensorHandle(relu3Handle);
 
+    const relu1GramInputHandle = acquireTensorHandleFromCpu([1, 64, 16, 16], relu1);
+    const relu1GramHandle = await gramHandle(
+      relu1GramInputHandle,
+      [1, 64, 16, 16],
+      [1, 1, 64, 64],
+    );
+    releaseTensorHandle(relu1GramInputHandle);
+    const relu1Gram = await readImageSnapshotBoundary(relu1GramHandle);
+    releaseTensorHandle(relu1GramHandle);
+
+    const styleRelu1GramInputHandle = acquireTensorHandleFromCpu([1, 64, 16, 16], styleRelu1);
+    const styleRelu1GramHandle = await gramHandle(
+      styleRelu1GramInputHandle,
+      [1, 64, 16, 16],
+      [1, 1, 64, 64],
+    );
+    releaseTensorHandle(styleRelu1GramInputHandle);
+    const styleRelu1Gram = await readImageSnapshotBoundary(styleRelu1GramHandle);
+    releaseTensorHandle(styleRelu1GramHandle);
+    const relu1GramForLossHandle = acquireTensorHandleFromCpu([1, 1, 64, 64], relu1Gram);
+    const styleRelu1GramForLossHandle = acquireTensorHandleFromCpu([1, 1, 64, 64], styleRelu1Gram);
     const styleLoss1 =
-      (await runMse(
-        getGpuDevice(),
-        acquireReusableBuffer,
-        releaseReusableBuffer,
-        await runGramMatrix(
-          getGpuDevice(),
-          runUnary,
-          relu1,
-          [1, 64, 16, 16],
-          BUFFER_USAGE_UNIFORM_COPY_DST,
-        ),
-        await runGramMatrix(
-          getGpuDevice(),
-          runUnary,
-          styleRelu1,
-          [1, 64, 16, 16],
-          BUFFER_USAGE_UNIFORM_COPY_DST,
-        ),
-        BUFFER_USAGE_STORAGE_COPY_DST,
-        BUFFER_USAGE_STORAGE_COPY_SRC,
-        BUFFER_USAGE_MAP_READ_COPY_DST,
-        MAP_MODE_READ,
-      )) * payload.styleWeightConv1;
+      (await mseScalarFromHandles(relu1GramForLossHandle, styleRelu1GramForLossHandle)) *
+      payload.styleWeightConv1;
+    releaseTensorHandle(relu1GramForLossHandle);
+    releaseTensorHandle(styleRelu1GramForLossHandle);
     const styleLoss3 =
       (await runMse(
         getGpuDevice(),
@@ -258,18 +287,19 @@ export const runFirstPoolOptimizer = async (
       )) * payload.contentWeight;
     losses.push(styleLoss1 + styleLoss3 + contentLoss);
 
+    const relu1ForStyleGradHandle = acquireTensorHandleFromCpu([1, 64, 16, 16], relu1);
+    const gStyle1ReluRawHandle = await styleLossBackwardHandle(
+      relu1ForStyleGradHandle,
+      [1, 64, 16, 16],
+      styleRelu1,
+    );
+    releaseTensorHandle(relu1ForStyleGradHandle);
+    const gStyle1ReluRaw = await readImageSnapshotBoundary(gStyle1ReluRawHandle);
+    releaseTensorHandle(gStyle1ReluRawHandle);
     const gStyle1Relu = await runScalarBinaryOp(
       getGpuDevice(),
       "mul",
-      await runStyleLossBackward(
-        getGpuDevice(),
-        runUnary,
-        relu1,
-        [1, 64, 16, 16],
-        styleRelu1,
-        BUFFER_USAGE_STORAGE_COPY_DST,
-        BUFFER_USAGE_UNIFORM_COPY_DST,
-      ),
+      gStyle1ReluRaw,
       payload.styleWeightConv1,
       false,
     );
