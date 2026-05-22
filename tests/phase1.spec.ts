@@ -349,8 +349,9 @@ test("phase 1 mse GPU reduction parity for >64 lengths", async ({ page }) => {
   }
 });
 
-
-test("worker protocol emits typed responses for success and failure paths", async ({ page }) => {
+test("worker protocol emits typed responses for success and failure paths", async ({
+  page,
+}) => {
   await gotoStableApp(page);
 
   const result = await page.evaluate(async () => {
@@ -371,7 +372,9 @@ test("worker protocol emits typed responses for success and failure paths", asyn
         worker.postMessage(payload);
       });
 
-    const askUnknown = (payload: Record<string, unknown>): Promise<WorkerResponse> =>
+    const askUnknown = (
+      payload: Record<string, unknown>,
+    ): Promise<WorkerResponse> =>
       new Promise((resolve) => {
         const handler = (event: MessageEvent<WorkerResponse>): void => {
           if (event.data.type === "error") {

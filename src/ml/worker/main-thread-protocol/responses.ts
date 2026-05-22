@@ -1,4 +1,8 @@
-import type { WorkerResponse, WorkerRunStats, WorkerTensor } from "../../../types";
+import type {
+  WorkerResponse,
+  WorkerRunStats,
+  WorkerTensor,
+} from "../../../types";
 
 export const postResponse = (response: WorkerResponse): void => {
   self.postMessage(response);
@@ -23,7 +27,10 @@ export const sendPongResponse = (id: string, timestamp: number): void => {
   postResponse({ type: "pong", id, timestamp });
 };
 
-export const sendTensorRoundtripResult = (id: string, tensor: WorkerTensor): void => {
+export const sendTensorRoundtripResult = (
+  id: string,
+  tensor: WorkerTensor,
+): void => {
   postResponse({
     type: "tensor-roundtrip-result",
     id,
