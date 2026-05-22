@@ -4,6 +4,8 @@ import {
   BUFFER_USAGE_STORAGE_COPY_SRC,
   MAP_MODE_READ,
 } from "./gpuFlags";
+import { runBinaryOpToBuffer } from "./shaderRunner";
+import { getGpuDevice } from "./deviceState";
 
 export type OwnedGpuBuffer = { owned: true; buffer: GPUBuffer };
 export type BorrowedGpuBuffer = { owned: false; buffer: GPUBuffer };
@@ -84,4 +86,42 @@ export const runUnaryShaderToBuffer = (
   pass.end();
   gpuDevice.queue.submit([encoder.finish()]);
   return outBuffer;
+};
+
+
+export const runScalarMulBuffer = async (
+  input: GpuBufferRef,
+  count: number,
+  scalar: number,
+): Promise<GpuBufferRef> => {
+  const gpuDevice: GPUDevice | null = getGpuDevice();
+  if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
+  const scalarBuffer = uploadToOwnedBuffer(gpuDevice, new Float32Array([scalar]));
+  const outputBuffer = runBinaryOpToBuffer(
+    gpuDevice,
+    "mul",
+    input.buffer,
+    scalarBuffer.buffer,
+    count,
+    "tensorScalar",
+  );
+  releaseOwnedBuffer(scalarBuffer);
+  return borrowedBuffer(outputBuffer);
+};
+
+export const runTensorAddBuffer = async (
+  a: GpuBufferRef,
+  b: GpuBufferRef,
+  count: number,
+): Promise<GpuBufferRef> => {
+  const gpuDevice: GPUDevice | null = getGpuDevice();
+  const outputBuffer = runBinaryOpToBuffer(
+    gpuDevice,
+    "add",
+    a.buffer,
+    b.buffer,
+    count,
+    "tensorTensor",
+  );
+  return borrowedBuffer(outputBuffer);
 };
