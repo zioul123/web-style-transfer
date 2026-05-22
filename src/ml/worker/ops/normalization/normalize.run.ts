@@ -78,3 +78,36 @@ export const runNormalizeBackward = async (
     { binding: 2, resource: { buffer: uniformBuffer } },
   ]);
 };
+
+export const runNormalizeBackwardBuffer = async (
+  gradOut: GpuBufferRef,
+  shape: readonly [number, number, number, number],
+  std: readonly number[],
+): Promise<GpuBufferRef> => {
+  const channels: number = shape[1];
+  if (std.length !== channels) throw new Error("Std length must match input channels.");
+  const gpuDevice: GPUDevice | null = getGpuDevice();
+  if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
+  const stdBuffer: GPUBuffer = gpuDevice.createBuffer({
+    size: channels * 4,
+    usage: BUFFER_USAGE_STORAGE_COPY_DST,
+  });
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({
+    size: 4 * 4,
+    usage: BUFFER_USAGE_UNIFORM_COPY_DST,
+  });
+  gpuDevice.queue.writeBuffer(stdBuffer, 0, new Float32Array(std));
+  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, shape[2], shape[3], 0]));
+  return borrowedBuffer(
+    runUnaryShaderToBuffer(
+      gpuDevice,
+      makeNormalizeBackwardShader(shape[1] * shape[2] * shape[3]),
+      gradOut.buffer,
+      shape[1] * shape[2] * shape[3],
+      [
+        { binding: 1, resource: { buffer: stdBuffer } },
+        { binding: 2, resource: { buffer: uniformBuffer } },
+      ],
+    ),
+  );
+};
