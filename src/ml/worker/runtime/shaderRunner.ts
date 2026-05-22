@@ -61,6 +61,47 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   out[i] = clamp(a[i], ${min}, ${max});
 }`;
 
+
+export const runBinaryOpToBuffer = (
+  gpuDevice: GPUDevice | null,
+  op: "add" | "sub" | "mul" | "div",
+  aBuffer: GPUBuffer,
+  bBuffer: GPUBuffer,
+  count: number,
+  mode: "tensorTensor" | "tensorScalar" | "scalarTensor",
+): GPUBuffer => {
+  if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
+  const outBuffer = acquireReusableBuffer(
+    gpuDevice,
+    count * 4,
+    BUFFER_USAGE_STORAGE_COPY_SRC,
+  );
+  const pipeline = gpuDevice.createComputePipeline({
+    layout: "auto",
+    compute: {
+      module: gpuDevice.createShaderModule({
+        code: makeBinaryOpShader(op, count, mode),
+      }),
+      entryPoint: "main",
+    },
+  });
+  const bindGroup = gpuDevice.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: aBuffer } },
+      { binding: 1, resource: { buffer: bBuffer } },
+      { binding: 2, resource: { buffer: outBuffer } },
+    ],
+  });
+  const encoder = gpuDevice.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.dispatchWorkgroups(Math.ceil(count / 64));
+  pass.end();
+  gpuDevice.queue.submit([encoder.finish()]);
+  return outBuffer;
+};
 export const runBinaryOp = async (
   gpuDevice: GPUDevice | null,
   op: "add" | "sub" | "mul" | "div",
