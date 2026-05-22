@@ -160,7 +160,7 @@ export const runUnary = (
  * The caller gets a new runtime-owned tensor handle and can keep chaining
  * GPU-side ops until they intentionally cross a readback boundary.
  */
-const runUnaryOnHandle = (
+export const runUnaryOnHandle = (
   input: RuntimeTensorHandle,
   code: string,
   extraEntries: GPUBindGroupEntry[] = [],
@@ -222,6 +222,7 @@ export const chainTensorScalarOp = async (
     makeBinaryOpShader(op, input.elementCount, "tensorScalar"),
     [{ binding: 1, resource: { buffer: scalarBuffer } }],
   );
+  await device.queue.onSubmittedWorkDone();
   releaseReusableBuffer(4, BUFFER_USAGE_STORAGE_COPY_DST, scalarBuffer);
   return outHandle;
 };
