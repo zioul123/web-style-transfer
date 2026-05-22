@@ -3,7 +3,11 @@ import type {
   WorkerTensor,
   WorkerTensorOpResponse,
 } from "./core";
-import type { WorkerRunStats, WorkerRunFirstPoolOptimizerRequest, WorkerRunStyleTransferRequest } from "./pipelines";
+import type {
+  WorkerRunStats,
+  WorkerRunFirstPoolOptimizerRequest,
+  WorkerRunStyleTransferRequest,
+} from "./pipelines";
 import type { WorkerTensorOpRequest } from "./tensor-ops";
 
 export type WorkerRequest =

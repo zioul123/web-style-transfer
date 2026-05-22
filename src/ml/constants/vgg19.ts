@@ -31,7 +31,9 @@ export const assertValidVgg19ReluTapIndices = (
     styleSet.add(index);
   }
   if (styleLayerIndices.length === 0)
-    throw new Error("styleLayerIndices must include at least one ReLU tap index.");
+    throw new Error(
+      "styleLayerIndices must include at least one ReLU tap index.",
+    );
   if (!allowed.has(contentLayerIndex))
     throw new Error(
       `Invalid content tap ReLU layer index ${contentLayerIndex}. Expected a VGG19 ReLU layer index from the fixed features schedule.`,

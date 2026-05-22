@@ -112,12 +112,22 @@ export const readTensorHandleToCpu = async (
     BUFFER_USAGE_MAP_READ_COPY_DST,
   );
   const encoder = device.createCommandEncoder();
-  encoder.copyBufferToBuffer(handle.buffer, 0, readBuffer, 0, handle.byteLength);
+  encoder.copyBufferToBuffer(
+    handle.buffer,
+    0,
+    readBuffer,
+    0,
+    handle.byteLength,
+  );
   device.queue.submit([encoder.finish()]);
   await readBuffer.mapAsync(MAP_MODE_READ);
   const out = new Float32Array(readBuffer.getMappedRange().slice(0));
   readBuffer.unmap();
-  releaseReusableBuffer(handle.byteLength, BUFFER_USAGE_MAP_READ_COPY_DST, readBuffer);
+  releaseReusableBuffer(
+    handle.byteLength,
+    BUFFER_USAGE_MAP_READ_COPY_DST,
+    readBuffer,
+  );
   return out;
 };
 
@@ -193,7 +203,12 @@ export const runUnaryOnHandle = (
   pass.dispatchWorkgroups(Math.ceil(input.elementCount / 64));
   pass.end();
   device.queue.submit([encoder.finish()]);
-  return makeHandle(input.shape, outBuffer, BUFFER_USAGE_STORAGE_COPY_SRC, "runtime");
+  return makeHandle(
+    input.shape,
+    outBuffer,
+    BUFFER_USAGE_STORAGE_COPY_SRC,
+    "runtime",
+  );
 };
 
 /**
@@ -239,7 +254,9 @@ export const chainTensorBinaryOp = async (
   op: "add" | "sub" | "mul" | "div",
 ): Promise<RuntimeTensorHandle> => {
   if (a.elementCount !== b.elementCount) {
-    throw new Error("chainTensorBinaryOp expects tensors with equal element count.");
+    throw new Error(
+      "chainTensorBinaryOp expects tensors with equal element count.",
+    );
   }
   return runUnaryOnHandle(
     a,

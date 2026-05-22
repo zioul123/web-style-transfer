@@ -282,19 +282,19 @@ Still-open architecture concerns are now narrower and are listed as concrete fol
 
 Style/content tap indices now live in `src/ml/constants/vgg19.ts` and are consumed directly by the style transfer controller. The canonical scheme is documented as torch `vgg19.features` **post-ReLU layer indices** (`relu1_1`, `relu2_1`, `relu3_1`, `relu4_1`, `relu5_1`, and `relu4_2`). A shared assertion helper (`assertValidVgg19ReluTapIndices`) fails fast on invalid or duplicate tap-index combinations before request dispatch.
 
-
 ### Issue: Worker request/response posting patterns are still mixed between raw `postResponse` calls and response helper wrappers, which makes error-path behavior harder to reason about.
 
 :::task-stub{title="Standardize worker response emission through shared helper APIs"}
 Normalize message emission in `src/ml/worker/main-thread-protocol/` so success/error pathways use a consistent helper surface.
 
 Steps:
+
 1. Audit `messageRouter.ts` and `tensorOpRouter.ts` for direct `postResponse(...)` calls and categorize them by response type (`error`, `tensor-op-result`, pipeline result).
 2. Expand `responses.ts` only as needed to cover missing cases with explicit, narrow helper signatures.
 3. Replace ad-hoc response construction with helper calls, preserving existing payload shapes.
 4. Ensure the default/unknown request path and exception path share a uniform error envelope.
 5. Add a small protocol-focused test (or extend existing worker protocol tests) that verifies representative success + failure responses still match `WorkerResponse` unions.
-:::
+   :::
 
 ### Issue: Runtime op execution still relies on per-op GPU→CPU readback (`runUnaryShader`) in many paths, making control flow and performance tradeoffs hard to follow.
 
@@ -302,6 +302,7 @@ Steps:
 Refactor runtime execution to model buffer-resident intermediate tensors and explicit readback boundaries, improving both readability and future performance work.
 
 Steps:
+
 1. In `src/ml/worker/runtime/`, define a minimal intermediate representation for GPU-resident tensor handles (buffer + shape metadata + lifecycle ownership).
 2. Add helper APIs in `computeContext.ts` for:
    - op-to-op chaining without immediate readback,
@@ -310,7 +311,7 @@ Steps:
 3. Migrate one constrained path first (e.g., first-pool optimizer or a short style-transfer segment) to prove API clarity before broad rollout.
 4. Update buffer-pool ownership/release rules to prevent leaks when handles survive across multiple ops.
 5. Document the new boundary model in `docs/architecture-overview.md` and/or runtime module docs so contributors can reason about when data is on GPU vs CPU.
-:::
+   :::
 
 ## 12. Runtime GPU-resident boundary model (May 21, 2026)
 
