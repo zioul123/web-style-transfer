@@ -12,7 +12,6 @@ import {
 import {
   runConv2dBackwardInput,
 } from "../../ops/convolution/conv2d.run";
-import { runGramMatrix } from "../../ops/gram/gram.run";
 import { runMseBuffer } from "../../ops/loss/mse.run";
 import { runContentLossBackward } from "../../ops/loss/contentLoss.run";
 import { runStyleLossBackward } from "../../ops/loss/styleLoss.run";
@@ -51,8 +50,6 @@ type FirstPoolPersistentContext = {
   contentRelu2: Float32Array;
   styleRelu1: Float32Array;
   styleRelu3: Float32Array;
-  styleGram1: Float32Array;
-  styleGram3: Float32Array;
   styleGram1Buffer: GpuBufferRef;
   styleGram3Buffer: GpuBufferRef;
   contentRelu2Buffer: GpuBufferRef;
@@ -242,22 +239,8 @@ export const runFirstPoolOptimizer = async (
   );
   const contentRelu2 = await readGpuTensor(device, contentRelu2Buffer, [1, 64, 16, 16]);
   assertShape("contentRelu2", contentRelu2, [1, 64, 16, 16]);
-  const styleGram1 = await runGramMatrix(
-    device,
-    runUnary,
-    styleRelu1,
-    [1, 64, 16, 16],
-    BUFFER_USAGE_UNIFORM_COPY_DST,
-  );
-  const styleGram3 = await runGramMatrix(
-    device,
-    runUnary,
-    styleRelu3,
-    [1, 128, 8, 8],
-    BUFFER_USAGE_UNIFORM_COPY_DST,
-  );
-  const styleGram1Buffer = uploadToOwnedBuffer(device, styleGram1);
-  const styleGram3Buffer = uploadToOwnedBuffer(device, styleGram3);
+  const styleGram1Buffer = await runGramMatrixBuffer(styleRelu1Buffer, [1, 64, 16, 16]);
+  const styleGram3Buffer = await runGramMatrixBuffer(styleRelu3Buffer, [1, 128, 8, 8]);
   const contentRelu2TargetBuffer = uploadToOwnedBuffer(device, contentRelu2);
   releaseOwnedBuffer(styleInputBuffer);
   releaseOwnedBuffer(styleNormBuffer);
@@ -283,8 +266,6 @@ export const runFirstPoolOptimizer = async (
       contentRelu2,
       styleRelu1,
       styleRelu3,
-      styleGram1,
-      styleGram3,
       styleGram1Buffer,
       styleGram3Buffer,
       contentRelu2Buffer: contentRelu2TargetBuffer,
