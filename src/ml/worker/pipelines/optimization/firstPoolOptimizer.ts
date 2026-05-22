@@ -12,8 +12,7 @@ import {
 import {
   runConv2dBackwardInput,
 } from "../../ops/convolution/conv2d.run";
-import { runGramMatrix } from "../../ops/gram/gram.run";
-import { runMse } from "../../ops/loss/mse.run";
+import { runMseBuffer } from "../../ops/loss/mse.run";
 import { runContentLossBackward } from "../../ops/loss/contentLoss.run";
 import { runStyleLossBackward } from "../../ops/loss/styleLoss.run";
 import {
@@ -40,6 +39,7 @@ import { runNormalizeForwardBuffer } from "../../ops/normalization/normalize.run
 import { runConv2dForwardBuffer } from "../../ops/convolution/conv2d.run";
 import { runReluForwardBuffer } from "../../ops/relu/relu.run";
 import { runMaxPool2dForwardBuffer } from "../../ops/pooling/maxpool.run";
+import { runGramMatrixBuffer } from "../../ops/gram/gram.run";
 
 type TensorShape4D = readonly [number, number, number, number];
 
@@ -50,8 +50,9 @@ type FirstPoolPersistentContext = {
   contentRelu2: Float32Array;
   styleRelu1: Float32Array;
   styleRelu3: Float32Array;
-  styleGram1: Float32Array;
-  styleGram3: Float32Array;
+  styleGram1Buffer: GpuBufferRef;
+  styleGram3Buffer: GpuBufferRef;
+  contentRelu2Buffer: GpuBufferRef;
 };
 
 type FirstPoolStepTemporaries = {
@@ -238,20 +239,9 @@ export const runFirstPoolOptimizer = async (
   );
   const contentRelu2 = await readGpuTensor(device, contentRelu2Buffer, [1, 64, 16, 16]);
   assertShape("contentRelu2", contentRelu2, [1, 64, 16, 16]);
-  const styleGram1 = await runGramMatrix(
-    device,
-    runUnary,
-    styleRelu1,
-    [1, 64, 16, 16],
-    BUFFER_USAGE_UNIFORM_COPY_DST,
-  );
-  const styleGram3 = await runGramMatrix(
-    device,
-    runUnary,
-    styleRelu3,
-    [1, 128, 8, 8],
-    BUFFER_USAGE_UNIFORM_COPY_DST,
-  );
+  const styleGram1Buffer = await runGramMatrixBuffer(styleRelu1Buffer, [1, 64, 16, 16]);
+  const styleGram3Buffer = await runGramMatrixBuffer(styleRelu3Buffer, [1, 128, 8, 8]);
+  const contentRelu2TargetBuffer = uploadToOwnedBuffer(device, contentRelu2);
   releaseOwnedBuffer(styleInputBuffer);
   releaseOwnedBuffer(styleNormBuffer);
   releaseOwnedBuffer(styleConv1Buffer);
@@ -276,8 +266,9 @@ export const runFirstPoolOptimizer = async (
       contentRelu2,
       styleRelu1,
       styleRelu3,
-      styleGram1,
-      styleGram3,
+      styleGram1Buffer,
+      styleGram3Buffer,
+      contentRelu2Buffer: contentRelu2TargetBuffer,
     },
     stepTemps: {},
     acquireTempBuffer,
@@ -320,6 +311,48 @@ export const runFirstPoolOptimizer = async (
       payload.conv3Bias,
     );
     const relu3Buffer = await runReluForwardBuffer(conv3Buffer, elementCount([1, 128, 8, 8]));
+    const relu1GramBuffer = await runGramMatrixBuffer(relu1Buffer, [1, 64, 16, 16]);
+    const relu3GramBuffer = await runGramMatrixBuffer(relu3Buffer, [1, 128, 8, 8]);
+    const styleLoss1 =
+      (await runMseBuffer(
+        device,
+        acquireReusableBuffer,
+        releaseReusableBuffer,
+        relu1GramBuffer,
+        context.persistent.styleGram1Buffer,
+        64 * 64,
+        BUFFER_USAGE_STORAGE_COPY_SRC,
+        BUFFER_USAGE_MAP_READ_COPY_DST,
+        MAP_MODE_READ,
+      )) * payload.styleWeightConv1;
+    const styleLoss3 =
+      (await runMseBuffer(
+        device,
+        acquireReusableBuffer,
+        releaseReusableBuffer,
+        relu3GramBuffer,
+        context.persistent.styleGram3Buffer,
+        128 * 128,
+        BUFFER_USAGE_STORAGE_COPY_SRC,
+        BUFFER_USAGE_MAP_READ_COPY_DST,
+        MAP_MODE_READ,
+      )) * payload.styleWeightConv3;
+    const contentLoss =
+      (await runMseBuffer(
+        device,
+        acquireReusableBuffer,
+        releaseReusableBuffer,
+        relu2Buffer,
+        context.persistent.contentRelu2Buffer,
+        64 * 16 * 16,
+        BUFFER_USAGE_STORAGE_COPY_SRC,
+        BUFFER_USAGE_MAP_READ_COPY_DST,
+        MAP_MODE_READ,
+      )) * payload.contentWeight;
+    losses.push(styleLoss1 + styleLoss3 + contentLoss);
+    releaseOwnedBuffer(relu1GramBuffer);
+    releaseOwnedBuffer(relu3GramBuffer);
+
     const norm = await readGpuTensor(device, normBuffer, payload.inputShape);
     const conv1 = await readGpuTensor(device, conv1Buffer, [1, 64, 16, 16]);
     const relu1 = await readGpuTensor(device, relu1Buffer, [1, 64, 16, 16]);
@@ -341,57 +374,6 @@ export const runFirstPoolOptimizer = async (
     releaseOwnedBuffer(poolBuffer);
     releaseOwnedBuffer(conv3Buffer);
     releaseOwnedBuffer(relu3Buffer);
-
-
-    const styleLoss1 =
-      (await runMse(
-        device,
-        acquireReusableBuffer,
-        releaseReusableBuffer,
-        await runGramMatrix(
-          device,
-          runUnary,
-          relu1,
-          [1, 64, 16, 16],
-          BUFFER_USAGE_UNIFORM_COPY_DST,
-        ),
-        context.persistent.styleGram1,
-        BUFFER_USAGE_STORAGE_COPY_DST,
-        BUFFER_USAGE_STORAGE_COPY_SRC,
-        BUFFER_USAGE_MAP_READ_COPY_DST,
-        MAP_MODE_READ,
-      )) * payload.styleWeightConv1;
-    const styleLoss3 =
-      (await runMse(
-        device,
-        acquireReusableBuffer,
-        releaseReusableBuffer,
-        await runGramMatrix(
-          device,
-          runUnary,
-          relu3,
-          [1, 128, 8, 8],
-          BUFFER_USAGE_UNIFORM_COPY_DST,
-        ),
-        context.persistent.styleGram3,
-        BUFFER_USAGE_STORAGE_COPY_DST,
-        BUFFER_USAGE_STORAGE_COPY_SRC,
-        BUFFER_USAGE_MAP_READ_COPY_DST,
-        MAP_MODE_READ,
-      )) * payload.styleWeightConv3;
-    const contentLoss =
-      (await runMse(
-        device,
-        acquireReusableBuffer,
-        releaseReusableBuffer,
-        relu2,
-        context.persistent.contentRelu2,
-        BUFFER_USAGE_STORAGE_COPY_DST,
-        BUFFER_USAGE_STORAGE_COPY_SRC,
-        BUFFER_USAGE_MAP_READ_COPY_DST,
-        MAP_MODE_READ,
-      )) * payload.contentWeight;
-    losses.push(styleLoss1 + styleLoss3 + contentLoss);
 
     const gStyle1Relu = await runScalarBinaryOp(
       device,
@@ -542,6 +524,9 @@ export const runFirstPoolOptimizer = async (
     }
     return { losses, finalValues: Array.from(inputValues) };
   } finally {
+    releaseOwnedBuffer(context.persistent.styleGram1Buffer);
+    releaseOwnedBuffer(context.persistent.styleGram3Buffer);
+    releaseOwnedBuffer(context.persistent.contentRelu2Buffer);
     for (const [key, buffer] of localBufferByKey.entries()) {
       const [shapeKey, usageToken] = key.split(":");
       const shapeParts = shapeKey.split("x").map((part) => Number(part));
