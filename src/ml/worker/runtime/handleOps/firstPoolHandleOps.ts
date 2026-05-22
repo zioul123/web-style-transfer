@@ -3,15 +3,13 @@
 import { runConv2dBackwardInput, runConv2dForward } from "../../ops/convolution/conv2d.run";
 import { runGramMatrix } from "../../ops/gram/gram.run";
 import { runContentLossBackward } from "../../ops/loss/contentLoss.run";
-import { runMse } from "../../ops/loss/mse.run";
 import { runStyleLossBackward } from "../../ops/loss/styleLoss.run";
 import { runNormalizeBackward, runNormalizeForward } from "../../ops/normalization/normalize.run";
 import { runMaxPool2dBackward, runMaxPool2dForward } from "../../ops/pooling/maxpool.run";
 import { runReluBackward, runReluForward } from "../../ops/relu/relu.run";
-import { acquireReusableBuffer, releaseReusableBuffer } from "../bufferPool";
 import { acquireTensorHandleFromCpu, readTensorHandleToCpu, runUnary, type RuntimeTensorHandle, type RuntimeTensorShape } from "../computeContext";
 import { getGpuDevice } from "../deviceState";
-import { BUFFER_USAGE_MAP_READ_COPY_DST, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_UNIFORM_COPY_DST, MAP_MODE_READ } from "../gpuFlags";
+import { BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST } from "../gpuFlags";
 
 const fromHandle = async (handle: RuntimeTensorHandle): Promise<Float32Array> => await readTensorHandleToCpu(handle);
 const toHandle = (shape: RuntimeTensorShape, values: Float32Array): RuntimeTensorHandle => acquireTensorHandleFromCpu(shape, values);
@@ -31,24 +29,22 @@ export const mseScalarFromHandles = async (
 ): Promise<number> => {
   const device = getGpuDevice();
   if (device === null) throw new Error("WebGPU is not initialized.");
+  await device.queue.onSubmittedWorkDone();
   const aValues = await fromHandle(a);
   await device.queue.onSubmittedWorkDone();
   const bValues = await fromHandle(b);
   await device.queue.onSubmittedWorkDone();
-  const aSnapshot = new Float32Array(aValues);
-  const bSnapshot = new Float32Array(bValues);
-  return await runMse(
-    device,
-    acquireReusableBuffer,
-    releaseReusableBuffer,
-    aSnapshot,
-    bSnapshot,
-    BUFFER_USAGE_STORAGE_COPY_DST,
-    BUFFER_USAGE_STORAGE_COPY_SRC,
-    BUFFER_USAGE_MAP_READ_COPY_DST,
-    MAP_MODE_READ,
-  );
+  if (aValues.length !== bValues.length) {
+    throw new Error("mseScalarFromHandles expects equal-length tensors.");
+  }
+  let sum = 0;
+  for (let i = 0; i < aValues.length; i += 1) {
+    const d = aValues[i] - bValues[i];
+    sum += d * d;
+  }
+  return sum / aValues.length;
 };
+
 export const styleLossBackwardHandle = async (input: RuntimeTensorHandle, inputShape: RuntimeTensorShape, targetValues: Float32Array): Promise<RuntimeTensorHandle> => toHandle(inputShape, await runStyleLossBackward(getGpuDevice(), runUnary, await fromHandle(input), inputShape, targetValues, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST));
 
 export const styleLossBackwardHandleFromTarget = async (input: RuntimeTensorHandle, inputShape: RuntimeTensorShape, target: RuntimeTensorHandle): Promise<RuntimeTensorHandle> =>
