@@ -42,8 +42,7 @@ import { runBinaryOpToBuffer } from "../../runtime/shaderRunner";
 import { getGpuDevice } from "../../runtime/deviceState";
 import { runUnary } from "../../runtime/computeContext";
 import { runNormalizeForwardBuffer } from "../../ops/normalization/normalize.run";
-import { runConv2dForwardBuffer, runConv2dReluForwardBuffer } from "../../ops/convolution/conv2d.run";
-import { runReluForwardBuffer } from "../../ops/relu/relu.run";
+import { runConv2dReluForwardBuffer } from "../../ops/convolution/conv2d.run";
 import { runMaxPool2dForwardBuffer } from "../../ops/pooling/maxpool.run";
 import { runGramMatrixBuffer } from "../../ops/gram/gram.run";
 import { runReluBackward } from "../../ops/relu/relu.run";
@@ -329,37 +328,31 @@ export const runFirstPoolOptimizer = async (
       payload.std,
     );
     stepOwnedBuffers.push(normBuffer);
-    const conv1Buffer = await runConv2dForwardBuffer(
+    const relu1Buffer = await runConv2dReluForwardBuffer(
       normBuffer,
       payload.inputShape,
       context.persistent.conv1Weight.values,
       context.persistent.conv1Weight.shape,
       payload.conv1Bias,
     );
-    stepOwnedBuffers.push(conv1Buffer);
-    const relu1Buffer = await runReluForwardBuffer(conv1Buffer, elementCount([1, 64, 16, 16]));
     stepOwnedBuffers.push(relu1Buffer);
-    const conv2Buffer = await runConv2dForwardBuffer(
+    const relu2Buffer = await runConv2dReluForwardBuffer(
       relu1Buffer,
       [1, 64, 16, 16],
       context.persistent.conv2Weight.values,
       context.persistent.conv2Weight.shape,
       payload.conv2Bias,
     );
-    stepOwnedBuffers.push(conv2Buffer);
-    const relu2Buffer = await runReluForwardBuffer(conv2Buffer, elementCount([1, 64, 16, 16]));
     stepOwnedBuffers.push(relu2Buffer);
     const poolBuffer = await runMaxPool2dForwardBuffer(relu2Buffer, [1, 64, 16, 16]);
     stepOwnedBuffers.push(poolBuffer);
-    const conv3Buffer = await runConv2dForwardBuffer(
+    const relu3Buffer = await runConv2dReluForwardBuffer(
       poolBuffer,
       [1, 64, 8, 8],
       context.persistent.conv3Weight.values,
       context.persistent.conv3Weight.shape,
       payload.conv3Bias,
     );
-    stepOwnedBuffers.push(conv3Buffer);
-    const relu3Buffer = await runReluForwardBuffer(conv3Buffer, elementCount([1, 128, 8, 8]));
     stepOwnedBuffers.push(relu3Buffer);
     const relu1GramBuffer = await runGramMatrixBuffer(relu1Buffer, [1, 64, 16, 16]);
     const relu3GramBuffer = await runGramMatrixBuffer(relu3Buffer, [1, 128, 8, 8]);
@@ -402,12 +395,12 @@ export const runFirstPoolOptimizer = async (
       )) * payload.contentWeight;
     losses.push(styleLoss1 + styleLoss3 + contentLoss);
     const norm = await readGpuTensor(device, normBuffer, payload.inputShape);
-    const conv1 = await readGpuTensor(device, conv1Buffer, [1, 64, 16, 16]);
+    const conv1 = await readGpuTensor(device, relu1Buffer, [1, 64, 16, 16]);
     const relu1 = await readGpuTensor(device, relu1Buffer, [1, 64, 16, 16]);
-    const conv2 = await readGpuTensor(device, conv2Buffer, [1, 64, 16, 16]);
+    const conv2 = await readGpuTensor(device, relu2Buffer, [1, 64, 16, 16]);
     const relu2 = await readGpuTensor(device, relu2Buffer, [1, 64, 16, 16]);
     const pool = await readGpuTensor(device, poolBuffer, [1, 64, 8, 8]);
-    const conv3 = await readGpuTensor(device, conv3Buffer, [1, 128, 8, 8]);
+    const conv3 = await readGpuTensor(device, relu3Buffer, [1, 128, 8, 8]);
     const relu3 = await readGpuTensor(device, relu3Buffer, [1, 128, 8, 8]);
     context.stepTemps = { norm, conv1, relu1, conv2, relu2, pool, conv3, relu3 };
     assertShape("relu1", relu1, [1, 64, 16, 16]);
@@ -447,19 +440,19 @@ export const runFirstPoolOptimizer = async (
     );
     stepOwnedBuffers.push(gContentReluBuffer);
     const gStyle3Buffer = await runReluBackwardBuffer(
-      conv3Buffer,
+      relu3Buffer,
       gStyle3ReluBuffer,
       elementCount([1, 128, 8, 8]),
     );
     stepOwnedBuffers.push(gStyle3Buffer);
     const gContentBuffer = await runReluBackwardBuffer(
-      conv2Buffer,
+      relu2Buffer,
       gContentReluBuffer,
       elementCount([1, 64, 16, 16]),
     );
     stepOwnedBuffers.push(gContentBuffer);
     const gStyle1Buffer = await runReluBackwardBuffer(
-      conv1Buffer,
+      relu1Buffer,
       gStyle1ReluBuffer,
       elementCount([1, 64, 16, 16]),
     );
@@ -479,7 +472,7 @@ export const runFirstPoolOptimizer = async (
     );
     stepOwnedBuffers.push(gRelu2Buffer);
     const gConv2FromPoolBuffer = await runReluBackwardBuffer(
-      conv2Buffer,
+      relu2Buffer,
       gRelu2Buffer,
       elementCount([1, 64, 16, 16]),
     );
@@ -503,7 +496,7 @@ export const runFirstPoolOptimizer = async (
     );
     stepOwnedBuffers.push(gConv2TotalBuffer, gRelu1Buffer);
     const gConv1FromConv2Buffer = await runReluBackwardBuffer(
-      conv1Buffer,
+      relu1Buffer,
       gRelu1Buffer,
       elementCount([1, 64, 16, 16]),
     );
