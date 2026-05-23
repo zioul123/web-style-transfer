@@ -2,7 +2,7 @@ import type { WorkerRequest } from "../../../../../types";
 import { runConv2dBackwardInputBuffer, runConv2dForwardBuffer, runConv2dReluForwardBuffer } from "../../../ops/convolution/conv2d.run";
 import { runGramMatrixBuffer } from "../../../ops/gram/gram.run";
 import { runContentLossBackwardBuffer } from "../../../ops/loss/contentLoss.run";
-import { runMseBuffer } from "../../../ops/loss/mse.run";
+import { runMseBuffer, runMseBufferToScalarBuffer } from "../../../ops/loss/mse.run";
 import { runStyleLossBackwardFromTargetGramBuffer } from "../../../ops/loss/styleLoss.run";
 import { runNormalizeBackwardBuffer, runNormalizeForwardBuffer } from "../../../ops/normalization/normalize.run";
 import { runMaxPool2dBackwardBuffer, runMaxPool2dForwardBuffer } from "../../../ops/pooling/maxpool.run";
@@ -34,6 +34,7 @@ export const runFirstPoolStep = async (
   const useFusedUpdateClamp = payload.useFusedUpdateClamp ?? true;
   const debugValidateStepShapes = payload.debugValidateStepShapes ?? false;
   const debugReadbackGrad = payload.debugReadbackGrad ?? false;
+  const debugUseLegacyCpuLossReadback = payload.debugUseLegacyCpuLossReadback ?? true;
   const acquireMseBuffer = (_gpuDevice: GPUDevice, size: number, usage: number): GPUBuffer => {
     const floatCount = Math.ceil(size / Float32Array.BYTES_PER_ELEMENT);
     return tempBuffers.acquireTempBuffer([1, 1, 1, floatCount], usage, "mse-reduction");
@@ -58,9 +59,25 @@ export const runFirstPoolStep = async (
     stepOwnedBuffers.push(relu1GramBuffer, relu3GramBuffer);
 
     const lossStart = performance.now();
-    const styleLoss1 = (await runMseBuffer(device, acquireMseBuffer, releaseMseBuffer, relu1GramBuffer, persistent.styleGram1Buffer, 64 * 64, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.styleWeightConv1;
-    const styleLoss3 = (await runMseBuffer(device, acquireMseBuffer, releaseMseBuffer, relu3GramBuffer, persistent.styleGram3Buffer, 128 * 128, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.styleWeightConv3;
-    const contentLoss = (await runMseBuffer(device, acquireMseBuffer, releaseMseBuffer, relu2Buffer, persistent.contentRelu2Buffer, 64 * 16 * 16, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.contentWeight;
+    let totalLoss = 0;
+    if (debugUseLegacyCpuLossReadback) {
+      const styleLoss1 = (await runMseBuffer(device, acquireMseBuffer, releaseMseBuffer, relu1GramBuffer, persistent.styleGram1Buffer, 64 * 64, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.styleWeightConv1;
+      const styleLoss3 = (await runMseBuffer(device, acquireMseBuffer, releaseMseBuffer, relu3GramBuffer, persistent.styleGram3Buffer, 128 * 128, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.styleWeightConv3;
+      const contentLoss = (await runMseBuffer(device, acquireMseBuffer, releaseMseBuffer, relu2Buffer, persistent.contentRelu2Buffer, 64 * 16 * 16, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.contentWeight;
+      totalLoss = styleLoss1 + styleLoss3 + contentLoss;
+    } else {
+      const styleLoss1Buffer = await runMseBufferToScalarBuffer(device, acquireMseBuffer, releaseMseBuffer, relu1GramBuffer, persistent.styleGram1Buffer, 64 * 64, BUFFER_USAGE_STORAGE_COPY_SRC);
+      const styleLoss3Buffer = await runMseBufferToScalarBuffer(device, acquireMseBuffer, releaseMseBuffer, relu3GramBuffer, persistent.styleGram3Buffer, 128 * 128, BUFFER_USAGE_STORAGE_COPY_SRC);
+      const contentLossBuffer = await runMseBufferToScalarBuffer(device, acquireMseBuffer, releaseMseBuffer, relu2Buffer, persistent.contentRelu2Buffer, 64 * 16 * 16, BUFFER_USAGE_STORAGE_COPY_SRC);
+      stepOwnedBuffers.push(styleLoss1Buffer, styleLoss3Buffer, contentLossBuffer);
+      const weightedStyle1LossBuffer = runScalarMulBuffer(device, styleLoss1Buffer, 1, payload.styleWeightConv1 / (64 * 64));
+      const weightedStyle3LossBuffer = runScalarMulBuffer(device, styleLoss3Buffer, 1, payload.styleWeightConv3 / (128 * 128));
+      const weightedContentLossBuffer = runScalarMulBuffer(device, contentLossBuffer, 1, payload.contentWeight / (64 * 16 * 16));
+      const styleLossTotalBuffer: GpuBufferRef = { buffer: runBinaryOpToBuffer(device, "add", weightedStyle1LossBuffer.buffer, weightedStyle3LossBuffer.buffer, 1, "tensorTensor"), owned: true };
+      const totalLossBuffer: GpuBufferRef = { buffer: runBinaryOpToBuffer(device, "add", styleLossTotalBuffer.buffer, weightedContentLossBuffer.buffer, 1, "tensorTensor"), owned: true };
+      stepOwnedBuffers.push(weightedStyle1LossBuffer, weightedStyle3LossBuffer, weightedContentLossBuffer, styleLossTotalBuffer, totalLossBuffer);
+      totalLoss = (await readGpuBufferToArray(device, totalLossBuffer.buffer, 1))[0];
+    }
     const lossMs = performance.now() - lossStart;
 
     const backwardStart = performance.now();
@@ -118,7 +135,7 @@ export const runFirstPoolStep = async (
       assertShape(gInput.length, payload.inputShape, "gInput");
     }
 
-    return { nextInputBuffer: clampedInputBuffer, totalLoss: styleLoss1 + styleLoss3 + contentLoss, forwardMs, lossMs, backwardMs, updateMs, diagnosticsReadbackMs };
+    return { nextInputBuffer: clampedInputBuffer, totalLoss, forwardMs, lossMs, backwardMs, updateMs, diagnosticsReadbackMs };
   } finally {
     for (const ownedBuffer of stepOwnedBuffers) releaseOwnedBuffer(ownedBuffer);
   }

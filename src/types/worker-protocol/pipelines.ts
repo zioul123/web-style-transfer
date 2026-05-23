@@ -50,6 +50,7 @@ export type WorkerRunFirstPoolOptimizerRequest = {
   useFusedUpdateClamp?: boolean;
   debugValidateStepShapes?: boolean;
   debugReadbackGrad?: boolean;
+  debugUseLegacyCpuLossReadback?: boolean;
   collectBenchmarkStats?: boolean;
 };
 

@@ -215,3 +215,83 @@ export const runMseBuffer = async (
   releaseReusableBuffer(4, BUFFER_USAGE_MAP_READ_COPY_DST, readBuffer);
   return sse / count;
 };
+
+export const runMseBufferToScalarBuffer = async (
+  gpuDevice: GPUDevice | null,
+  acquireReusableBuffer: (
+    device: GPUDevice,
+    size: number,
+    usage: number,
+  ) => GPUBuffer,
+  releaseReusableBuffer: (
+    size: number,
+    usage: number,
+    buffer: GPUBuffer,
+  ) => void,
+  a: GpuBufferRef,
+  b: GpuBufferRef,
+  count: number,
+  BUFFER_USAGE_STORAGE_COPY_SRC: number,
+): Promise<GpuBufferRef> => {
+  if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
+  const device = gpuDevice;
+  const bytes = count * 4;
+  let currentBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_STORAGE_COPY_SRC);
+  let currentBytes = bytes;
+  const diffPipeline = device.createComputePipeline({
+    layout: "auto",
+    compute: {
+      module: device.createShaderModule({ code: makeMseDiffShader(count) }),
+      entryPoint: "main",
+    },
+  });
+  const diffBindGroup = device.createBindGroup({
+    layout: diffPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: a.buffer } },
+      { binding: 1, resource: { buffer: b.buffer } },
+      { binding: 2, resource: { buffer: currentBuffer } },
+    ],
+  });
+  const e1 = device.createCommandEncoder();
+  const p1 = e1.beginComputePass();
+  p1.setPipeline(diffPipeline);
+  p1.setBindGroup(0, diffBindGroup);
+  p1.dispatchWorkgroups(Math.ceil(count / 64));
+  p1.end();
+  device.queue.submit([e1.finish()]);
+
+  let currentCount = count;
+  while (currentCount > 1) {
+    const nextCount = Math.ceil(currentCount / 64);
+    const nextBytes = nextCount * 4;
+    const nextBuffer = acquireReusableBuffer(device, nextBytes, BUFFER_USAGE_STORAGE_COPY_SRC);
+    const reducePipeline = device.createComputePipeline({
+      layout: "auto",
+      compute: {
+        module: device.createShaderModule({ code: makeReduceSumShader(currentCount) }),
+        entryPoint: "main",
+      },
+    });
+    const reduceBindGroup = device.createBindGroup({
+      layout: reducePipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: currentBuffer } },
+        { binding: 1, resource: { buffer: nextBuffer } },
+      ],
+    });
+    const e = device.createCommandEncoder();
+    const p = e.beginComputePass();
+    p.setPipeline(reducePipeline);
+    p.setBindGroup(0, reduceBindGroup);
+    p.dispatchWorkgroups(nextCount);
+    p.end();
+    device.queue.submit([e.finish()]);
+    releaseReusableBuffer(currentBytes, BUFFER_USAGE_STORAGE_COPY_SRC, currentBuffer);
+    currentBuffer = nextBuffer;
+    currentBytes = nextBytes;
+    currentCount = nextCount;
+  }
+
+  return { buffer: currentBuffer, owned: true };
+};
