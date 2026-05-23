@@ -7,7 +7,28 @@ import {
   readGpuBufferToArray,
   releaseOwnedBuffer,
   uploadToOwnedBuffer,
+  type GpuBufferRef,
 } from "../../runtime/bufferKernels";
+import { getGpuDevice } from "../../runtime/deviceState";
+
+export const runStyleLossBackwardFromTargetGramBuffer = async (
+  input: GpuBufferRef,
+  shape: readonly [number, number, number, number],
+  targetGram: GpuBufferRef,
+): Promise<GpuBufferRef> => {
+  const gpuDevice: GPUDevice | null = getGpuDevice();
+  if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
+  const inputGram = await runGramMatrixBuffer(input, shape);
+  const gramGrad = await runContentLossBackwardBuffer(
+    inputGram,
+    targetGram,
+    shape[1] * shape[1],
+  );
+  const gradInBuffer = await runGramBackwardBuffer(input, shape, gramGrad);
+  releaseOwnedBuffer(inputGram);
+  releaseOwnedBuffer(gramGrad);
+  return gradInBuffer;
+};
 
 export const runStyleLossBackward = async (
   gpuDevice: GPUDevice | null,
