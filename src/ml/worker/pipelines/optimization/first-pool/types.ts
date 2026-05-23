@@ -30,3 +30,9 @@ export type FirstPoolStatsAccumulator = {
   updateMs: number;
   readbackMs: number;
 };
+
+export type FirstPoolTempBufferStore = {
+  acquireTempBuffer: (shape: TensorShape4D, usage: number, role: string) => GPUBuffer;
+  releaseTempBuffer: (shape: TensorShape4D, usage: number, role: string) => void;
+  drain: () => void;
+};

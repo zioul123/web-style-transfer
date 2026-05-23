@@ -1,9 +1,9 @@
 import { acquireReusableBuffer, releaseReusableBuffer } from "../../../runtime/bufferPool";
-import type { TensorShape4D } from "./types";
+import type { FirstPoolTempBufferStore, TensorShape4D } from "./types";
 
 const elementCount = (shape: TensorShape4D): number => shape[0] * shape[1] * shape[2] * shape[3];
 
-export const createFirstPoolTempBufferStore = (device: GPUDevice) => {
+export const createFirstPoolTempBufferStore = (device: GPUDevice): FirstPoolTempBufferStore => {
   const localBufferByKey: Map<string, GPUBuffer> = new Map();
   const localTempKey = (shape: TensorShape4D, usage: number, role: string): string =>
     `${shape.join("x")}:${usage}:${role}`;

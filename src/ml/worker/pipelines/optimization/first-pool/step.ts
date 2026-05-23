@@ -8,10 +8,9 @@ import { runNormalizeBackwardBuffer, runNormalizeForwardBuffer } from "../../../
 import { runMaxPool2dBackwardBuffer, runMaxPool2dForwardBuffer } from "../../../ops/pooling/maxpool.run";
 import { runReluBackwardBuffer, runReluForwardBuffer } from "../../../ops/relu/relu.run";
 import { readGpuBufferToArray, releaseOwnedBuffer, type GpuBufferRef, type OwnedGpuBuffer } from "../../../runtime/bufferKernels";
-import { acquireReusableBuffer, releaseReusableBuffer } from "../../../runtime/bufferPool";
 import { BUFFER_USAGE_MAP_READ_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, MAP_MODE_READ } from "../../../runtime/gpuFlags";
 import { runBinaryOpToBuffer } from "../../../runtime/shaderRunner";
-import type { FirstPoolPersistentContext, FirstPoolStepResult, TensorShape4D } from "./types";
+import type { FirstPoolPersistentContext, FirstPoolStepResult, FirstPoolTempBufferStore, TensorShape4D } from "./types";
 import { runFusedUpdateClampBuffer, runScalarMulBuffer, runUnfusedUpdateClampBuffer } from "./updateKernels";
 
 const elementCount = (shape: TensorShape4D): number => shape[0] * shape[1] * shape[2] * shape[3];
@@ -21,10 +20,19 @@ export const runFirstPoolStep = async (
   payload: Extract<WorkerRequest, { type: "run-first-pool-optimizer" }>,
   persistent: FirstPoolPersistentContext,
   inputBuffer: GpuBufferRef,
+  tempBuffers: FirstPoolTempBufferStore,
 ): Promise<FirstPoolStepResult> => {
   const stepOwnedBuffers: GpuBufferRef[] = [];
   const useFusedConvRelu = payload.useFusedConvRelu ?? true;
   const useFusedUpdateClamp = payload.useFusedUpdateClamp ?? true;
+  const acquireMseBuffer = (_gpuDevice: GPUDevice, size: number, usage: number): GPUBuffer => {
+    const floatCount = Math.ceil(size / Float32Array.BYTES_PER_ELEMENT);
+    return tempBuffers.acquireTempBuffer([1, 1, 1, floatCount], usage, "mse-reduction");
+  };
+  const releaseMseBuffer = (size: number, usage: number): void => {
+    const floatCount = Math.ceil(size / Float32Array.BYTES_PER_ELEMENT);
+    tempBuffers.releaseTempBuffer([1, 1, 1, floatCount], usage, "mse-reduction");
+  };
   try {
     const forwardStart = performance.now();
     const normBuffer = await runNormalizeForwardBuffer(inputBuffer, payload.inputShape, payload.mean, payload.std);
@@ -41,9 +49,9 @@ export const runFirstPoolStep = async (
     stepOwnedBuffers.push(relu1GramBuffer, relu3GramBuffer);
 
     const lossStart = performance.now();
-    const styleLoss1 = (await runMseBuffer(device, acquireReusableBuffer, releaseReusableBuffer, relu1GramBuffer, persistent.styleGram1Buffer, 64 * 64, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.styleWeightConv1;
-    const styleLoss3 = (await runMseBuffer(device, acquireReusableBuffer, releaseReusableBuffer, relu3GramBuffer, persistent.styleGram3Buffer, 128 * 128, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.styleWeightConv3;
-    const contentLoss = (await runMseBuffer(device, acquireReusableBuffer, releaseReusableBuffer, relu2Buffer, persistent.contentRelu2Buffer, 64 * 16 * 16, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.contentWeight;
+    const styleLoss1 = (await runMseBuffer(device, acquireMseBuffer, releaseMseBuffer, relu1GramBuffer, persistent.styleGram1Buffer, 64 * 64, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.styleWeightConv1;
+    const styleLoss3 = (await runMseBuffer(device, acquireMseBuffer, releaseMseBuffer, relu3GramBuffer, persistent.styleGram3Buffer, 128 * 128, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.styleWeightConv3;
+    const contentLoss = (await runMseBuffer(device, acquireMseBuffer, releaseMseBuffer, relu2Buffer, persistent.contentRelu2Buffer, 64 * 16 * 16, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ)) * payload.contentWeight;
     const lossMs = performance.now() - lossStart;
 
     const backwardStart = performance.now();

@@ -27,7 +27,7 @@ export const runFirstPoolOptimizer = async (
   const runStart = performance.now();
   try {
     for (let step = 0; step < payload.steps; step += 1) {
-      const result = await runFirstPoolStep(device, payload, persistent, inputBuffer);
+      const result = await runFirstPoolStep(device, payload, persistent, inputBuffer, tempBuffers);
       const previousInput = inputBuffer;
       inputBuffer = result.nextInputBuffer;
       releaseOwnedBuffer(previousInput);
