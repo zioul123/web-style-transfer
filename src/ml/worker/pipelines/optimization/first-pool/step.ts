@@ -15,6 +15,13 @@ import { runFusedUpdateClampBuffer, runScalarMulBuffer, runUnfusedUpdateClampBuf
 
 const elementCount = (shape: TensorShape4D): number => shape[0] * shape[1] * shape[2] * shape[3];
 
+const assertShape = (valuesLength: number, shape: TensorShape4D, name: string): void => {
+  const expectedLength = elementCount(shape);
+  if (valuesLength !== expectedLength) {
+    throw new Error(`${name} has ${valuesLength} values but expected ${expectedLength}`);
+  }
+};
+
 export const runFirstPoolStep = async (
   device: GPUDevice,
   payload: Extract<WorkerRequest, { type: "run-first-pool-optimizer" }>,
@@ -25,6 +32,8 @@ export const runFirstPoolStep = async (
   const stepOwnedBuffers: GpuBufferRef[] = [];
   const useFusedConvRelu = payload.useFusedConvRelu ?? true;
   const useFusedUpdateClamp = payload.useFusedUpdateClamp ?? true;
+  const debugValidateStepShapes = payload.debugValidateStepShapes ?? false;
+  const debugReadbackGrad = payload.debugReadbackGrad ?? false;
   const acquireMseBuffer = (_gpuDevice: GPUDevice, size: number, usage: number): GPUBuffer => {
     const floatCount = Math.ceil(size / Float32Array.BYTES_PER_ELEMENT);
     return tempBuffers.acquireTempBuffer([1, 1, 1, floatCount], usage, "mse-reduction");
@@ -85,11 +94,31 @@ export const runFirstPoolStep = async (
     }
     const updateMs = performance.now() - updateStart;
 
-    const readbackStart = performance.now();
-    await readGpuBufferToArray(device, gInputBuffer.buffer, elementCount(payload.inputShape));
-    const readbackMs = performance.now() - readbackStart;
+    let diagnosticsReadbackMs = 0;
+    assertShape(elementCount([1, 64, 16, 16]), [1, 64, 16, 16], "relu1");
+    assertShape(elementCount([1, 64, 16, 16]), [1, 64, 16, 16], "relu2");
+    assertShape(elementCount([1, 128, 8, 8]), [1, 128, 8, 8], "relu3");
+    assertShape(elementCount(payload.inputShape), payload.inputShape, "gInput");
 
-    return { nextInputBuffer: clampedInputBuffer, totalLoss: styleLoss1 + styleLoss3 + contentLoss, forwardMs, lossMs, backwardMs, updateMs, readbackMs };
+    if (debugValidateStepShapes) {
+      const debugShapeReadStart = performance.now();
+      const relu1 = await readGpuBufferToArray(device, relu1Buffer.buffer, elementCount([1, 64, 16, 16]));
+      const relu2 = await readGpuBufferToArray(device, relu2Buffer.buffer, elementCount([1, 64, 16, 16]));
+      const relu3 = await readGpuBufferToArray(device, relu3Buffer.buffer, elementCount([1, 128, 8, 8]));
+      diagnosticsReadbackMs += performance.now() - debugShapeReadStart;
+      assertShape(relu1.length, [1, 64, 16, 16], "relu1");
+      assertShape(relu2.length, [1, 64, 16, 16], "relu2");
+      assertShape(relu3.length, [1, 128, 8, 8], "relu3");
+    }
+
+    if (debugReadbackGrad) {
+      const debugGradReadStart = performance.now();
+      const gInput = await readGpuBufferToArray(device, gInputBuffer.buffer, elementCount(payload.inputShape));
+      diagnosticsReadbackMs += performance.now() - debugGradReadStart;
+      assertShape(gInput.length, payload.inputShape, "gInput");
+    }
+
+    return { nextInputBuffer: clampedInputBuffer, totalLoss: styleLoss1 + styleLoss3 + contentLoss, forwardMs, lossMs, backwardMs, updateMs, diagnosticsReadbackMs };
   } finally {
     for (const ownedBuffer of stepOwnedBuffers) releaseOwnedBuffer(ownedBuffer);
   }

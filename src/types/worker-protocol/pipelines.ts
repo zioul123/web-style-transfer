@@ -48,6 +48,8 @@ export type WorkerRunFirstPoolOptimizerRequest = {
   steps: number;
   useFusedConvRelu?: boolean;
   useFusedUpdateClamp?: boolean;
+  debugValidateStepShapes?: boolean;
+  debugReadbackGrad?: boolean;
   collectBenchmarkStats?: boolean;
 };
 
@@ -59,6 +61,8 @@ export type WorkerFirstPoolBenchmarkStats = {
   backwardMs: number;
   updateMs: number;
   readbackMs: number;
+  mandatoryReadbackMs: number;
+  diagnosticsReadbackMs: number;
   steps: number;
 };
 

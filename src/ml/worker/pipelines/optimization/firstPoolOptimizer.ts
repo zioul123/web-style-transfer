@@ -13,14 +13,14 @@ const elementCount = (shape: readonly [number, number, number, number]): number 
 export const runFirstPoolOptimizer = async (
   payload: Extract<WorkerRequest, { type: "run-first-pool-optimizer" }>,
 ): Promise<{ losses: number[]; finalValues: number[]; stats?: {
-  elapsedMs: number; avgStepMs: number; forwardMs: number; lossMs: number; backwardMs: number; updateMs: number; readbackMs: number; steps: number;
+  elapsedMs: number; avgStepMs: number; forwardMs: number; lossMs: number; backwardMs: number; updateMs: number; readbackMs: number; mandatoryReadbackMs: number; diagnosticsReadbackMs: number; steps: number;
 } }> => {
   const device = getGpuDevice();
   if (device === null) throw new Error("WebGPU device is not initialized");
 
   const tempBuffers = createFirstPoolTempBufferStore(device);
   const persistent = await setupFirstPoolTargets(device, payload);
-  const stats: FirstPoolStatsAccumulator = { forwardMs: 0, lossMs: 0, backwardMs: 0, updateMs: 0, readbackMs: 0 };
+  const stats: FirstPoolStatsAccumulator = { forwardMs: 0, lossMs: 0, backwardMs: 0, updateMs: 0, readbackMs: 0, mandatoryReadbackMs: 0, diagnosticsReadbackMs: 0 };
   const collectBenchmarkStats = payload.collectBenchmarkStats ?? false;
   const losses: number[] = [];
   let inputBuffer = uploadToOwnedBuffer(device, new Float32Array(payload.initialInputValues));
@@ -36,11 +36,14 @@ export const runFirstPoolOptimizer = async (
       stats.lossMs += result.lossMs;
       stats.backwardMs += result.backwardMs;
       stats.updateMs += result.updateMs;
-      stats.readbackMs += result.readbackMs;
+      stats.diagnosticsReadbackMs += result.diagnosticsReadbackMs;
+      stats.readbackMs += result.diagnosticsReadbackMs;
     }
     const finalReadStart = performance.now();
     const finalValues = await readGpuBufferToArray(device, inputBuffer.buffer, elementCount(payload.inputShape));
-    stats.readbackMs += performance.now() - finalReadStart;
+    const finalReadMs = performance.now() - finalReadStart;
+    stats.mandatoryReadbackMs += finalReadMs;
+    stats.readbackMs += finalReadMs;
     const elapsedMs = performance.now() - runStart;
     return {
       losses,
