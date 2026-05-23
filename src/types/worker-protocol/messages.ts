@@ -3,7 +3,7 @@ import type {
   WorkerTensor,
   WorkerTensorOpResponse,
 } from "./core";
-import type { WorkerRunStats, WorkerRunFirstPoolOptimizerRequest, WorkerRunStyleTransferRequest } from "./pipelines";
+import type { WorkerFirstPoolBenchmarkStats, WorkerRunStats, WorkerRunFirstPoolOptimizerRequest, WorkerRunStyleTransferRequest } from "./pipelines";
 import type { WorkerTensorOpRequest } from "./tensor-ops";
 
 export type WorkerRequest =
@@ -26,6 +26,7 @@ export type WorkerResponse =
       ok: true;
       losses: number[];
       finalValues: number[];
+      stats?: WorkerFirstPoolBenchmarkStats;
     }
   | {
       type: "run-first-pool-optimizer-result";

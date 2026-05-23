@@ -51,6 +51,7 @@ export const routeWorkerMessage = (
             ok: true,
             losses: result.losses,
             finalValues: result.finalValues,
+            stats: result.stats,
           });
         } catch (error: unknown) {
           sendRunFirstPoolOptimizerResult(payload.id, {

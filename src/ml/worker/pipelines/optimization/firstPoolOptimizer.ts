@@ -38,11 +38,12 @@ import {
   BUFFER_USAGE_UNIFORM_COPY_DST,
   MAP_MODE_READ,
 } from "../../runtime/gpuFlags";
-import { runBinaryOpToBuffer } from "../../runtime/shaderRunner";
+import { makeClampShader, runBinaryOpToBuffer } from "../../runtime/shaderRunner";
 import { getGpuDevice } from "../../runtime/deviceState";
 import { runUnary } from "../../runtime/computeContext";
 import { runNormalizeForwardBuffer } from "../../ops/normalization/normalize.run";
-import { runConv2dReluForwardBuffer } from "../../ops/convolution/conv2d.run";
+import { runConv2dForwardBuffer, runConv2dReluForwardBuffer } from "../../ops/convolution/conv2d.run";
+import { runReluForwardBuffer } from "../../ops/relu/relu.run";
 import { runMaxPool2dForwardBuffer } from "../../ops/pooling/maxpool.run";
 import { runGramMatrixBuffer } from "../../ops/gram/gram.run";
 import { runReluBackward } from "../../ops/relu/relu.run";
@@ -156,6 +157,25 @@ const runFusedUpdateClampBuffer = (
   owned: true,
 });
 
+const runUnfusedUpdateClampBuffer = (
+  device: GPUDevice,
+  input: GpuBufferRef,
+  grad: GpuBufferRef,
+  count: number,
+  learningRate: number,
+): { clamped: GpuBufferRef; intermediates: GpuBufferRef[] } => {
+  const scaledGrad = runScalarMulBuffer(device, grad, count, learningRate);
+  const updated: GpuBufferRef = {
+    buffer: runBinaryOpToBuffer(device, "sub", input.buffer, scaledGrad.buffer, count, "tensorTensor"),
+    owned: true,
+  };
+  const clamped: GpuBufferRef = {
+    buffer: runUnaryShaderToBuffer(device, makeClampShader(count, 0, 1), updated.buffer, count),
+    owned: true,
+  };
+  return { clamped, intermediates: [scaledGrad, updated] };
+};
+
 const assertNear = (label: string, a: Float32Array, b: Float32Array): void => {
   if (!DEBUG_COMPARE_GPU_MIGRATION) return;
   if (a.length !== b.length) throw new Error(`${label} debug compare length mismatch.`);
@@ -166,7 +186,9 @@ const assertNear = (label: string, a: Float32Array, b: Float32Array): void => {
 
 export const runFirstPoolOptimizer = async (
   payload: Extract<WorkerRequest, { type: "run-first-pool-optimizer" }>,
-): Promise<{ losses: number[]; finalValues: number[] }> => {
+): Promise<{ losses: number[]; finalValues: number[]; stats?: {
+  elapsedMs: number; avgStepMs: number; forwardMs: number; lossMs: number; backwardMs: number; updateMs: number; readbackMs: number; steps: number;
+} }> => {
   const device = getGpuDevice();
   if (device === null) throw new Error("WebGPU device is not initialized");
   const localBufferByKey: Map<string, GPUBuffer> = new Map();
@@ -317,10 +339,20 @@ export const runFirstPoolOptimizer = async (
     new Float32Array(payload.initialInputValues),
   );
   const losses: number[] = [];
+  const useFusedConvRelu = payload.useFusedConvRelu ?? true;
+  const useFusedUpdateClamp = payload.useFusedUpdateClamp ?? true;
+  const collectBenchmarkStats = payload.collectBenchmarkStats ?? false;
+  let forwardMs = 0;
+  let lossMs = 0;
+  let backwardMs = 0;
+  let updateMs = 0;
+  let readbackMs = 0;
+  const runStart = performance.now();
   try {
     for (let step = 0; step < payload.steps; step += 1) {
     const stepOwnedBuffers: GpuBufferRef[] = [];
     try {
+    const forwardStart = performance.now();
     const normBuffer = await runNormalizeForwardBuffer(
       inputBuffer,
       payload.inputShape,
@@ -328,35 +360,43 @@ export const runFirstPoolOptimizer = async (
       payload.std,
     );
     stepOwnedBuffers.push(normBuffer);
-    const relu1Buffer = await runConv2dReluForwardBuffer(
+    const relu1Buffer = useFusedConvRelu ? await runConv2dReluForwardBuffer(
       normBuffer,
       payload.inputShape,
       context.persistent.conv1Weight.values,
       context.persistent.conv1Weight.shape,
       payload.conv1Bias,
-    );
+    ) : await runReluForwardBuffer(await runConv2dForwardBuffer(
+      normBuffer, payload.inputShape, context.persistent.conv1Weight.values, context.persistent.conv1Weight.shape, payload.conv1Bias,
+    ), elementCount([1, 64, 16, 16]));
     stepOwnedBuffers.push(relu1Buffer);
-    const relu2Buffer = await runConv2dReluForwardBuffer(
+    const relu2Buffer = useFusedConvRelu ? await runConv2dReluForwardBuffer(
       relu1Buffer,
       [1, 64, 16, 16],
       context.persistent.conv2Weight.values,
       context.persistent.conv2Weight.shape,
       payload.conv2Bias,
-    );
+    ) : await runReluForwardBuffer(await runConv2dForwardBuffer(
+      relu1Buffer, [1, 64, 16, 16], context.persistent.conv2Weight.values, context.persistent.conv2Weight.shape, payload.conv2Bias,
+    ), elementCount([1, 64, 16, 16]));
     stepOwnedBuffers.push(relu2Buffer);
     const poolBuffer = await runMaxPool2dForwardBuffer(relu2Buffer, [1, 64, 16, 16]);
     stepOwnedBuffers.push(poolBuffer);
-    const relu3Buffer = await runConv2dReluForwardBuffer(
+    const relu3Buffer = useFusedConvRelu ? await runConv2dReluForwardBuffer(
       poolBuffer,
       [1, 64, 8, 8],
       context.persistent.conv3Weight.values,
       context.persistent.conv3Weight.shape,
       payload.conv3Bias,
-    );
+    ) : await runReluForwardBuffer(await runConv2dForwardBuffer(
+      poolBuffer, [1, 64, 8, 8], context.persistent.conv3Weight.values, context.persistent.conv3Weight.shape, payload.conv3Bias,
+    ), elementCount([1, 128, 8, 8]));
     stepOwnedBuffers.push(relu3Buffer);
+    forwardMs += performance.now() - forwardStart;
     const relu1GramBuffer = await runGramMatrixBuffer(relu1Buffer, [1, 64, 16, 16]);
     const relu3GramBuffer = await runGramMatrixBuffer(relu3Buffer, [1, 128, 8, 8]);
     stepOwnedBuffers.push(relu1GramBuffer, relu3GramBuffer);
+    const lossStart = performance.now();
     const styleLoss1 =
       (await runMseBuffer(
         device,
@@ -394,6 +434,8 @@ export const runFirstPoolOptimizer = async (
         MAP_MODE_READ,
       )) * payload.contentWeight;
     losses.push(styleLoss1 + styleLoss3 + contentLoss);
+    lossMs += performance.now() - lossStart;
+    const readbackStart = performance.now();
     const norm = await readGpuTensor(device, normBuffer, payload.inputShape);
     const conv1 = await readGpuTensor(device, relu1Buffer, [1, 64, 16, 16]);
     const relu1 = await readGpuTensor(device, relu1Buffer, [1, 64, 16, 16]);
@@ -402,10 +444,12 @@ export const runFirstPoolOptimizer = async (
     const pool = await readGpuTensor(device, poolBuffer, [1, 64, 8, 8]);
     const conv3 = await readGpuTensor(device, relu3Buffer, [1, 128, 8, 8]);
     const relu3 = await readGpuTensor(device, relu3Buffer, [1, 128, 8, 8]);
+    readbackMs += performance.now() - readbackStart;
     context.stepTemps = { norm, conv1, relu1, conv2, relu2, pool, conv3, relu3 };
     assertShape("relu1", relu1, [1, 64, 16, 16]);
     assertShape("relu2", relu2, [1, 64, 16, 16]);
     assertShape("relu3", relu3, [1, 128, 8, 8]);
+    const backwardStart = performance.now();
     const gStyle1ReluBuffer = runScalarMulBuffer(
       device,
       await runStyleLossBackwardFromTargetGramBuffer(
@@ -525,14 +569,32 @@ export const runFirstPoolOptimizer = async (
       payload.std,
     );
     stepOwnedBuffers.push(gInputBuffer);
-    const clampedInputBuffer = runFusedUpdateClampBuffer(
+    backwardMs += performance.now() - backwardStart;
+    const updateStart = performance.now();
+    let clampedInputBuffer: GpuBufferRef;
+    if (useFusedUpdateClamp) {
+      clampedInputBuffer = runFusedUpdateClampBuffer(
       device,
       inputBuffer,
       gInputBuffer,
       elementCount(payload.inputShape),
       payload.learningRate,
-    );
+      );
+    } else {
+      const unfused = runUnfusedUpdateClampBuffer(
+        device,
+        inputBuffer,
+        gInputBuffer,
+        elementCount(payload.inputShape),
+        payload.learningRate,
+      );
+      clampedInputBuffer = unfused.clamped;
+      stepOwnedBuffers.push(...unfused.intermediates);
+    }
+    updateMs += performance.now() - updateStart;
+    const gInputReadStart = performance.now();
     const gInput = await readGpuTensor(device, gInputBuffer, payload.inputShape);
+    readbackMs += performance.now() - gInputReadStart;
 
     if (DEBUG_COMPARE_GPU_MIGRATION && step === 0) {
       const legacyStyle = await runStyleLossBackward(device, runUnary, relu1, [1, 64, 16, 16], context.persistent.styleRelu1, BUFFER_USAGE_STORAGE_COPY_DST, BUFFER_USAGE_UNIFORM_COPY_DST);
@@ -647,8 +709,24 @@ export const runFirstPoolOptimizer = async (
       for (const ownedBuffer of stepOwnedBuffers) releaseOwnedBuffer(ownedBuffer);
     }
     }
+    const finalReadStart = performance.now();
     const finalValues = await readGpuTensor(device, inputBuffer, payload.inputShape);
-    return { losses, finalValues: Array.from(finalValues) };
+    readbackMs += performance.now() - finalReadStart;
+    const elapsedMs = performance.now() - runStart;
+    return {
+      losses,
+      finalValues: Array.from(finalValues),
+      stats: collectBenchmarkStats ? {
+        elapsedMs,
+        avgStepMs: payload.steps > 0 ? elapsedMs / payload.steps : 0,
+        forwardMs,
+        lossMs,
+        backwardMs,
+        updateMs,
+        readbackMs,
+        steps: payload.steps,
+      } : undefined,
+    };
   } finally {
     releaseOwnedBuffer(inputBuffer);
     releaseOwnedBuffer(context.persistent.styleGram1Buffer);
