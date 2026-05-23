@@ -27,6 +27,7 @@ import {
 import {
   readGpuBufferToArray,
   releaseOwnedBuffer,
+  runUnaryShaderToBuffer,
   uploadToOwnedBuffer,
   type GpuBufferRef,
 } from "../../runtime/bufferKernels";
@@ -37,7 +38,7 @@ import {
   BUFFER_USAGE_UNIFORM_COPY_DST,
   MAP_MODE_READ,
 } from "../../runtime/gpuFlags";
-import { runBinaryOpToBuffer } from "../../runtime/shaderRunner";
+import { makeClampShader, runBinaryOpToBuffer } from "../../runtime/shaderRunner";
 import { getGpuDevice } from "../../runtime/deviceState";
 import { runUnary } from "../../runtime/computeContext";
 import { runNormalizeForwardBuffer } from "../../ops/normalization/normalize.run";
@@ -130,6 +131,17 @@ const runScalarMulBuffer = (
   releaseOwnedBuffer(scalarBuffer);
   return { buffer: out, owned: true };
 };
+
+const runClampBuffer = (
+  device: GPUDevice,
+  input: GpuBufferRef,
+  count: number,
+  min: number,
+  max: number,
+): GpuBufferRef => ({
+  buffer: runUnaryShaderToBuffer(device, makeClampShader(count, min, max), input.buffer, count),
+  owned: true,
+});
 
 const assertNear = (label: string, a: Float32Array, b: Float32Array): void => {
   if (!DEBUG_COMPARE_GPU_MIGRATION) return;
@@ -312,14 +324,15 @@ export const runFirstPoolOptimizer = async (
     releaseTempBuffer,
   };
 
-  let inputValues = new Float32Array(payload.initialInputValues);
+  let inputBuffer: GpuBufferRef = uploadToOwnedBuffer(
+    device,
+    new Float32Array(payload.initialInputValues),
+  );
   const losses: number[] = [];
   try {
     for (let step = 0; step < payload.steps; step += 1) {
     const stepOwnedBuffers: GpuBufferRef[] = [];
     try {
-    const inputBuffer = uploadToOwnedBuffer(device, inputValues);
-    stepOwnedBuffers.push(inputBuffer);
     const normBuffer = await runNormalizeForwardBuffer(
       inputBuffer,
       payload.inputShape,
@@ -530,6 +543,30 @@ export const runFirstPoolOptimizer = async (
       payload.std,
     );
     stepOwnedBuffers.push(gInputBuffer);
+    const scaledGradBuffer = runScalarMulBuffer(
+      device,
+      gInputBuffer,
+      elementCount(payload.inputShape),
+      payload.learningRate,
+    );
+    const updatedInputBuffer: GpuBufferRef = {
+      buffer: runBinaryOpToBuffer(
+        device,
+        "sub",
+        inputBuffer.buffer,
+        scaledGradBuffer.buffer,
+        elementCount(payload.inputShape),
+        "tensorTensor",
+      ),
+      owned: true,
+    };
+    const clampedInputBuffer = runClampBuffer(
+      device,
+      updatedInputBuffer,
+      elementCount(payload.inputShape),
+      0,
+      1,
+    );
     const gInput = await readGpuTensor(device, gInputBuffer, payload.inputShape);
 
     if (DEBUG_COMPARE_GPU_MIGRATION && step === 0) {
@@ -636,21 +673,20 @@ export const runFirstPoolOptimizer = async (
       assertNear("gInput", gInput, legacyGInput);
     }
 
-    const next = new Float32Array(inputValues.length);
-    for (let i = 0; i < inputValues.length; i += 1)
-      next[i] = Math.max(
-        0,
-        Math.min(1, inputValues[i] - payload.learningRate * gInput[i]),
-      );
-    inputValues = next;
+    const previousInputBuffer = inputBuffer;
+    inputBuffer = clampedInputBuffer;
+    releaseOwnedBuffer(previousInputBuffer);
+    stepOwnedBuffers.push(scaledGradBuffer, updatedInputBuffer);
     context.stepTemps.gInput = gInput;
     assertShape("gInput", gInput, payload.inputShape);
     } finally {
       for (const ownedBuffer of stepOwnedBuffers) releaseOwnedBuffer(ownedBuffer);
     }
     }
-    return { losses, finalValues: Array.from(inputValues) };
+    const finalValues = await readGpuTensor(device, inputBuffer, payload.inputShape);
+    return { losses, finalValues: Array.from(finalValues) };
   } finally {
+    releaseOwnedBuffer(inputBuffer);
     releaseOwnedBuffer(context.persistent.styleGram1Buffer);
     releaseOwnedBuffer(context.persistent.styleGram3Buffer);
     releaseOwnedBuffer(context.persistent.contentRelu2Buffer);
