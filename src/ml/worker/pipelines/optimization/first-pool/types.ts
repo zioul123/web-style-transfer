@@ -20,7 +20,7 @@ export type FirstPoolStepResult = {
   lossMs: number;
   backwardMs: number;
   updateMs: number;
-  readbackMs: number;
+  diagnosticsReadbackMs: number;
 };
 
 export type FirstPoolStatsAccumulator = {
@@ -29,6 +29,8 @@ export type FirstPoolStatsAccumulator = {
   backwardMs: number;
   updateMs: number;
   readbackMs: number;
+  mandatoryReadbackMs: number;
+  diagnosticsReadbackMs: number;
 };
 
 export type FirstPoolTempBufferStore = {
