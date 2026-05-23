@@ -103,6 +103,31 @@ export const runConv2dReluForward = async (
   ]);
 };
 
+export const runConv2dReluForwardBuffer = async (
+  input: GpuBufferRef,
+  inputShape: readonly [number, number, number, number],
+  weight: Float32Array,
+  weightShape: readonly [number, number, number, number],
+  bias: ArrayLike<number>,
+): Promise<GpuBufferRef> => {
+  const { inChannels, outChannels, height, width } = validateConv2dParams(inputShape, weightShape);
+  if (bias.length !== outChannels) throw new Error("conv2d-relu-forward only supports VGG-compatible params.");
+  const gpuDevice: GPUDevice | null = getGpuDevice();
+  if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
+  const outCount: number = outChannels * height * width;
+  const weightBuffer: GPUBuffer = gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST });
+  const biasBuffer: GPUBuffer = gpuDevice.createBuffer({ size: outChannels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST });
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST });
+  gpuDevice.queue.writeBuffer(weightBuffer, 0, weight);
+  gpuDevice.queue.writeBuffer(biasBuffer, 0, new Float32Array(bias));
+  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]));
+  return borrowedBuffer(runUnaryShaderToBuffer(gpuDevice, makeConv2dReluShader(outCount), input.buffer, outCount, [
+    { binding: 1, resource: { buffer: weightBuffer } },
+    { binding: 2, resource: { buffer: biasBuffer } },
+    { binding: 3, resource: { buffer: uniformBuffer } },
+  ]));
+};
+
 export const runConv2dBackwardInputBuffer = async (
   gradOut: GpuBufferRef,
   inputShape: readonly [number, number, number, number],

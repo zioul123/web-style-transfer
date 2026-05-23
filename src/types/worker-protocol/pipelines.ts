@@ -46,6 +46,20 @@ export type WorkerRunFirstPoolOptimizerRequest = {
   styleWeightConv3: number;
   learningRate: number;
   steps: number;
+  useFusedConvRelu?: boolean;
+  useFusedUpdateClamp?: boolean;
+  collectBenchmarkStats?: boolean;
+};
+
+export type WorkerFirstPoolBenchmarkStats = {
+  elapsedMs: number;
+  avgStepMs: number;
+  forwardMs: number;
+  lossMs: number;
+  backwardMs: number;
+  updateMs: number;
+  readbackMs: number;
+  steps: number;
 };
 
 export type WorkerRunStats = {

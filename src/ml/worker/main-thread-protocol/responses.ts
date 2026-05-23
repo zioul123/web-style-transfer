@@ -90,7 +90,7 @@ export const sendWebGpuInitResult = (
 export const sendRunFirstPoolOptimizerResult = (
   id: string,
   result:
-    | { ok: true; losses: number[]; finalValues: number[] }
+    | { ok: true; losses: number[]; finalValues: number[]; stats?: { elapsedMs: number; avgStepMs: number; forwardMs: number; lossMs: number; backwardMs: number; updateMs: number; readbackMs: number; steps: number } }
     | { ok: false; message: string },
 ): void => {
   postResponse({ type: "run-first-pool-optimizer-result", id, ...result });
