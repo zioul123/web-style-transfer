@@ -11,7 +11,7 @@ type TempRecord = {
 
 export type OptimizationRuntimeContext = {
   acquireTemp: (shape: OptimizationShape4D, usage: number, role: string) => GPUBuffer;
-  trackOwned: (ref: GpuBufferRef) => GpuBufferRef;
+  trackOwned: <T extends GpuBufferRef>(...refs: T[]) => T;
   releaseStepOwned: () => void;
   disposeAll: () => void;
 };
@@ -34,9 +34,9 @@ export const createOptimizationRuntimeContext = (device: GPUDevice): Optimizatio
     return buffer;
   };
 
-  const trackOwned = (ref: GpuBufferRef): GpuBufferRef => {
-    stepOwned.push(ref);
-    return ref;
+  const trackOwned = <T extends GpuBufferRef>(...refs: T[]): T => {
+    for (const ref of refs) stepOwned.push(ref);
+    return refs[refs.length - 1];
   };
 
   const releaseStepOwned = (): void => {
