@@ -1,7 +1,7 @@
 import { runConv2dBackwardInputBuffer, runConv2dForwardBuffer, runConv2dReluForwardBuffer } from "../../../ops/convolution/conv2d.run";
 import { runGramMatrixBuffer } from "../../../ops/gram/gram.run";
 import { runContentLossBackwardBuffer } from "../../../ops/loss/contentLoss.run";
-import { runMseBufferToScalarBuffer } from "../../../ops/loss/mse.run";
+import { runMseBuffer, runMseBufferToScalarBuffer } from "../../../ops/loss/mse.run";
 import { runStyleLossBackwardFromTargetGramBuffer } from "../../../ops/loss/styleLoss.run";
 import { runNormalizeBackwardBuffer, runNormalizeForwardBuffer } from "../../../ops/normalization/normalize.run";
 import { runMaxPool2dBackwardBuffer, runMaxPool2dForwardBuffer } from "../../../ops/pooling/maxpool.run";
@@ -27,6 +27,15 @@ export const createFirstPoolTrackedOps = (
     maxPoolForward: async (input: GpuBufferRef, shape: TensorShape4D): Promise<GpuBufferRef> => own(await runMaxPool2dForwardBuffer(input, shape)),
     gram: async (input: GpuBufferRef, shape: TensorShape4D): Promise<GpuBufferRef> => own(await runGramMatrixBuffer(input, shape)),
     mseScalarBuffer: async (acquire: (gpuDevice: GPUDevice, size: number, usage: number) => GPUBuffer, a: GpuBufferRef, b: GpuBufferRef, count: number, reductionUsage: number): Promise<GpuBufferRef> => own(await runMseBufferToScalarBuffer(device, acquire, a, b, count, reductionUsage)),
+    mseScalarReadback: async (
+      acquire: (gpuDevice: GPUDevice, size: number, usage: number) => GPUBuffer,
+      a: GpuBufferRef,
+      b: GpuBufferRef,
+      count: number,
+      reductionUsage: number,
+      readUsage: number,
+      mapModeRead: number,
+    ): Promise<number> => runMseBuffer(device, acquire, a, b, count, reductionUsage, readUsage, mapModeRead),
     scalarMul: (input: GpuBufferRef, count: number, scalar: number): GpuBufferRef => own(runScalarMulBuffer(device, input, count, scalar)),
     add: (a: GpuBufferRef, b: GpuBufferRef, count: number): GpuBufferRef => own({ buffer: runBinaryOpToBuffer(device, "add", a.buffer, b.buffer, count, "tensorTensor"), owned: true }),
     styleLossBackward: async (relu: GpuBufferRef, shape: TensorShape4D, targetGram: GpuBufferRef): Promise<GpuBufferRef> => own(await runStyleLossBackwardFromTargetGramBuffer(relu, shape, targetGram)),
@@ -42,6 +51,5 @@ export const createFirstPoolTrackedOps = (
       own(...unfused.intermediates);
       return unfused.clamped;
     },
-    ownMany: (...refs: GpuBufferRef[]): void => { own(...refs); },
   };
 };
