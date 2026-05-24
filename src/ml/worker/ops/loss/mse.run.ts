@@ -134,11 +134,6 @@ export const runMseBuffer = async (
     size: number,
     usage: number,
   ) => GPUBuffer,
-  releaseReusableBuffer: (
-    size: number,
-    usage: number,
-    buffer: GPUBuffer,
-  ) => void,
   a: GpuBufferRef,
   b: GpuBufferRef,
   count: number,
@@ -150,7 +145,6 @@ export const runMseBuffer = async (
   const device = gpuDevice;
   const bytes = count * 4;
   let currentBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_STORAGE_COPY_SRC);
-  let currentBytes = bytes;
   const diffPipeline = device.createComputePipeline({
     layout: "auto",
     compute: {
@@ -199,9 +193,8 @@ export const runMseBuffer = async (
     p.dispatchWorkgroups(nextCount);
     p.end();
     device.queue.submit([e.finish()]);
-    releaseReusableBuffer(currentBytes, BUFFER_USAGE_STORAGE_COPY_SRC, currentBuffer);
+
     currentBuffer = nextBuffer;
-    currentBytes = nextBytes;
     currentCount = nextCount;
   }
   const readBuffer = acquireReusableBuffer(device, 4, BUFFER_USAGE_MAP_READ_COPY_DST);
@@ -211,8 +204,7 @@ export const runMseBuffer = async (
   await readBuffer.mapAsync(MAP_MODE_READ);
   const sse = new Float32Array(readBuffer.getMappedRange().slice(0))[0];
   readBuffer.unmap();
-  releaseReusableBuffer(currentBytes, BUFFER_USAGE_STORAGE_COPY_SRC, currentBuffer);
-  releaseReusableBuffer(4, BUFFER_USAGE_MAP_READ_COPY_DST, readBuffer);
+
   return sse / count;
 };
 
@@ -223,11 +215,6 @@ export const runMseBufferToScalarBuffer = async (
     size: number,
     usage: number,
   ) => GPUBuffer,
-  releaseReusableBuffer: (
-    size: number,
-    usage: number,
-    buffer: GPUBuffer,
-  ) => void,
   a: GpuBufferRef,
   b: GpuBufferRef,
   count: number,
@@ -237,7 +224,6 @@ export const runMseBufferToScalarBuffer = async (
   const device = gpuDevice;
   const bytes = count * 4;
   let currentBuffer = acquireReusableBuffer(device, bytes, BUFFER_USAGE_STORAGE_COPY_SRC);
-  let currentBytes = bytes;
   const diffPipeline = device.createComputePipeline({
     layout: "auto",
     compute: {
@@ -287,9 +273,8 @@ export const runMseBufferToScalarBuffer = async (
     p.dispatchWorkgroups(nextCount);
     p.end();
     device.queue.submit([e.finish()]);
-    releaseReusableBuffer(currentBytes, BUFFER_USAGE_STORAGE_COPY_SRC, currentBuffer);
+
     currentBuffer = nextBuffer;
-    currentBytes = nextBytes;
     currentCount = nextCount;
   }
 
