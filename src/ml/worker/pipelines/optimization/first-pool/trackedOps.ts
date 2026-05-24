@@ -9,7 +9,7 @@ import { runReluBackwardBuffer, runReluForwardBuffer } from "../../../ops/relu/r
 import type { GpuBufferRef, OwnedGpuBuffer } from "../../../runtime/bufferKernels";
 import { runBinaryOpToBuffer } from "../../../runtime/shaderRunner";
 import type { FirstPoolRuntimeContext, TensorShape4D } from "./types";
-import { runScalarMulBuffer } from "./updateKernels";
+import { runFusedUpdateClampBuffer, runScalarMulBuffer, runUnfusedUpdateClampBuffer } from "./updateKernels";
 
 export type FirstPoolTrackedOps = ReturnType<typeof createFirstPoolTrackedOps>;
 
@@ -35,7 +35,13 @@ export const createFirstPoolTrackedOps = (
     conv2dBackwardInput: async (gradOut: GpuBufferRef, inShape: TensorShape4D, weights: Float32Array, weightShape: readonly [number, number, number, number]): Promise<GpuBufferRef> => own(await runConv2dBackwardInputBuffer(gradOut, inShape, weights, weightShape)),
     maxPoolBackward: async (reluOut: GpuBufferRef, reluShape: TensorShape4D, gradPool: GpuBufferRef): Promise<GpuBufferRef> => own(await runMaxPool2dBackwardBuffer(reluOut, reluShape, gradPool)),
     normalizeBackward: async (gradNorm: GpuBufferRef, shape: TensorShape4D, std: readonly number[]): Promise<GpuBufferRef> => own(await runNormalizeBackwardBuffer(gradNorm, shape, std)),
+
+    updateClamp: (input: GpuBufferRef, grad: GpuBufferRef, count: number, learningRate: number, useFused: boolean): OwnedGpuBuffer => {
+      if (useFused) return runFusedUpdateClampBuffer(device, input, grad, count, learningRate);
+      const unfused = runUnfusedUpdateClampBuffer(device, input, grad, count, learningRate);
+      own(...unfused.intermediates);
+      return unfused.clamped;
+    },
     ownMany: (...refs: GpuBufferRef[]): void => { own(...refs); },
-    ownClamped: (buffer: OwnedGpuBuffer): OwnedGpuBuffer => own(buffer),
   };
 };

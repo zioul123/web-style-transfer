@@ -3,7 +3,6 @@ import { runMseBuffer } from "../../../ops/loss/mse.run";
 import { readGpuBufferToArray, type GpuBufferRef, type OwnedGpuBuffer } from "../../../runtime/bufferKernels";
 import { BUFFER_USAGE_MAP_READ_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, MAP_MODE_READ } from "../../../runtime/gpuFlags";
 import type { FirstPoolPersistentContext, FirstPoolRuntimeContext, FirstPoolStepResult, TensorShape4D } from "./types";
-import { runFusedUpdateClampBuffer, runUnfusedUpdateClampBuffer } from "./updateKernels";
 import { createFirstPoolTrackedOps } from "./trackedOps";
 
 const elementCount = (shape: TensorShape4D): number => shape[0] * shape[1] * shape[2] * shape[3];
@@ -83,14 +82,13 @@ export const runFirstPoolStep = async (
     const backwardMs = performance.now() - backwardStart;
 
     const updateStart = performance.now();
-    let clampedInputBuffer: OwnedGpuBuffer;
-    if (useFusedUpdateClamp) {
-      clampedInputBuffer = runFusedUpdateClampBuffer(device, inputBuffer, gInputBuffer, elementCount(payload.inputShape), payload.learningRate);
-    } else {
-      const unfused = runUnfusedUpdateClampBuffer(device, inputBuffer, gInputBuffer, elementCount(payload.inputShape), payload.learningRate);
-      tracked.ownMany(...unfused.intermediates);
-      clampedInputBuffer = unfused.clamped;
-    }
+    const clampedInputBuffer: OwnedGpuBuffer = tracked.updateClamp(
+      inputBuffer,
+      gInputBuffer,
+      elementCount(payload.inputShape),
+      payload.learningRate,
+      useFusedUpdateClamp,
+    );
     const updateMs = performance.now() - updateStart;
 
     let diagnosticsReadbackMs = 0;
