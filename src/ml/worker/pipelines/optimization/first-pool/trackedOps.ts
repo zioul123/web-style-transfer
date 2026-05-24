@@ -11,7 +11,7 @@ import { runBinaryOpToBuffer } from "../../../runtime/shaderRunner";
 import type { FirstPoolRuntimeContext, TensorShape4D } from "./types";
 import { runFusedUpdateClampBuffer, runScalarMulBuffer, runUnfusedUpdateClampBuffer } from "./updateKernels";
 
-export type AcquireTempBuffer = (gpuDevice: GPUDevice, size: number, usage: number) => GPUBuffer;
+export type AcquireTempBuffer = (size: number, usage: number) => GPUBuffer;
 
 type ReadbackMseArgs = {
   acquire: AcquireTempBuffer;
