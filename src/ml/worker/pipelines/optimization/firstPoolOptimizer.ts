@@ -5,7 +5,7 @@ import { readGpuBufferToArray, releaseOwnedBuffer, uploadToOwnedBuffer } from ".
 import { getGpuDevice } from "../../runtime/deviceState";
 import { setupFirstPoolTargets } from "./first-pool/setupTargets";
 import { runFirstPoolStep } from "./first-pool/step";
-import { createFirstPoolTempBufferStore } from "./first-pool/tempBuffers";
+import { createOptimizationRuntimeContext } from "../../runtime/optimizationContext";
 import type { FirstPoolStatsAccumulator } from "./first-pool/types";
 
 const elementCount = (shape: readonly [number, number, number, number]): number => shape[0] * shape[1] * shape[2] * shape[3];
@@ -18,7 +18,7 @@ export const runFirstPoolOptimizer = async (
   const device = getGpuDevice();
   if (device === null) throw new Error("WebGPU device is not initialized");
 
-  const tempBuffers = createFirstPoolTempBufferStore(device);
+  const runtimeContext = createOptimizationRuntimeContext(device);
   const persistent = await setupFirstPoolTargets(device, payload);
   const stats: FirstPoolStatsAccumulator = { forwardMs: 0, lossMs: 0, backwardMs: 0, updateMs: 0, readbackMs: 0, mandatoryReadbackMs: 0, diagnosticsReadbackMs: 0 };
   const collectBenchmarkStats = payload.collectBenchmarkStats ?? false;
@@ -27,7 +27,7 @@ export const runFirstPoolOptimizer = async (
   const runStart = performance.now();
   try {
     for (let step = 0; step < payload.steps; step += 1) {
-      const result = await runFirstPoolStep(device, payload, persistent, inputBuffer, tempBuffers);
+      const result = await runFirstPoolStep(device, payload, persistent, inputBuffer, runtimeContext);
       const previousInput = inputBuffer;
       inputBuffer = result.nextInputBuffer;
       releaseOwnedBuffer(previousInput);
@@ -53,6 +53,6 @@ export const runFirstPoolOptimizer = async (
   } finally {
     releaseOwnedBuffer(inputBuffer);
     persistent.dispose();
-    tempBuffers.drain();
+    runtimeContext.disposeAll();
   }
 };

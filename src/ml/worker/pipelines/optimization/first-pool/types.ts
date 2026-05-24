@@ -1,5 +1,6 @@
 import type { createTensor } from "../../../../index";
 import type { GpuBufferRef, OwnedGpuBuffer } from "../../../runtime/bufferKernels";
+import type { OptimizationRuntimeContext } from "../../../runtime/optimizationContext";
 
 export type TensorShape4D = readonly [number, number, number, number];
 
@@ -33,8 +34,4 @@ export type FirstPoolStatsAccumulator = {
   diagnosticsReadbackMs: number;
 };
 
-export type FirstPoolTempBufferStore = {
-  acquireTempBuffer: (shape: TensorShape4D, usage: number, role: string) => GPUBuffer;
-  releaseTempBuffer: (shape: TensorShape4D, usage: number, role: string) => void;
-  drain: () => void;
-};
+export type FirstPoolRuntimeContext = OptimizationRuntimeContext;
