@@ -75,6 +75,7 @@ export const BenchmarkApp = (): ReactElement => {
   const [styleWeightConv3, setStyleWeightConv3] = useState<number>(120);
   const [debugValidateStepShapes, setDebugValidateStepShapes] = useState<boolean>(false);
   const [debugReadbackGrad, setDebugReadbackGrad] = useState<boolean>(false);
+  const [debugUseLegacyCpuLossReadback, setDebugUseLegacyCpuLossReadback] = useState<boolean>(false);
   const [status, setStatus] = useState<string>("Ready");
   const [result, setResult] = useState<BenchmarkResult | null>(null);
   const [summary, setSummary] = useState<BenchmarkRunSummary | null>(null);
@@ -150,6 +151,7 @@ export const BenchmarkApp = (): ReactElement => {
           collectBenchmarkStats: true,
           debugValidateStepShapes,
           debugReadbackGrad,
+          debugUseLegacyCpuLossReadback,
         });
         if (optimized.type !== "run-first-pool-optimizer-result") throw new Error("Unexpected run response");
         if (!optimized.ok) throw new Error(optimized.message);
@@ -199,6 +201,7 @@ export const BenchmarkApp = (): ReactElement => {
         <div className="flex flex-col gap-2 pt-2">
           <label className="flex items-center gap-2"><input type="checkbox" checked={debugValidateStepShapes} onChange={(event) => setDebugValidateStepShapes(event.target.checked)} /><span>debugValidateStepShapes</span></label>
           <label className="flex items-center gap-2"><input type="checkbox" checked={debugReadbackGrad} onChange={(event) => setDebugReadbackGrad(event.target.checked)} /><span>debugReadbackGrad</span></label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={debugUseLegacyCpuLossReadback} onChange={(event) => setDebugUseLegacyCpuLossReadback(event.target.checked)} /><span>debugUseLegacyCpuLossReadback</span></label>
         </div>
       </section>
 
