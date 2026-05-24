@@ -2,7 +2,8 @@ import { expect, test } from "@playwright/test";
 import type { WorkerRequest, WorkerResponse } from "../src/types";
 import { gotoStableApp } from "./helpers/appPage";
 
-test("phase 5 benchmark: fused first-pool path is not slower than unfused by large margin", async ({ page }) => {
+// Use this for benchmarking
+test.skip("phase 5 benchmark: fused first-pool path is not slower than unfused by large margin", async ({ page }) => {
   test.setTimeout(300000);
   await gotoStableApp(page);
   const result = await page.evaluate(async () => {

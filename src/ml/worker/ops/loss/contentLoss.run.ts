@@ -1,6 +1,6 @@
 import { makeMseBackwardShader } from "./mse.shader";
 import {
-  borrowedBuffer,
+  ownedBuffer,
   readGpuBufferToArray,
   releaseOwnedBuffer,
   runUnaryShaderToBuffer,
@@ -15,7 +15,7 @@ export const runContentLossBackwardBuffer = async (
 ): Promise<GpuBufferRef> => {
   const gpuDevice = getGpuDevice();
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
-  return borrowedBuffer(
+  return ownedBuffer(
     runUnaryShaderToBuffer(gpuDevice, makeMseBackwardShader(count), input.buffer, count, [
       { binding: 1, resource: { buffer: target.buffer } },
     ]),

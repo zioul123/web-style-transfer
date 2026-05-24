@@ -1,5 +1,6 @@
 import { makeMseDiffShader, makeReduceSumShader } from "./mse.shader";
-import type { GpuBufferRef } from "../../runtime/bufferKernels";
+import { ownedBuffer, type GpuBufferRef } from "../../runtime/bufferKernels";
+import { BUFFER_USAGE_STORAGE_COPY_DST } from "../../runtime/gpuFlags";
 
 export const runMse = async (
   gpuDevice: GPUDevice | null,
@@ -276,5 +277,18 @@ export const runMseBufferToScalarBuffer = async (
     currentCount = nextCount;
   }
 
-  return { buffer: currentBuffer, owned: true };
+  const outBuffer = device.createBuffer({
+    size: Float32Array.BYTES_PER_ELEMENT,
+    usage: BUFFER_USAGE_STORAGE_COPY_SRC | BUFFER_USAGE_STORAGE_COPY_DST,
+  });
+  const copyEncoder = device.createCommandEncoder();
+  copyEncoder.copyBufferToBuffer(
+    currentBuffer,
+    0,
+    outBuffer,
+    0,
+    Float32Array.BYTES_PER_ELEMENT,
+  );
+  device.queue.submit([copyEncoder.finish()]);
+  return ownedBuffer(outBuffer);
 };

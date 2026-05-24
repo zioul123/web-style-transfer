@@ -39,10 +39,25 @@ import {
 import { getGpuDevice } from "../../runtime/deviceState";
 import { SUPER_FUSED_BLOCKS, POOL_LAYERS, RELU_LAYERS } from "./layerSchedules";
 import { runUnary } from "../../runtime/computeContext";
+import {
+  readGpuBufferToArray,
+  releaseOwnedBuffer,
+  uploadToOwnedBuffer,
+  type GpuBufferRef,
+  type OwnedGpuBuffer,
+} from "../../runtime/bufferKernels";
+import {
+  createOptimizationRuntimeContext,
+  type OptimizationRuntimeContext,
+} from "../../runtime/optimizationContext";
+import {
+  createOptimizationTrackedOps,
+  type OptimizationTrackedOps,
+} from "./trackedOps";
 
-export const runStyleTransfer = async (
-  payload: Extract<WorkerRequest, { type: "run-style-transfer" }>,
-): Promise<{
+type StyleTransferPayload = Extract<WorkerRequest, { type: "run-style-transfer" }>;
+
+type StyleTransferRunResult = {
   losses: number[];
   finalValues: number[];
   stats: {
@@ -55,7 +70,11 @@ export const runStyleTransfer = async (
     clampMs: number;
     steps: number;
   };
-}> => {
+};
+
+const runStyleTransferLegacy = async (
+  payload: StyleTransferPayload,
+): Promise<StyleTransferRunResult> => {
   const reluLayerSet = new Set(RELU_LAYERS);
   const poolLayerSet = new Set(POOL_LAYERS);
   const convLayerCache: Record<
@@ -664,6 +683,453 @@ export const runStyleTransfer = async (
     },
   };
 };
+
+type TensorShape4D = readonly [number, number, number, number];
+
+type ConvLayerCacheEntry = {
+  shape: [number, number, number, number];
+  values: Float32Array;
+  bias: Float32Array;
+};
+
+type StyleTransferForwardResult = {
+  reluOut: Record<number, GpuBufferRef | undefined>;
+  reluShape: Record<number, TensorShape4D | undefined>;
+  convInShape: Record<number, TensorShape4D | undefined>;
+  layerInput: Record<number, GpuBufferRef | undefined>;
+  layerInputShape: Record<number, TensorShape4D | undefined>;
+  final: GpuBufferRef;
+};
+
+type StyleTransferTrackedOps = OptimizationTrackedOps;
+
+const elementCount = (shape: TensorShape4D): number =>
+  shape[0] * shape[1] * shape[2] * shape[3];
+
+const gramElementCount = (shape: TensorShape4D): number =>
+  shape[1] * shape[1];
+
+const convOutputShape = (
+  inputShape: TensorShape4D,
+  outChannels: number,
+): TensorShape4D => [inputShape[0], outChannels, inputShape[2], inputShape[3]];
+
+const pooledShape = (inputShape: TensorShape4D): TensorShape4D => [
+  inputShape[0],
+  inputShape[1],
+  Math.floor(inputShape[2] / 2),
+  Math.floor(inputShape[3] / 2),
+];
+
+const parseConvLayerCache = (
+  weights: StyleTransferPayload["weights"],
+): Record<number, ConvLayerCacheEntry | undefined> => {
+  const convLayerCache: Record<number, ConvLayerCacheEntry | undefined> = {};
+  for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
+    const weightShapeRaw = weights[`conv${layerIndex}.weightShape`];
+    const weightValues = weights[`conv${layerIndex}.weightValues`];
+    const biasValues = weights[`conv${layerIndex}.biasValues`];
+    if (
+      Array.isArray(weightShapeRaw) &&
+      Array.isArray(weightValues) &&
+      Array.isArray(biasValues)
+    ) {
+      convLayerCache[layerIndex] = {
+        shape: weightShapeRaw as [number, number, number, number],
+        values: new Float32Array(weightValues),
+        bias: new Float32Array(biasValues),
+      };
+    }
+  }
+  return convLayerCache;
+};
+
+const releaseUnpersistedBuffers = (
+  ownedBuffers: readonly GpuBufferRef[],
+  persistentBuffers: readonly GpuBufferRef[],
+): void => {
+  const persistentBufferSet = new Set<GPUBuffer>(
+    persistentBuffers.map((ref) => ref.buffer),
+  );
+  for (const ref of ownedBuffers) {
+    if (!persistentBufferSet.has(ref.buffer)) releaseOwnedBuffer(ref);
+  }
+};
+
+const runForwardGpuResident = async (
+  payload: StyleTransferPayload,
+  convLayerCache: Record<number, ConvLayerCacheEntry | undefined>,
+  tracked: StyleTransferTrackedOps,
+  startBuffer: GpuBufferRef,
+): Promise<StyleTransferForwardResult> => {
+  const reluLayerSet = new Set(RELU_LAYERS);
+  const poolLayerSet = new Set(POOL_LAYERS);
+  let shape: TensorShape4D = payload.inputShape;
+  let values: GpuBufferRef = startBuffer;
+  const reluOut: Record<number, GpuBufferRef | undefined> = {};
+  const reluShape: Record<number, TensorShape4D | undefined> = {};
+  const convInShape: Record<number, TensorShape4D | undefined> = {};
+  const layerInput: Record<number, GpuBufferRef | undefined> = {};
+  const layerInputShape: Record<number, TensorShape4D | undefined> = {};
+  const useFusedConvRelu = payload.fusedOps ?? false;
+
+  for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
+    layerInput[layerIndex] = values;
+    layerInputShape[layerIndex] = shape;
+    const convLayer = convLayerCache[layerIndex];
+    const hasRelu = reluLayerSet.has(layerIndex);
+    if (convLayer !== undefined) {
+      convInShape[layerIndex] = shape;
+      if (useFusedConvRelu && hasRelu) {
+        values = await tracked.conv2dReluForward(
+          values,
+          shape,
+          convLayer.values,
+          convLayer.shape,
+          convLayer.bias,
+        );
+        shape = convOutputShape(shape, convLayer.shape[0]);
+        reluOut[layerIndex] = values;
+        reluShape[layerIndex] = shape;
+      } else {
+        values = await tracked.conv2dForward(
+          values,
+          shape,
+          convLayer.values,
+          convLayer.shape,
+          convLayer.bias,
+        );
+        shape = convOutputShape(shape, convLayer.shape[0]);
+      }
+    }
+    if (hasRelu && !(useFusedConvRelu && convLayer !== undefined)) {
+      values = await tracked.reluForward(values, elementCount(shape));
+      reluOut[layerIndex] = values;
+      reluShape[layerIndex] = shape;
+    }
+    if (poolLayerSet.has(layerIndex)) {
+      layerInput[layerIndex] = values;
+      layerInputShape[layerIndex] = shape;
+      values = await tracked.maxPoolForward(values, shape);
+      shape = pooledShape(shape);
+    }
+  }
+
+  return { reluOut, reluShape, convInShape, layerInput, layerInputShape, final: values };
+};
+
+const runStyleTransferGpuResident = async (
+  payload: StyleTransferPayload,
+): Promise<StyleTransferRunResult> => {
+  if (payload.optimizer !== "sgd") {
+    throw new Error("GPU-resident style transfer currently supports only the SGD optimizer.");
+  }
+  const device = getGpuDevice();
+  if (device === null) throw new Error("WebGPU device is not initialized.");
+
+  const runtimeContext = createOptimizationRuntimeContext(device);
+  const convLayerCache = parseConvLayerCache(payload.weights);
+  const losses: number[] = [];
+  let forwardMs = 0;
+  let backwardMs = 0;
+  let lossMs = 0;
+  let updateMs = 0;
+  let clampMs = 0;
+  const totalStart = performance.now();
+
+  let inputBuffer: OwnedGpuBuffer | null = uploadToOwnedBuffer(
+    device,
+    new Float32Array(payload.inputImageValues),
+  );
+  const contentImageBuffer = uploadToOwnedBuffer(
+    device,
+    new Float32Array(payload.contentImageValues),
+  );
+  const styleImageBuffer = uploadToOwnedBuffer(
+    device,
+    new Float32Array(payload.styleImageValues),
+  );
+  const persistentBuffers: GpuBufferRef[] = [contentImageBuffer, styleImageBuffer];
+
+  try {
+    const targetOwnedBuffers: GpuBufferRef[] = [];
+    const targetContext: OptimizationRuntimeContext = {
+      acquireTemp: runtimeContext.acquireTemp,
+      trackOwned: <T extends GpuBufferRef>(...refs: T[]): T => {
+        targetOwnedBuffers.push(...refs);
+        return refs[refs.length - 1];
+      },
+      releaseStepOwned: (): void => {
+        releaseUnpersistedBuffers(targetOwnedBuffers, persistentBuffers);
+        targetOwnedBuffers.length = 0;
+      },
+      disposeAll: (): void => undefined,
+    };
+    const targetTracked = createOptimizationTrackedOps(device, targetContext);
+    const contentNorm = await targetTracked.normalizeForward(
+      contentImageBuffer,
+      payload.inputShape,
+      payload.mean,
+      payload.std,
+    );
+    const styleNorm = await targetTracked.normalizeForward(
+      styleImageBuffer,
+      payload.inputShape,
+      payload.mean,
+      payload.std,
+    );
+    const contentTargets = await runForwardGpuResident(
+      payload,
+      convLayerCache,
+      targetTracked,
+      contentNorm,
+    );
+    const styleTargets = await runForwardGpuResident(
+      payload,
+      convLayerCache,
+      targetTracked,
+      styleNorm,
+    );
+    const contentTargetRelu = contentTargets.reluOut[payload.contentLayerIndex];
+    if (contentTargetRelu === undefined) {
+      throw new Error(
+        `Missing precomputed content activation for ReLU layer index ${payload.contentLayerIndex}.`,
+      );
+    }
+    persistentBuffers.push(contentTargetRelu);
+    const styleGramTargets: Record<number, GpuBufferRef | undefined> = {};
+    for (const reluLayerIndex of payload.styleLayerIndices) {
+      const styleRelu = styleTargets.reluOut[reluLayerIndex];
+      const styleShape = styleTargets.reluShape[reluLayerIndex];
+      if (styleRelu === undefined || styleShape === undefined) {
+        throw new Error(
+          `Missing precomputed style activation for ReLU layer index ${reluLayerIndex}.`,
+        );
+      }
+      const gram = await targetTracked.gram(styleRelu, styleShape);
+      styleGramTargets[reluLayerIndex] = gram;
+      persistentBuffers.push(gram);
+    }
+    targetContext.releaseStepOwned();
+
+    for (let step = 0; step < payload.steps; step += 1) {
+      if (inputBuffer === null) throw new Error("Input buffer was released unexpectedly.");
+      const tracked = createOptimizationTrackedOps(device, runtimeContext);
+      try {
+        const forwardStart = performance.now();
+        const norm = await tracked.normalizeForward(
+          inputBuffer,
+          payload.inputShape,
+          payload.mean,
+          payload.std,
+        );
+        const run = await runForwardGpuResident(payload, convLayerCache, tracked, norm);
+        forwardMs += performance.now() - forwardStart;
+
+        const lossStart = performance.now();
+        const scalarLossBuffers: GpuBufferRef[] = [];
+        for (const reluLayerIndex of payload.styleLayerIndices) {
+          const inputRelu = run.reluOut[reluLayerIndex];
+          const reluShape = run.reluShape[reluLayerIndex];
+          const targetGram = styleGramTargets[reluLayerIndex];
+          if (inputRelu === undefined) {
+            throw new Error(
+              `Missing ReLU activation for style layer index ${reluLayerIndex}.`,
+            );
+          }
+          if (reluShape === undefined) {
+            throw new Error(`Unsupported ReLU style layer index ${reluLayerIndex}.`);
+          }
+          if (targetGram === undefined) {
+            throw new Error(
+              `Missing precomputed style gram target for ReLU layer index ${reluLayerIndex}.`,
+            );
+          }
+          const inputGram = await tracked.gram(inputRelu, reluShape);
+          const styleSse = await tracked.mseScalarBuffer(
+            inputGram,
+            targetGram,
+            gramElementCount(reluShape),
+          );
+          scalarLossBuffers.push(
+            tracked.scalarMul(
+              styleSse,
+              1,
+              payload.styleWeight / gramElementCount(reluShape),
+            ),
+          );
+        }
+        const contentRelu = run.reluOut[payload.contentLayerIndex];
+        const contentReluShape = run.reluShape[payload.contentLayerIndex];
+        if (contentRelu === undefined || contentReluShape === undefined) {
+          throw new Error(
+            `Missing ReLU activation for content layer index ${payload.contentLayerIndex}.`,
+          );
+        }
+        const contentSse = await tracked.mseScalarBuffer(
+          contentRelu,
+          contentTargetRelu,
+          elementCount(contentReluShape),
+        );
+        scalarLossBuffers.push(
+          tracked.scalarMul(
+            contentSse,
+            1,
+            payload.contentWeight / elementCount(contentReluShape),
+          ),
+        );
+        let totalLossBuffer = scalarLossBuffers[0];
+        if (totalLossBuffer === undefined) throw new Error("No loss terms were produced.");
+        for (let i = 1; i < scalarLossBuffers.length; i += 1) {
+          totalLossBuffer = tracked.add(totalLossBuffer, scalarLossBuffers[i], 1);
+        }
+        losses.push((await readGpuBufferToArray(device, totalLossBuffer.buffer, 1))[0]);
+        lossMs += performance.now() - lossStart;
+
+        const gradByReluLayer: Record<number, GpuBufferRef | undefined> = {};
+        for (const reluLayerIndex of payload.styleLayerIndices) {
+          const inputRelu = run.reluOut[reluLayerIndex];
+          const reluShape = run.reluShape[reluLayerIndex];
+          const targetGram = styleGramTargets[reluLayerIndex];
+          if (inputRelu === undefined) {
+            throw new Error(
+              `Missing ReLU activation for style gradient layer index ${reluLayerIndex}.`,
+            );
+          }
+          if (reluShape === undefined) {
+            throw new Error(`Unsupported ReLU style gradient layer index ${reluLayerIndex}.`);
+          }
+          if (targetGram === undefined) {
+            throw new Error(
+              `Missing precomputed style gram gradient target for ReLU layer index ${reluLayerIndex}.`,
+            );
+          }
+          const styleGrad = await tracked.styleLossBackward(inputRelu, reluShape, targetGram);
+          const weightedStyleGrad =
+            payload.styleWeight === 1
+              ? styleGrad
+              : tracked.scalarMul(styleGrad, elementCount(reluShape), payload.styleWeight);
+          const existingGrad = gradByReluLayer[reluLayerIndex];
+          gradByReluLayer[reluLayerIndex] =
+            existingGrad === undefined
+              ? weightedStyleGrad
+              : tracked.add(existingGrad, weightedStyleGrad, elementCount(reluShape));
+        }
+        const contentGrad = await tracked.contentLossBackward(
+          contentRelu,
+          contentTargetRelu,
+          elementCount(contentReluShape),
+        );
+        const weightedContentGrad =
+          payload.contentWeight === 1
+            ? contentGrad
+            : tracked.scalarMul(contentGrad, elementCount(contentReluShape), payload.contentWeight);
+        const existingContentGrad = gradByReluLayer[payload.contentLayerIndex];
+        gradByReluLayer[payload.contentLayerIndex] =
+          existingContentGrad === undefined
+            ? weightedContentGrad
+            : tracked.add(
+                existingContentGrad,
+                weightedContentGrad,
+                elementCount(contentReluShape),
+              );
+
+        const backwardStart = performance.now();
+        let grad: GpuBufferRef | null = null;
+        const poolLayerSet = new Set(POOL_LAYERS);
+        const reluLayerSet = new Set(RELU_LAYERS);
+        for (let layerIndex = 29; layerIndex >= 0; layerIndex -= 1) {
+          if (poolLayerSet.has(layerIndex)) {
+            const poolInput = run.layerInput[layerIndex];
+            const poolInputShape = run.layerInputShape[layerIndex];
+            if (grad !== null && poolInput !== undefined && poolInputShape !== undefined) {
+              grad = await tracked.maxPoolBackward(poolInput, poolInputShape, grad);
+            }
+          }
+          if (reluLayerSet.has(layerIndex)) {
+            const tapGrad = gradByReluLayer[layerIndex];
+            const reluOut = run.reluOut[layerIndex];
+            const reluShape = run.reluShape[layerIndex];
+            if (tapGrad !== undefined) {
+              if (reluShape === undefined) {
+                throw new Error(`Missing ReLU shape for gradient layer index ${layerIndex}.`);
+              }
+              grad =
+                grad === null
+                  ? tapGrad
+                  : tracked.add(grad, tapGrad, elementCount(reluShape));
+            }
+            if (grad !== null && reluOut !== undefined && reluShape !== undefined) {
+              grad = await tracked.reluBackward(reluOut, grad, elementCount(reluShape));
+            }
+          }
+          const convLayer = convLayerCache[layerIndex];
+          const convInShape = run.convInShape[layerIndex];
+          if (convLayer !== undefined && convInShape !== undefined && grad !== null) {
+            grad = await tracked.conv2dBackwardInput(
+              grad,
+              convInShape,
+              convLayer.values,
+              convLayer.shape,
+            );
+          }
+        }
+        if (grad === null) throw new Error("No gradient path reached the input image.");
+        const gInput = await tracked.normalizeBackward(grad, payload.inputShape, payload.std);
+        backwardMs += performance.now() - backwardStart;
+
+        const updateStart = performance.now();
+        const nextInputBuffer = tracked.updateClamp(
+          inputBuffer,
+          gInput,
+          elementCount(payload.inputShape),
+          payload.learningRate,
+          true,
+        );
+        clampMs += performance.now() - updateStart;
+        updateMs += performance.now() - updateStart;
+        const previousInput = inputBuffer;
+        inputBuffer = nextInputBuffer;
+        releaseOwnedBuffer(previousInput);
+      } finally {
+        runtimeContext.releaseStepOwned();
+      }
+    }
+
+    if (inputBuffer === null) throw new Error("Input buffer was released unexpectedly.");
+    const finalValues = await readGpuBufferToArray(
+      device,
+      inputBuffer.buffer,
+      elementCount(payload.inputShape),
+    );
+    const elapsedMs = performance.now() - totalStart;
+    return {
+      losses,
+      finalValues: Array.from(finalValues),
+      stats: {
+        elapsedMs,
+        avgStepMs: payload.steps === 0 ? 0 : elapsedMs / payload.steps,
+        forwardMs,
+        backwardMs,
+        lossMs,
+        updateMs,
+        clampMs,
+        steps: payload.steps,
+      },
+    };
+  } finally {
+    if (inputBuffer !== null) releaseOwnedBuffer(inputBuffer);
+    for (const buffer of persistentBuffers) releaseOwnedBuffer(buffer);
+    runtimeContext.disposeAll();
+  }
+};
+
+export const runStyleTransfer = async (
+  payload: StyleTransferPayload,
+): Promise<StyleTransferRunResult> =>
+  payload.gpuResident === true
+    ? runStyleTransferGpuResident(payload)
+    : runStyleTransferLegacy(payload);
 
 const readGpuBuffer = async (
   device: GPUDevice,

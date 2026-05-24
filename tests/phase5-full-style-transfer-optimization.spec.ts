@@ -207,6 +207,119 @@ test("phase 5 run-style-transfer first-step gradient matches pytorch oracle", as
   expect(result.meanDiff).toBeLessThan(2e-2);
 });
 
+test("phase 5 gpu-resident style transfer matches legacy for single step", async ({
+  page,
+}) => {
+  test.setTimeout(300000);
+  await gotoStableApp(page);
+  const result = await page.evaluate(async () => {
+    const loadJson = async <T>(url: string): Promise<T | null> => {
+      const response = await fetch(url);
+      if (!response.ok) return null;
+      const text = await response.text();
+      try {
+        return JSON.parse(text) as T;
+      } catch {
+        return null;
+      }
+    };
+    const weights = await loadJson<
+      Record<string, number[] | [number, number, number, number]>
+    >("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
+    const fixture = await loadJson<Phase3FullPassFixture>(
+      "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
+    );
+    if (weights === null || fixture === null)
+      return { ok: false as const, reason: "missing-fixtures" as const };
+    const worker = new Worker(
+      new URL("/src/styleTransfer.worker.ts", window.location.origin),
+      { type: "module" },
+    );
+    const ask = (payload: WorkerRequest): Promise<WorkerResponse> =>
+      new Promise((resolve) => {
+        const handler = (event: MessageEvent<WorkerResponse>): void => {
+          if (event.data.id === payload.id) {
+            worker.removeEventListener("message", handler);
+            resolve(event.data);
+          }
+        };
+        worker.addEventListener("message", handler);
+        worker.postMessage(payload);
+      });
+    await ask({ type: "init-webgpu", id: "phase5-gpu-resident-init" });
+    const common = {
+      type: "run-style-transfer" as const,
+      inputShape: fixture.inputShape,
+      inputImageValues: fixture.inputImageValues,
+      contentImageValues: fixture.contentImageValues,
+      styleImageValues: fixture.styleImageValues,
+      mean: fixture.mean,
+      std: fixture.std,
+      styleLayerIndices: fixture.styleLayerIndices,
+      contentLayerIndex: fixture.contentLayerIndex,
+      weights,
+      optimizer: "sgd" as const,
+      contentWeight: 1,
+      styleWeight: 1,
+      learningRate: 1e-5,
+      steps: 1,
+      fusedOps: true,
+    };
+    const legacy = await ask({
+      ...common,
+      id: "phase5-gpu-resident-legacy",
+      gpuResident: false,
+    });
+    const gpuResident = await ask({
+      ...common,
+      id: "phase5-gpu-resident-run",
+      gpuResident: true,
+    });
+    worker.terminate();
+    if (legacy.type !== "run-style-transfer-result")
+      return { ok: false as const, reason: "legacy-wrong-response" as const };
+    if (!legacy.ok)
+      return {
+        ok: false as const,
+        reason: "legacy-failed" as const,
+        message: legacy.message,
+      };
+    if (gpuResident.type !== "run-style-transfer-result")
+      return { ok: false as const, reason: "gpu-wrong-response" as const };
+    if (!gpuResident.ok)
+      return {
+        ok: false as const,
+        reason: "gpu-failed" as const,
+        message: gpuResident.message,
+      };
+    let maxDiff = 0;
+    for (let i = 0; i < legacy.finalValues.length; i += 1) {
+      maxDiff = Math.max(
+        maxDiff,
+        Math.abs(legacy.finalValues[i] - gpuResident.finalValues[i]),
+      );
+    }
+    return {
+      ok: true as const,
+      maxDiff,
+      legacyLoss: legacy.losses[0],
+      gpuLoss: gpuResident.losses[0],
+    };
+  });
+  test.skip(
+    !result.ok && result.reason === "missing-fixtures",
+    "Missing phase3 full-pass fixtures.",
+  );
+  if (!result.ok && result.reason !== "missing-fixtures") {
+    throw new Error(
+      `${result.reason}${"message" in result && result.message !== undefined ? `: ${result.message}` : ""}`,
+    );
+  }
+  if (!result.ok) return;
+  expect(result.maxDiff).toBeLessThan(2e-3);
+  expect(result.gpuLoss).toBeCloseTo(result.legacyLoss, 4);
+});
+
 test("phase 5 fused conv+relu op matches separate ops", async ({ page }) => {
   test.setTimeout(120000);
   await gotoStableApp(page);

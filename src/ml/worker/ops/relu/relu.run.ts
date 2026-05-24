@@ -1,6 +1,6 @@
 import { makeReluBackwardShader, makeReluShader } from "./relu.shader";
 import {
-  borrowedBuffer,
+  ownedBuffer,
   readGpuBufferToArray,
   releaseOwnedBuffer,
   runUnaryShaderToBuffer,
@@ -19,7 +19,7 @@ export const runReluForwardBuffer = async (
     input.buffer,
     count,
   );
-  return borrowedBuffer(outputBuffer);
+  return ownedBuffer(outputBuffer);
 };
 
 export const runReluForward = async (
@@ -48,7 +48,7 @@ export const runReluBackwardBuffer = async (
   gradOut: GpuBufferRef,
   count: number,
 ): Promise<GpuBufferRef> => {
-  return borrowedBuffer(
+  return ownedBuffer(
     runUnaryShaderToBuffer(
       getGpuDevice(),
       makeReluBackwardShader(count),

@@ -106,7 +106,7 @@ export const runScalarMulBuffer = async (
     "tensorScalar",
   );
   releaseOwnedBuffer(scalarBuffer);
-  return borrowedBuffer(outputBuffer);
+  return ownedBuffer(outputBuffer);
 };
 
 export const runTensorAddBuffer = async (
@@ -123,5 +123,5 @@ export const runTensorAddBuffer = async (
     count,
     "tensorTensor",
   );
-  return borrowedBuffer(outputBuffer);
+  return ownedBuffer(outputBuffer);
 };
