@@ -14,7 +14,7 @@ import {
 import { createInputOptimizer } from "../input-optimizer/createInputOptimizer";
 import { createGpuVectorOps } from "../input-optimizer/gpuVectorOps";
 import type { InputOptimizerConfig } from "../input-optimizer/types";
-import { elementCount } from "../../../runtime/tensorShapes";
+import { elementCount, type TensorShape4D } from "../../../runtime/tensorShapes";
 import { parseVgg19ConvLayerCache } from "../../../models/vgg19/weights";
 import { createPersistentTargetContext } from "./persistentTargetContext";
 import {
@@ -26,11 +26,38 @@ import type {
   StyleTransferRunResult,
 } from "./types";
 
+const shapesMatch = (a: TensorShape4D, b: TensorShape4D): boolean =>
+  a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+
+const assertValuesMatchShape = (
+  label: string,
+  values: readonly number[],
+  shape: TensorShape4D,
+): void => {
+  const expectedCount = elementCount(shape);
+  if (values.length !== expectedCount) {
+    throw new Error(
+      `${label} has ${values.length} values, expected ${expectedCount} for shape [${shape.join(", ")}].`,
+    );
+  }
+};
+
 export const runStyleTransferPipeline = async (
   payload: StyleTransferPayload,
 ): Promise<StyleTransferRunResult> => {
   const device = getGpuDevice();
   if (device === null) throw new Error("WebGPU device is not initialized.");
+
+  const contentShape: TensorShape4D = payload.contentShape ?? payload.inputShape;
+  const styleShape: TensorShape4D = payload.styleShape ?? payload.inputShape;
+  if (!shapesMatch(payload.inputShape, contentShape)) {
+    throw new Error(
+      "Style transfer expects the optimized input shape to match the content image shape.",
+    );
+  }
+  assertValuesMatchShape("inputImageValues", payload.inputImageValues, payload.inputShape);
+  assertValuesMatchShape("contentImageValues", payload.contentImageValues, contentShape);
+  assertValuesMatchShape("styleImageValues", payload.styleImageValues, styleShape);
 
   const runtimeContext = createOptimizationRuntimeContext(device);
   const convLayerCache = parseVgg19ConvLayerCache(payload.weights);
@@ -43,14 +70,14 @@ export const runStyleTransferPipeline = async (
   const totalStart = performance.now();
   const inputCount = elementCount(payload.inputShape);
   const optimizerConfig: InputOptimizerConfig = {
-    optimizer: payload.optimizer ?? "sgd",
+    optimizer: payload.optimizer ?? "lbfgs",
     count: inputCount,
     learningRate: payload.learningRate,
     adamBeta1: payload.adamBeta1 ?? 0.9,
     adamBeta2: payload.adamBeta2 ?? 0.999,
     adamEpsilon: payload.adamEpsilon ?? 1e-8,
-    lbfgsMemory: payload.lbfgsMemory ?? 10,
-    lbfgsEpsilon: payload.lbfgsEpsilon ?? 1e-8,
+    lbfgsMemory: payload.lbfgsMemory ?? 100,
+    lbfgsEpsilon: payload.lbfgsEpsilon ?? 1e-9,
   };
   const inputOptimizer = createInputOptimizer(
     optimizerConfig,
@@ -79,27 +106,27 @@ export const runStyleTransferPipeline = async (
     const targetTracked = createOptimizationTrackedOps(device, targetContext);
     const contentNorm = await targetTracked.normalizeForward(
       contentImageBuffer,
-      payload.inputShape,
+      contentShape,
       payload.mean,
       payload.std,
     );
     const styleNorm = await targetTracked.normalizeForward(
       styleImageBuffer,
-      payload.inputShape,
+      styleShape,
       payload.mean,
       payload.std,
     );
     const contentTargets = await runStyleTransferForward(
-      payload,
       convLayerCache,
       targetTracked,
       contentNorm,
+      contentShape,
     );
     const styleTargets = await runStyleTransferForward(
-      payload,
       convLayerCache,
       targetTracked,
       styleNorm,
+      styleShape,
     );
     const contentTargetRelu = contentTargets.reluOut[payload.contentLayerIndex];
     if (contentTargetRelu === undefined) {

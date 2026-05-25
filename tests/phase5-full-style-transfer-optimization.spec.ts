@@ -16,6 +16,20 @@ type Phase3FullPassFixture = {
   };
 };
 
+test("phase 6 UI defaults match python reference controls", async ({
+  page,
+}) => {
+  await gotoStableApp(page);
+  await expect(page.getByLabel("Optimizer")).toHaveValue("lbfgs");
+  await expect(page.getByLabel("Content resolution")).toHaveValue("128x128");
+  await expect(page.getByLabel("Style resolution")).toHaveValue("128x192");
+  await expect(page.getByLabel("Style weight")).toHaveValue("500000");
+  await expect(page.getByLabel("Content weight")).toHaveValue("1");
+  await expect(page.getByLabel("Learning rate")).toHaveValue("1");
+  await expect(page.getByLabel("L-BFGS history")).toHaveValue("100");
+  await expect(page.getByLabel("L-BFGS tolerance change")).toHaveValue("1e-9");
+});
+
 test("phase 5 full style transfer endpoint returns losses", async ({
   page,
 }) => {
@@ -96,6 +110,105 @@ test("phase 5 full style transfer endpoint returns losses", async ({
   if (!result.ok) return;
   expect(result.losses.length).toBe(5);
   expect(result.losses.every((loss) => Number.isFinite(loss))).toBeTruthy();
+});
+
+test("phase 5 full style transfer supports rectangular style shape", async ({
+  page,
+}) => {
+  test.setTimeout(300000);
+  await gotoStableApp(page);
+  const result = await page.evaluate(async () => {
+    const loadJson = async <T>(url: string): Promise<T | null> => {
+      const response = await fetch(url);
+      if (!response.ok) return null;
+      const text = await response.text();
+      try {
+        return JSON.parse(text) as T;
+      } catch {
+        return null;
+      }
+    };
+    const weights = await loadJson<
+      Record<string, number[] | [number, number, number, number]>
+    >("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
+    if (weights === null)
+      return { ok: false as const, reason: "missing-fixtures" as const };
+
+    const makeValues = (count: number, phase: number): number[] =>
+      Array.from(
+        { length: count },
+        (_, index: number): number =>
+          0.5 + 0.25 * Math.sin(index * 0.017 + phase),
+      );
+    const inputShape = [1, 3, 16, 16] as const;
+    const styleShape = [1, 3, 16, 24] as const;
+    const inputImageValues = makeValues(3 * 16 * 16, 0);
+    const contentImageValues = Array.from(inputImageValues);
+    const styleImageValues = makeValues(3 * 16 * 24, 0.7);
+    const worker = new Worker(
+      new URL("/src/styleTransfer.worker.ts", window.location.origin),
+      { type: "module" },
+    );
+    const ask = (payload: WorkerRequest): Promise<WorkerResponse> =>
+      new Promise((resolve) => {
+        const handler = (event: MessageEvent<WorkerResponse>): void => {
+          if (event.data.id === payload.id) {
+            worker.removeEventListener("message", handler);
+            resolve(event.data);
+          }
+        };
+        worker.addEventListener("message", handler);
+        worker.postMessage(payload);
+      });
+    await ask({ type: "init-webgpu", id: "phase5-rect-style-init" });
+    const out = await ask({
+      type: "run-style-transfer",
+      id: "phase5-rect-style-run",
+      optimizer: "lbfgs",
+      inputShape,
+      contentShape: inputShape,
+      styleShape,
+      inputImageValues,
+      contentImageValues,
+      styleImageValues,
+      mean: [0.485, 0.456, 0.406],
+      std: [0.229, 0.224, 0.225],
+      styleLayerIndices: [1, 6, 11, 20, 29],
+      contentLayerIndex: 22,
+      weights,
+      contentWeight: 1,
+      styleWeight: 1,
+      learningRate: 1e-5,
+      steps: 1,
+    });
+    worker.terminate();
+    if (out.type !== "run-style-transfer-result")
+      return { ok: false as const, reason: "wrong-response" as const };
+    if (!out.ok)
+      return {
+        ok: false as const,
+        reason: "worker-failed" as const,
+        message: out.message,
+      };
+    return {
+      ok: true as const,
+      losses: out.losses,
+      finalValuesLength: out.finalValues.length,
+      expectedLength: inputImageValues.length,
+    };
+  });
+  test.skip(
+    !result.ok && result.reason === "missing-fixtures",
+    "Missing phase3 full-pass weights.",
+  );
+  if (!result.ok && result.reason !== "missing-fixtures")
+    throw new Error(
+      result.reason === "worker-failed" ? result.message : result.reason,
+    );
+  if (!result.ok) return;
+  expect(result.losses.length).toBe(1);
+  expect(result.losses.every((loss) => Number.isFinite(loss))).toBeTruthy();
+  expect(result.finalValuesLength).toBe(result.expectedLength);
 });
 
 test("phase 5 run-style-transfer first-step gradient matches pytorch oracle", async ({

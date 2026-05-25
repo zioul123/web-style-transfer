@@ -1,7 +1,16 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { WorkerRunStats } from "../../../types/worker-protocol/pipelines";
 
-export type ResolutionPreset = 128 | 256;
+export type ResolutionPreset =
+  | "128x128"
+  | "128x192"
+  | "192x128"
+  | "256x256"
+  | "256x384";
+export type ImageResolution = {
+  readonly width: number;
+  readonly height: number;
+};
 export type OptimizerMode = "sgd" | "adam" | "lbfgs";
 export type FullWeights = Record<
   string,
@@ -9,8 +18,10 @@ export type FullWeights = Record<
 >;
 
 export interface StyleTransferControls {
-  resolution: ResolutionPreset;
-  setResolution: Dispatch<SetStateAction<ResolutionPreset>>;
+  contentResolution: ResolutionPreset;
+  setContentResolution: Dispatch<SetStateAction<ResolutionPreset>>;
+  styleResolution: ResolutionPreset;
+  setStyleResolution: Dispatch<SetStateAction<ResolutionPreset>>;
   stepsPerChunk: number;
   setStepsPerChunk: Dispatch<SetStateAction<number>>;
   contentWeight: number;

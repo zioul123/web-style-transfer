@@ -7,11 +7,44 @@ import type {
   ResolutionPreset,
 } from "./features/style-transfer/types/controller";
 
+const resolutionOptions: readonly ResolutionPreset[] = [
+  "128x128",
+  "128x192",
+  "192x128",
+  "256x256",
+  "256x384",
+];
+
+type TextureImageSize = {
+  readonly width: number;
+  readonly height: number;
+};
+
+const hasTextureImageSize = (value: unknown): value is TextureImageSize => {
+  if (typeof value !== "object" || value === null) return false;
+  return (
+    "width" in value &&
+    "height" in value &&
+    typeof value.width === "number" &&
+    typeof value.height === "number"
+  );
+};
+
 const Plane = ({ url, x }: { url: string; x: number }): ReactElement => {
   const texture = useLoader(TextureLoader, url);
+  const imageWidth = hasTextureImageSize(texture.image)
+    ? texture.image.width
+    : 1;
+  const imageHeight =
+    hasTextureImageSize(texture.image) && texture.image.height > 0
+      ? texture.image.height
+      : 1;
+  const aspect = imageWidth / imageHeight;
+  const planeWidth = aspect >= 1 ? 1.75 : 1.75 * aspect;
+  const planeHeight = aspect >= 1 ? 1.75 / aspect : 1.75;
   return (
     <mesh position={[x, 0, 0]}>
-      <planeGeometry args={[1.75, 1.75]} />
+      <planeGeometry args={[planeWidth, planeHeight]} />
       <meshBasicMaterial map={texture} />
     </mesh>
   );
@@ -51,17 +84,37 @@ function App() {
           />
         </label>
         <label className="flex flex-col gap-1">
-          Resolution
+          Content resolution
           <select
-            value={controls.resolution}
+            value={controls.contentResolution}
             onChange={(event) =>
-              controls.setResolution(
-                Number(event.target.value) as ResolutionPreset,
+              controls.setContentResolution(
+                event.target.value as ResolutionPreset,
               )
             }
           >
-            <option value={128}>128</option>
-            <option value={256}>256</option>
+            {resolutionOptions.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          Style resolution
+          <select
+            value={controls.styleResolution}
+            onChange={(event) =>
+              controls.setStyleResolution(
+                event.target.value as ResolutionPreset,
+              )
+            }
+          >
+            {resolutionOptions.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
           </select>
         </label>
         <label className="flex flex-col gap-1">
@@ -160,7 +213,7 @@ function App() {
         {controls.optimizer === "lbfgs" ? (
           <>
             <label className="flex flex-col gap-1">
-              L-BFGS memory
+              L-BFGS history
               <input
                 type="number"
                 min={1}
@@ -172,7 +225,7 @@ function App() {
               />
             </label>
             <label className="flex flex-col gap-1">
-              L-BFGS ε
+              L-BFGS tolerance change
               <input
                 type="number"
                 step={0.00000001}
@@ -229,17 +282,17 @@ function App() {
 
       <section className="grid gap-4 md:grid-cols-3">
         <img
-          className="aspect-square w-full rounded border border-slate-700 object-cover"
+          className="max-h-80 w-full rounded border border-slate-700 object-contain"
           src={images.contentImage ?? undefined}
           alt="Content"
         />
         <img
-          className="aspect-square w-full rounded border border-slate-700 object-cover"
+          className="max-h-80 w-full rounded border border-slate-700 object-contain"
           src={images.styleImage ?? undefined}
           alt="Style"
         />
         <img
-          className="aspect-square w-full rounded border border-slate-700 object-cover"
+          className="max-h-80 w-full rounded border border-slate-700 object-contain"
           src={images.outputImage ?? undefined}
           alt="Output"
         />

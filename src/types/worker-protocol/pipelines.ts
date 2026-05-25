@@ -10,6 +10,8 @@ export type WorkerRunStyleTransferRequest = {
   lbfgsMemory?: number;
   lbfgsEpsilon?: number;
   inputShape: TensorShape;
+  contentShape?: TensorShape;
+  styleShape?: TensorShape;
   inputImageValues: number[];
   contentImageValues: number[];
   styleImageValues: number[];

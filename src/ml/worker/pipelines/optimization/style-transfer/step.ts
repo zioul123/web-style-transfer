@@ -30,12 +30,12 @@ const addReluGradient = (
 };
 
 export const runStyleTransferForward = async (
-  payload: StyleTransferPayload,
   convLayerCache: ConvLayerCache,
   tracked: OptimizationTrackedOps,
   startBuffer: GpuBufferRef,
+  startShape: TensorShape4D,
 ): Promise<StyleTransferForwardResult> => {
-  let shape: TensorShape4D = payload.inputShape;
+  let shape: TensorShape4D = startShape;
   let values: GpuBufferRef = startBuffer;
   const reluOut: Record<number, GpuBufferRef | undefined> = {};
   const reluShape: Record<number, TensorShape4D | undefined> = {};
@@ -281,7 +281,12 @@ export const runStyleTransferStep = async (
     payload.mean,
     payload.std,
   );
-  const run = await runStyleTransferForward(payload, convLayerCache, tracked, norm);
+  const run = await runStyleTransferForward(
+    convLayerCache,
+    tracked,
+    norm,
+    payload.inputShape,
+  );
   const forwardMs = performance.now() - forwardStart;
 
   const lossStart = performance.now();
