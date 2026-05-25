@@ -64,6 +64,34 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   out[i] = input[i] + direction[i] * scalar;
 }`;
 
+const makeAddScaledByDotAndScalarShader = (count: number): string => `
+@group(0) @binding(0) var<storage, read> input: array<f32>;
+@group(0) @binding(1) var<storage, read> direction: array<f32>;
+@group(0) @binding(2) var<storage, read> dotScalar: array<f32>;
+@group(0) @binding(3) var<storage, read> biasScalar: array<f32>;
+@group(0) @binding(4) var<storage, read_write> out: array<f32>;
+@group(0) @binding(5) var<storage, read> scales: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let scalar = scales[0] * dotScalar[0] + scales[1] * biasScalar[0];
+  out[i] = input[i] + direction[i] * scalar;
+}`;
+
+const makeAddScaledByScalarShader = (count: number): string => `
+@group(0) @binding(0) var<storage, read> input: array<f32>;
+@group(0) @binding(1) var<storage, read> direction: array<f32>;
+@group(0) @binding(2) var<storage, read> scalarBuffer: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+@group(0) @binding(4) var<storage, read> scalarScale: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  out[i] = input[i] + direction[i] * scalarBuffer[0] * scalarScale[0];
+}`;
+
 const makeUpdateClampShader = (count: number): string => `
 @group(0) @binding(0) var<storage, read> input: array<f32>;
 @group(0) @binding(1) var<storage, read> direction: array<f32>;
@@ -365,6 +393,74 @@ const runAddScaledByDotScalarShader = (
   return ownedBuffer(outBuffer);
 };
 
+const runAddScaledByScalarShader = (
+  device: GPUDevice,
+  pipeline: GPUComputePipeline,
+  input: GpuBufferRef,
+  direction: GpuBufferRef,
+  scalarBuffer: GpuBufferRef,
+  count: number,
+  scalarScaleBuffer: GPUBuffer,
+): OwnedGpuBuffer => {
+  const outBuffer = device.createBuffer({
+    size: count * Float32Array.BYTES_PER_ELEMENT,
+    usage: BUFFER_USAGE_STORAGE_COPY_SRC,
+  });
+  const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: input.buffer } },
+      { binding: 1, resource: { buffer: direction.buffer } },
+      { binding: 2, resource: { buffer: scalarBuffer.buffer } },
+      { binding: 3, resource: { buffer: outBuffer } },
+      { binding: 4, resource: { buffer: scalarScaleBuffer } },
+    ],
+  });
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.dispatchWorkgroups(Math.ceil(count / 64));
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  return ownedBuffer(outBuffer);
+};
+
+const runAddScaledByDotAndScalarShader = (
+  device: GPUDevice,
+  pipeline: GPUComputePipeline,
+  input: GpuBufferRef,
+  direction: GpuBufferRef,
+  dotScalar: GpuBufferRef,
+  biasScalar: GpuBufferRef,
+  count: number,
+  scalesBuffer: GPUBuffer,
+): OwnedGpuBuffer => {
+  const outBuffer = device.createBuffer({
+    size: count * Float32Array.BYTES_PER_ELEMENT,
+    usage: BUFFER_USAGE_STORAGE_COPY_SRC,
+  });
+  const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: input.buffer } },
+      { binding: 1, resource: { buffer: direction.buffer } },
+      { binding: 2, resource: { buffer: dotScalar.buffer } },
+      { binding: 3, resource: { buffer: biasScalar.buffer } },
+      { binding: 4, resource: { buffer: outBuffer } },
+      { binding: 5, resource: { buffer: scalesBuffer } },
+    ],
+  });
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.dispatchWorkgroups(Math.ceil(count / 64));
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  return ownedBuffer(outBuffer);
+};
+
 const runThreeInputShader = (
   device: GPUDevice,
   pipeline: GPUComputePipeline,
@@ -574,6 +670,14 @@ export const createGpuVectorOps = (
     "add-scaled-by-dot-scalar",
     makeAddScaledByDotScalarShader(count),
   );
+  const addScaledByDotAndScalarPipeline = getPipeline(
+    "add-scaled-by-dot-and-scalar",
+    makeAddScaledByDotAndScalarShader(count),
+  );
+  const addScaledByScalarPipeline = getPipeline(
+    "add-scaled-by-scalar",
+    makeAddScaledByScalarShader(count),
+  );
   const updateClampPipeline = getPipeline("update-clamp", makeUpdateClampShader(count));
   const scalarParameterBuffer = device.createBuffer({
     size: Float32Array.BYTES_PER_ELEMENT,
@@ -584,6 +688,14 @@ export const createGpuVectorOps = (
     usage: BUFFER_USAGE_STORAGE_COPY_DST,
   });
   const scaleBiasParameterBuffer = device.createBuffer({
+    size: Float32Array.BYTES_PER_ELEMENT * 2,
+    usage: BUFFER_USAGE_STORAGE_COPY_DST,
+  });
+  const scalarScaleParameterBuffer = device.createBuffer({
+    size: Float32Array.BYTES_PER_ELEMENT,
+    usage: BUFFER_USAGE_STORAGE_COPY_DST,
+  });
+  const dotAndScalarScalesParameterBuffer = device.createBuffer({
     size: Float32Array.BYTES_PER_ELEMENT * 2,
     usage: BUFFER_USAGE_STORAGE_COPY_DST,
   });
@@ -652,6 +764,10 @@ export const createGpuVectorOps = (
       dotScale: number,
       dotBias: number,
     ): Promise<GpuBufferRef> => {
+      // Fused path:
+      // 1) compute dot(dotLeft, dotRight) on GPU,
+      // 2) derive scalar = dotScale * dot + dotBias,
+      // 3) apply out = input + direction * scalar.
       const dotScalar = await dotToScalarBuffer(
         device,
         getPipeline,
@@ -676,6 +792,68 @@ export const createGpuVectorOps = (
       releaseOwnedBuffer(dotScalar);
       return out;
     },
+
+    addScaledByDotAndScalarBuffer: async (
+      input: GpuBufferRef,
+      direction: GpuBufferRef,
+      dotLeft: GpuBufferRef,
+      dotRight: GpuBufferRef,
+      dotScale: number,
+      scalarBuffer: GpuBufferRef,
+      scalarScale: number,
+    ): Promise<GpuBufferRef> => {
+      const dotScalar = await dotToScalarBuffer(
+        device,
+        getPipeline,
+        dotLeft,
+        dotRight,
+        count,
+      );
+      device.queue.writeBuffer(
+        dotAndScalarScalesParameterBuffer,
+        0,
+        new Float32Array([dotScale, scalarScale]),
+      );
+      const out = runAddScaledByDotAndScalarShader(
+        device,
+        addScaledByDotAndScalarPipeline,
+        input,
+        direction,
+        dotScalar,
+        scalarBuffer,
+        count,
+        dotAndScalarScalesParameterBuffer,
+      );
+      releaseOwnedBuffer(dotScalar);
+      return out;
+    },
+
+    dotToScalarBuffer: async (
+      a: GpuBufferRef,
+      b: GpuBufferRef,
+    ): Promise<GpuBufferRef> =>
+      dotToScalarBuffer(device, getPipeline, a, b, count),
+
+    addScaledByScalarBuffer: async (
+      input: GpuBufferRef,
+      direction: GpuBufferRef,
+      scalarBuffer: GpuBufferRef,
+      scalarScale: number,
+    ): Promise<GpuBufferRef> => {
+      writeScalarParameter(device, scalarScaleParameterBuffer, scalarScale);
+      return runAddScaledByScalarShader(
+        device,
+        addScaledByScalarPipeline,
+        input,
+        direction,
+        scalarBuffer,
+        count,
+        scalarScaleParameterBuffer,
+      );
+    },
+
+    readScalarBuffer: async (scalarBuffer: GpuBufferRef): Promise<number> =>
+      readScalar(device, scalarBuffer.buffer),
 
     dot: async (a: GpuBufferRef, b: GpuBufferRef): Promise<number> =>
       dotProduct(device, getPipeline, a, b, count),

@@ -68,12 +68,14 @@ export const createInputOptimizer = <TVector>(
 
   const makeLbfgsDirection = async (grad: TVector): Promise<TVector> => {
     let q = await ops.scale(grad, -1);
-    const alphas = new Float32Array(lbfgsHistory.length);
+    const alphaBuffers: TVector[] = [];
+    const rhos = new Float32Array(lbfgsHistory.length);
     for (let i = lbfgsHistory.length - 1; i >= 0; i -= 1) {
       const { oldDir, oldStep, rho } = lbfgsHistory[i];
-      const alpha = rho * (await ops.dot(oldStep, q));
-      alphas[i] = alpha;
-      const nextQ = await ops.addScaled(q, oldDir, -alpha);
+      const alphaBuffer = await ops.dotToScalarBuffer(oldStep, q);
+      alphaBuffers[i] = alphaBuffer;
+      rhos[i] = rho;
+      const nextQ = await ops.addScaledByScalarBuffer(q, oldDir, alphaBuffer, -rho);
       ops.dispose(q);
       q = nextQ;
     }
@@ -84,14 +86,16 @@ export const createInputOptimizer = <TVector>(
 
     for (let i = 0; i < lbfgsHistory.length; i += 1) {
       const { oldDir, oldStep, rho } = lbfgsHistory[i];
-      const nextQ = await ops.addScaledByDot(
+      const nextQ = await ops.addScaledByDotAndScalarBuffer(
         q,
         oldStep,
         oldDir,
         q,
         -rho,
-        alphas[i],
+        alphaBuffers[i],
+        rhos[i],
       );
+      ops.dispose(alphaBuffers[i]);
       ops.dispose(q);
       q = nextQ;
     }
