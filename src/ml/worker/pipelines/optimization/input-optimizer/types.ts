@@ -26,14 +26,6 @@ export type InputOptimizerVectorOps<TVector> = {
     direction: TVector,
     scalar: number,
   ) => Promise<TVector>;
-  addScaledByDot: (
-    input: TVector,
-    direction: TVector,
-    dotLeft: TVector,
-    dotRight: TVector,
-    dotScale: number,
-    dotBias: number,
-  ) => Promise<TVector>;
   addScaledByDotAndScalarBuffer: (
     input: TVector,
     direction: TVector,
@@ -50,7 +42,6 @@ export type InputOptimizerVectorOps<TVector> = {
     scalarBuffer: TVector,
     scalarScale: number,
   ) => Promise<TVector>;
-  readScalarBuffer: (scalarBuffer: TVector) => Promise<number>;
   dot: (a: TVector, b: TVector) => Promise<number>;
   dotPairWithRight: (
     leftA: TVector,

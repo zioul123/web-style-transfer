@@ -67,6 +67,8 @@ export const createInputOptimizer = <TVector>(
   };
 
   const makeLbfgsDirection = async (grad: TVector): Promise<TVector> => {
+    // Two-loop L-BFGS recursion. We keep alpha_i as GPU scalar buffers to avoid
+    // scalar readbacks between loops; the second loop consumes those buffers.
     let q = await ops.scale(grad, -1);
     const alphaBuffers: TVector[] = [];
     const rhos = new Float32Array(lbfgsHistory.length);
@@ -75,6 +77,7 @@ export const createInputOptimizer = <TVector>(
       const alphaBuffer = await ops.dotToScalarBuffer(oldStep, q);
       alphaBuffers[i] = alphaBuffer;
       rhos[i] = rho;
+      // q <- q - (rho_i * alphaRaw_i) * y_i, with alphaRaw_i = dot(s_i, q)
       const nextQ = await ops.addScaledByScalarBuffer(q, oldDir, alphaBuffer, -rho);
       ops.dispose(q);
       q = nextQ;
@@ -86,6 +89,7 @@ export const createInputOptimizer = <TVector>(
 
     for (let i = 0; i < lbfgsHistory.length; i += 1) {
       const { oldDir, oldStep, rho } = lbfgsHistory[i];
+      // q <- q + (rho_i * alphaRaw_i - rho_i * dot(y_i, q)) * s_i
       const nextQ = await ops.addScaledByDotAndScalarBuffer(
         q,
         oldStep,

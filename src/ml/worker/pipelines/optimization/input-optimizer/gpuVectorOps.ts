@@ -50,20 +50,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   out[i] = input[i] + direction[i] * scalar[0];
 }`;
 
-const makeAddScaledByDotScalarShader = (count: number): string => `
-@group(0) @binding(0) var<storage, read> input: array<f32>;
-@group(0) @binding(1) var<storage, read> direction: array<f32>;
-@group(0) @binding(2) var<storage, read> dotScalar: array<f32>;
-@group(0) @binding(3) var<storage, read_write> out: array<f32>;
-@group(0) @binding(4) var<storage, read> scaleBias: array<f32>;
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let i = gid.x;
-  if (i >= ${count}u) { return; }
-  let scalar = scaleBias[0] * dotScalar[0] + scaleBias[1];
-  out[i] = input[i] + direction[i] * scalar;
-}`;
-
 const makeAddScaledByDotAndScalarShader = (count: number): string => `
 @group(0) @binding(0) var<storage, read> input: array<f32>;
 @group(0) @binding(1) var<storage, read> direction: array<f32>;
@@ -360,39 +346,6 @@ const runAdamShader = (
   return ownedBuffer(outBuffer);
 };
 
-const runAddScaledByDotScalarShader = (
-  device: GPUDevice,
-  pipeline: GPUComputePipeline,
-  input: GpuBufferRef,
-  direction: GpuBufferRef,
-  dotScalar: GpuBufferRef,
-  count: number,
-  scaleBiasBuffer: GPUBuffer,
-): OwnedGpuBuffer => {
-  const outBuffer = device.createBuffer({
-    size: count * Float32Array.BYTES_PER_ELEMENT,
-    usage: BUFFER_USAGE_STORAGE_COPY_SRC,
-  });
-  const bindGroup = device.createBindGroup({
-    layout: pipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: input.buffer } },
-      { binding: 1, resource: { buffer: direction.buffer } },
-      { binding: 2, resource: { buffer: dotScalar.buffer } },
-      { binding: 3, resource: { buffer: outBuffer } },
-      { binding: 4, resource: { buffer: scaleBiasBuffer } },
-    ],
-  });
-  const encoder = device.createCommandEncoder();
-  const pass = encoder.beginComputePass();
-  pass.setPipeline(pipeline);
-  pass.setBindGroup(0, bindGroup);
-  pass.dispatchWorkgroups(Math.ceil(count / 64));
-  pass.end();
-  device.queue.submit([encoder.finish()]);
-  return ownedBuffer(outBuffer);
-};
-
 const runAddScaledByScalarShader = (
   device: GPUDevice,
   pipeline: GPUComputePipeline,
@@ -557,6 +510,9 @@ const dotToScalarBuffer = async (
   b: GpuBufferRef,
   count: number,
 ): Promise<OwnedGpuBuffer> => {
+  // Returns a 1-element GPU buffer containing dot(a, b).
+  // This is intentionally GPU-resident so callers can chain fused updates
+  // without round-tripping through CPU readback.
   let current = runTwoInputShader(
     device,
     getPipeline(`dot-product:${count}`, makeDotProductShader(count)),
@@ -620,6 +576,8 @@ const dotPairWithRight = async (
   right: GpuBufferRef,
   count: number,
 ): Promise<readonly [number, number]> => {
+  // Computes two dots against the same right vector in one pass:
+  // [dot(leftA, right), dot(leftB, right)].
   let current = runThreeInputShader(
     device,
     getPipeline(`dot-pair-products:${count}`, makeDotPairProductsShader(count)),
@@ -666,10 +624,6 @@ export const createGpuVectorOps = (
   const clonePipeline = getPipeline("clone", makeCloneShader(count));
   const scalePipeline = getPipeline("scale", makeScaleShader(count));
   const addScaledPipeline = getPipeline("add-scaled", makeAddScaledShader(count));
-  const addScaledByDotScalarPipeline = getPipeline(
-    "add-scaled-by-dot-scalar",
-    makeAddScaledByDotScalarShader(count),
-  );
   const addScaledByDotAndScalarPipeline = getPipeline(
     "add-scaled-by-dot-and-scalar",
     makeAddScaledByDotAndScalarShader(count),
@@ -685,10 +639,6 @@ export const createGpuVectorOps = (
   });
   const learningRateParameterBuffer = device.createBuffer({
     size: Float32Array.BYTES_PER_ELEMENT,
-    usage: BUFFER_USAGE_STORAGE_COPY_DST,
-  });
-  const scaleBiasParameterBuffer = device.createBuffer({
-    size: Float32Array.BYTES_PER_ELEMENT * 2,
     usage: BUFFER_USAGE_STORAGE_COPY_DST,
   });
   const scalarScaleParameterBuffer = device.createBuffer({
@@ -756,43 +706,6 @@ export const createGpuVectorOps = (
       return out;
     },
 
-    addScaledByDot: async (
-      input: GpuBufferRef,
-      direction: GpuBufferRef,
-      dotLeft: GpuBufferRef,
-      dotRight: GpuBufferRef,
-      dotScale: number,
-      dotBias: number,
-    ): Promise<GpuBufferRef> => {
-      // Fused path:
-      // 1) compute dot(dotLeft, dotRight) on GPU,
-      // 2) derive scalar = dotScale * dot + dotBias,
-      // 3) apply out = input + direction * scalar.
-      const dotScalar = await dotToScalarBuffer(
-        device,
-        getPipeline,
-        dotLeft,
-        dotRight,
-        count,
-      );
-      device.queue.writeBuffer(
-        scaleBiasParameterBuffer,
-        0,
-        new Float32Array([dotScale, dotBias]),
-      );
-      const out = runAddScaledByDotScalarShader(
-        device,
-        addScaledByDotScalarPipeline,
-        input,
-        direction,
-        dotScalar,
-        count,
-        scaleBiasParameterBuffer,
-      );
-      releaseOwnedBuffer(dotScalar);
-      return out;
-    },
-
     addScaledByDotAndScalarBuffer: async (
       input: GpuBufferRef,
       direction: GpuBufferRef,
@@ -802,6 +715,9 @@ export const createGpuVectorOps = (
       scalarBuffer: GpuBufferRef,
       scalarScale: number,
     ): Promise<GpuBufferRef> => {
+      // Fused L-BFGS scalar update:
+      // scalar = dotScale * dot(dotLeft, dotRight) + scalarScale * scalarBuffer[0]
+      // out = input + direction * scalar
       const dotScalar = await dotToScalarBuffer(
         device,
         getPipeline,
@@ -851,9 +767,6 @@ export const createGpuVectorOps = (
         scalarScaleParameterBuffer,
       );
     },
-
-    readScalarBuffer: async (scalarBuffer: GpuBufferRef): Promise<number> =>
-      readScalar(device, scalarBuffer.buffer),
 
     dot: async (a: GpuBufferRef, b: GpuBufferRef): Promise<number> =>
       dotProduct(device, getPipeline, a, b, count),
