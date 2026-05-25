@@ -15,10 +15,10 @@ import type {
 
 const RESOLUTION_PRESETS: Record<ResolutionPreset, ImageResolution> = {
   "128x128": { width: 128, height: 128 },
-  "128x192": { width: 128, height: 192 },
-  "192x128": { width: 192, height: 128 },
+  "128x192": { width: 192, height: 128 },
+  "192x128": { width: 128, height: 192 },
   "256x256": { width: 256, height: 256 },
-  "256x384": { width: 256, height: 384 },
+  "256x384": { width: 384, height: 256 },
 };
 
 const shapeForResolution = (

@@ -66,7 +66,7 @@ export const runStyleTransferPipeline = async (
   let backwardMs = 0;
   let lossMs = 0;
   let updateMs = 0;
-  let clampMs = 0;
+  const clampMs = 0;
   const totalStart = performance.now();
   const inputCount = elementCount(payload.inputShape);
   const optimizerConfig: InputOptimizerConfig = {
@@ -169,7 +169,6 @@ export const runStyleTransferPipeline = async (
         lossMs += stepResult.lossMs;
         backwardMs += stepResult.backwardMs;
         updateMs += stepResult.updateMs;
-        clampMs += stepResult.updateMs;
         const previousInput = inputBuffer;
         inputBuffer = stepResult.nextInputBuffer;
         releaseOwnedBuffer(previousInput);

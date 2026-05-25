@@ -274,8 +274,8 @@ function App() {
             <p>Forward: {status.runStats.forwardMs.toFixed(1)} ms</p>
             <p>Loss: {status.runStats.lossMs.toFixed(1)} ms</p>
             <p>Backward: {status.runStats.backwardMs.toFixed(1)} ms</p>
-            <p>Update: {status.runStats.updateMs.toFixed(1)} ms</p>
-            <p>Clamp (GPU): {status.runStats.clampMs.toFixed(1)} ms</p>
+            <p>Update + clamp: {status.runStats.updateMs.toFixed(1)} ms</p>
+            <p>Standalone clamp: {status.runStats.clampMs.toFixed(1)} ms</p>
           </div>
         )}
       </details>
