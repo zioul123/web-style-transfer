@@ -5,8 +5,8 @@ import type {
 } from "./types";
 
 type LbfgsHistoryEntry<TVector> = {
-  s: TVector;
-  y: TVector;
+  oldDir: TVector;
+  oldStep: TVector;
   rho: number;
 };
 
@@ -16,13 +16,16 @@ export const createInputOptimizer = <TVector>(
 ): InputOptimizer<TVector> => {
   let adamM: TVector | null = null;
   let adamV: TVector | null = null;
-  let previousInput: TVector | null = null;
   let previousGrad: TVector | null = null;
+  let previousDirection: TVector | null = null;
+  let previousStepSize: number | null = null;
+  let lbfgsIteration = 0;
+  let lbfgsHDiag = 1;
   const lbfgsHistory: LbfgsHistoryEntry<TVector>[] = [];
 
   const disposeHistoryEntry = (entry: LbfgsHistoryEntry<TVector>): void => {
-    ops.dispose(entry.s);
-    ops.dispose(entry.y);
+    ops.dispose(entry.oldDir);
+    ops.dispose(entry.oldStep);
   };
 
   const runSgd = async (input: TVector, grad: TVector): Promise<TVector> =>
@@ -39,52 +42,51 @@ export const createInputOptimizer = <TVector>(
   };
 
   const addLbfgsHistory = async (
-    input: TVector,
     grad: TVector,
   ): Promise<void> => {
-    if (previousInput === null || previousGrad === null) return;
-    const s = await ops.sub(input, previousInput);
-    const y = await ops.sub(grad, previousGrad);
-    const sy = await ops.dot(s, y);
-    if (sy > config.lbfgsEpsilon) {
-      lbfgsHistory.push({ s, y, rho: 1 / sy });
+    if (
+      previousDirection === null ||
+      previousGrad === null ||
+      previousStepSize === null
+    )
+      return;
+    const oldStep = await ops.scale(previousDirection, previousStepSize);
+    const oldDir = await ops.sub(grad, previousGrad);
+    const ys = await ops.dot(oldDir, oldStep);
+    if (ys > 1e-10) {
+      const yy = await ops.dot(oldDir, oldDir);
+      lbfgsHDiag = ys / yy;
+      lbfgsHistory.push({ oldDir, oldStep, rho: 1 / ys });
       if (lbfgsHistory.length > config.lbfgsMemory) {
         const removed = lbfgsHistory.shift();
         if (removed !== undefined) disposeHistoryEntry(removed);
       }
       return;
     }
-    ops.dispose(s);
-    ops.dispose(y);
+    ops.dispose(oldStep);
+    ops.dispose(oldDir);
   };
 
   const makeLbfgsDirection = async (grad: TVector): Promise<TVector> => {
-    let q = await ops.clone(grad);
+    let q = await ops.scale(grad, -1);
     const alphas = new Float32Array(lbfgsHistory.length);
     for (let i = lbfgsHistory.length - 1; i >= 0; i -= 1) {
-      const { s, y, rho } = lbfgsHistory[i];
-      const alpha = rho * (await ops.dot(s, q));
+      const { oldDir, oldStep, rho } = lbfgsHistory[i];
+      const alpha = rho * (await ops.dot(oldStep, q));
       alphas[i] = alpha;
-      const nextQ = await ops.addScaled(q, y, -alpha);
+      const nextQ = await ops.addScaled(q, oldDir, -alpha);
       ops.dispose(q);
       q = nextQ;
     }
 
-    if (lbfgsHistory.length > 0) {
-      const last = lbfgsHistory[lbfgsHistory.length - 1];
-      const ys = await ops.dot(last.y, last.s);
-      const yy = await ops.dot(last.y, last.y);
-      if (yy > config.lbfgsEpsilon) {
-        const scaled = await ops.scale(q, ys / yy);
-        ops.dispose(q);
-        q = scaled;
-      }
-    }
+    const scaled = await ops.scale(q, lbfgsHDiag);
+    ops.dispose(q);
+    q = scaled;
 
     for (let i = 0; i < lbfgsHistory.length; i += 1) {
-      const { s, y, rho } = lbfgsHistory[i];
-      const beta = rho * (await ops.dot(y, q));
-      const nextQ = await ops.addScaled(q, s, alphas[i] - beta);
+      const { oldDir, oldStep, rho } = lbfgsHistory[i];
+      const beta = rho * (await ops.dot(oldDir, q));
+      const nextQ = await ops.addScaled(q, oldStep, alphas[i] - beta);
       ops.dispose(q);
       q = nextQ;
     }
@@ -93,21 +95,31 @@ export const createInputOptimizer = <TVector>(
   };
 
   const runLbfgs = async (input: TVector, grad: TVector): Promise<TVector> => {
-    await addLbfgsHistory(input, grad);
+    lbfgsIteration += 1;
+    if (lbfgsIteration === 1) {
+      lbfgsHDiag = 1;
+    } else {
+      await addLbfgsHistory(grad);
+    }
     const direction = await makeLbfgsDirection(grad);
+    const stepSize =
+      lbfgsIteration === 1
+        ? Math.min(1, 1 / (await ops.absSum(grad))) * config.learningRate
+        : config.learningRate;
     const nextInput = await ops.updateClamp(
       input,
       direction,
-      config.learningRate,
+      -stepSize,
     );
-    ops.dispose(direction);
 
-    const nextPreviousInput = await ops.clone(input);
     const nextPreviousGrad = await ops.clone(grad);
-    if (previousInput !== null) ops.dispose(previousInput);
+    const nextPreviousDirection = await ops.clone(direction);
+    ops.dispose(direction);
     if (previousGrad !== null) ops.dispose(previousGrad);
-    previousInput = nextPreviousInput;
+    if (previousDirection !== null) ops.dispose(previousDirection);
     previousGrad = nextPreviousGrad;
+    previousDirection = nextPreviousDirection;
+    previousStepSize = stepSize;
     return nextInput;
   };
 
@@ -124,13 +136,16 @@ export const createInputOptimizer = <TVector>(
   const dispose = (): void => {
     if (adamM !== null) ops.dispose(adamM);
     if (adamV !== null) ops.dispose(adamV);
-    if (previousInput !== null) ops.dispose(previousInput);
     if (previousGrad !== null) ops.dispose(previousGrad);
+    if (previousDirection !== null) ops.dispose(previousDirection);
     for (const entry of lbfgsHistory) disposeHistoryEntry(entry);
     adamM = null;
     adamV = null;
-    previousInput = null;
     previousGrad = null;
+    previousDirection = null;
+    previousStepSize = null;
+    lbfgsIteration = 0;
+    lbfgsHDiag = 1;
     lbfgsHistory.length = 0;
   };
 

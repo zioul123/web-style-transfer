@@ -98,6 +98,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   out[i] = a[i] * b[i];
 }`;
 
+const makeAbsShader = (count: number): string => `
+@group(0) @binding(0) var<storage, read> input: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  out[i] = abs(input[i]);
+}`;
+
 const makeReduceSumShader = (count: number): string => `
 @group(0) @binding(0) var<storage, read> input: array<f32>;
 @group(0) @binding(1) var<storage, read_write> out: array<f32>;
@@ -281,6 +291,30 @@ const dotProduct = async (
   return scalar;
 };
 
+const absSum = async (
+  device: GPUDevice,
+  input: GpuBufferRef,
+  count: number,
+): Promise<number> => {
+  let current = runSingleInputShader(device, makeAbsShader(count), input, count);
+  let currentCount = count;
+  while (currentCount > 1) {
+    const nextCount = Math.ceil(currentCount / 64);
+    const next = runSingleInputShader(
+      device,
+      makeReduceSumShader(currentCount),
+      current,
+      nextCount,
+    );
+    releaseOwnedBuffer(current);
+    current = next;
+    currentCount = nextCount;
+  }
+  const scalar = await readScalar(device, current.buffer);
+  releaseOwnedBuffer(current);
+  return scalar;
+};
+
 export const createGpuVectorOps = (
   device: GPUDevice,
   count: number,
@@ -329,6 +363,9 @@ export const createGpuVectorOps = (
 
   dot: async (a: GpuBufferRef, b: GpuBufferRef): Promise<number> =>
     dotProduct(device, a, b, count),
+
+  absSum: async (input: GpuBufferRef): Promise<number> =>
+    absSum(device, input, count),
 
   updateClamp: async (
     input: GpuBufferRef,
