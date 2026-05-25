@@ -27,6 +27,11 @@ export type InputOptimizerVectorOps<TVector> = {
     scalar: number,
   ) => Promise<TVector>;
   dot: (a: TVector, b: TVector) => Promise<number>;
+  dotPairWithRight: (
+    leftA: TVector,
+    leftB: TVector,
+    right: TVector,
+  ) => Promise<readonly [number, number]>;
   absSum: (input: TVector) => Promise<number>;
   updateClamp: (
     input: TVector,

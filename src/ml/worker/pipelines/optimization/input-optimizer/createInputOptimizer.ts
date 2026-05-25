@@ -52,9 +52,8 @@ export const createInputOptimizer = <TVector>(
       return;
     const oldStep = await ops.scale(previousDirection, previousStepSize);
     const oldDir = await ops.sub(grad, previousGrad);
-    const ys = await ops.dot(oldDir, oldStep);
+    const [ys, yy] = await ops.dotPairWithRight(oldStep, oldDir, oldDir);
     if (ys > 1e-10) {
-      const yy = await ops.dot(oldDir, oldDir);
       lbfgsHDiag = ys / yy;
       lbfgsHistory.push({ oldDir, oldStep, rho: 1 / ys });
       if (lbfgsHistory.length > config.lbfgsMemory) {
@@ -113,12 +112,10 @@ export const createInputOptimizer = <TVector>(
     );
 
     const nextPreviousGrad = await ops.clone(grad);
-    const nextPreviousDirection = await ops.clone(direction);
-    ops.dispose(direction);
     if (previousGrad !== null) ops.dispose(previousGrad);
     if (previousDirection !== null) ops.dispose(previousDirection);
     previousGrad = nextPreviousGrad;
-    previousDirection = nextPreviousDirection;
+    previousDirection = direction;
     previousStepSize = stepSize;
     return nextInput;
   };

@@ -45,6 +45,21 @@ export const createCpuVectorOps = (
     return total;
   },
 
+  dotPairWithRight: async (
+    leftA: Float32Array,
+    leftB: Float32Array,
+    right: Float32Array,
+  ): Promise<readonly [number, number]> => {
+    let totalA = 0;
+    let totalB = 0;
+    for (let i = 0; i < count; i += 1) {
+      const rightValue = right[i];
+      totalA += leftA[i] * rightValue;
+      totalB += leftB[i] * rightValue;
+    }
+    return [totalA, totalB] as const;
+  },
+
   absSum: async (input: Float32Array): Promise<number> => {
     let total = 0;
     for (let i = 0; i < count; i += 1) total += Math.abs(input[i]);

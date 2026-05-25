@@ -10,6 +10,7 @@ import {
   BUFFER_USAGE_STORAGE_COPY_DST,
   MAP_MODE_READ,
 } from "../../../runtime/gpuFlags";
+import { getOrCreateComputePipeline } from "../../../runtime/computePipelineCache";
 import { runBinaryOpToBuffer } from "../../../runtime/shaderRunner";
 import type {
   InputOptimizerConfig,
@@ -118,6 +119,39 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   out[i] = a[i] * b[i];
 }`;
 
+const makeDotPairProductsShader = (count: number): string => `
+@group(0) @binding(0) var<storage, read> leftA: array<f32>;
+@group(0) @binding(1) var<storage, read> leftB: array<f32>;
+@group(0) @binding(2) var<storage, read> right: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let rv = right[i];
+  out[i] = leftA[i] * rv;
+  out[${count}u + i] = leftB[i] * rv;
+}`;
+
+const makeReducePairSumShader = (count: number): string => `
+@group(0) @binding(0) var<storage, read> input: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) workgroupId: vec3<u32>) {
+  let groupStart = workgroupId.x * 64u;
+  var sumA = 0.0;
+  var sumB = 0.0;
+  for (var offset = 0u; offset < 64u; offset = offset + 1u) {
+    let i = groupStart + offset;
+    if (i < ${count}u) {
+      sumA = sumA + input[i];
+      sumB = sumB + input[${count}u + i];
+    }
+  }
+  out[workgroupId.x] = sumA;
+  out[${Math.ceil(count / 64)}u + workgroupId.x] = sumB;
+}`;
+
 const makeAbsShader = (count: number): string => `
 @group(0) @binding(0) var<storage, read> input: array<f32>;
 @group(0) @binding(1) var<storage, read_write> out: array<f32>;
@@ -130,19 +164,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 const createPipelineCache = (
   device: GPUDevice,
-): ((key: string, shader: string) => GPUComputePipeline) => {
-  const cache = new Map<string, GPUComputePipeline>();
-  return (key: string, shader: string): GPUComputePipeline => {
-    const cached = cache.get(key);
-    if (cached !== undefined) return cached;
-    const created = device.createComputePipeline({
-      layout: "auto",
-      compute: { module: device.createShaderModule({ code: shader }), entryPoint: "main" },
-    });
-    cache.set(key, created);
-    return created;
-  };
-};
+): ((key: string, shader: string) => GPUComputePipeline) =>
+  (key: string, shader: string): GPUComputePipeline =>
+    getOrCreateComputePipeline(device, key, shader);
 
 const writeScalarParameter = (
   device: GPUDevice,
@@ -294,6 +318,38 @@ const runAdamShader = (
   return ownedBuffer(outBuffer);
 };
 
+const runThreeInputShader = (
+  device: GPUDevice,
+  pipeline: GPUComputePipeline,
+  a: GpuBufferRef,
+  b: GpuBufferRef,
+  c: GpuBufferRef,
+  count: number,
+  outCount: number,
+): OwnedGpuBuffer => {
+  const outBuffer = device.createBuffer({
+    size: outCount * Float32Array.BYTES_PER_ELEMENT,
+    usage: BUFFER_USAGE_STORAGE_COPY_SRC,
+  });
+  const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: a.buffer } },
+      { binding: 1, resource: { buffer: b.buffer } },
+      { binding: 2, resource: { buffer: c.buffer } },
+      { binding: 3, resource: { buffer: outBuffer } },
+    ],
+  });
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.dispatchWorkgroups(Math.ceil(count / 64));
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  return ownedBuffer(outBuffer);
+};
+
 const readScalar = async (
   device: GPUDevice,
   sourceBuffer: GPUBuffer,
@@ -382,6 +438,52 @@ const absSum = async (
   return scalar;
 };
 
+const dotPairWithRight = async (
+  device: GPUDevice,
+  getPipeline: (key: string, shader: string) => GPUComputePipeline,
+  leftA: GpuBufferRef,
+  leftB: GpuBufferRef,
+  right: GpuBufferRef,
+  count: number,
+): Promise<readonly [number, number]> => {
+  let current = runThreeInputShader(
+    device,
+    getPipeline(`dot-pair-products:${count}`, makeDotPairProductsShader(count)),
+    leftA,
+    leftB,
+    right,
+    count,
+    count * 2,
+  );
+  let currentCount = count;
+  while (currentCount > 1) {
+    const nextCount = Math.ceil(currentCount / 64);
+    const next = runSingleInputReductionShader(
+      device,
+      getPipeline(`reduce-pair-sum:${currentCount}`, makeReducePairSumShader(currentCount)),
+      current,
+      currentCount,
+      nextCount * 2,
+    );
+    releaseOwnedBuffer(current);
+    current = next;
+    currentCount = nextCount;
+  }
+  const readBuffer = device.createBuffer({
+    size: 2 * Float32Array.BYTES_PER_ELEMENT,
+    usage: BUFFER_USAGE_MAP_READ_COPY_DST,
+  });
+  const encoder = device.createCommandEncoder();
+  encoder.copyBufferToBuffer(current.buffer, 0, readBuffer, 0, 2 * Float32Array.BYTES_PER_ELEMENT);
+  device.queue.submit([encoder.finish()]);
+  await readBuffer.mapAsync(MAP_MODE_READ);
+  const pair = new Float32Array(readBuffer.getMappedRange().slice(0));
+  readBuffer.unmap();
+  readBuffer.destroy();
+  releaseOwnedBuffer(current);
+  return [pair[0], pair[1]] as const;
+};
+
 export const createGpuVectorOps = (
   device: GPUDevice,
   count: number,
@@ -458,6 +560,13 @@ export const createGpuVectorOps = (
 
     dot: async (a: GpuBufferRef, b: GpuBufferRef): Promise<number> =>
       dotProduct(device, getPipeline, a, b, count),
+
+    dotPairWithRight: async (
+      leftA: GpuBufferRef,
+      leftB: GpuBufferRef,
+      right: GpuBufferRef,
+    ): Promise<readonly [number, number]> =>
+      dotPairWithRight(device, getPipeline, leftA, leftB, right, count),
 
     absSum: async (input: GpuBufferRef): Promise<number> =>
       absSum(device, getPipeline, input, count),
