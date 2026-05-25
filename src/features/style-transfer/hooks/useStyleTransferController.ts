@@ -252,6 +252,7 @@ export const useStyleTransferController =
         contentWeight,
         styleWeight,
         learningRate,
+        gpuResident: true,
         steps: stepsPerChunk,
       } satisfies WorkerRequest);
     }, [

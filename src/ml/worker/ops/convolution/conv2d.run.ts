@@ -4,7 +4,7 @@ import {
   makeConv2dShader,
 } from "./conv2d.shader";
 import {
-  borrowedBuffer,
+  ownedBuffer,
   readGpuBufferToArray,
   releaseOwnedBuffer,
   runUnaryShaderToBuffer,
@@ -47,7 +47,7 @@ export const runConv2dForwardBuffer = async (
   gpuDevice.queue.writeBuffer(weightBuffer, 0, weight);
   gpuDevice.queue.writeBuffer(biasBuffer, 0, new Float32Array(bias));
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]));
-  return borrowedBuffer(runUnaryShaderToBuffer(gpuDevice, makeConv2dShader(outCount), input.buffer, outCount, [
+  return ownedBuffer(runUnaryShaderToBuffer(gpuDevice, makeConv2dShader(outCount), input.buffer, outCount, [
     { binding: 1, resource: { buffer: weightBuffer } },
     { binding: 2, resource: { buffer: biasBuffer } },
     { binding: 3, resource: { buffer: uniformBuffer } },
@@ -121,7 +121,7 @@ export const runConv2dReluForwardBuffer = async (
   gpuDevice.queue.writeBuffer(weightBuffer, 0, weight);
   gpuDevice.queue.writeBuffer(biasBuffer, 0, new Float32Array(bias));
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]));
-  return borrowedBuffer(runUnaryShaderToBuffer(gpuDevice, makeConv2dReluShader(outCount), input.buffer, outCount, [
+  return ownedBuffer(runUnaryShaderToBuffer(gpuDevice, makeConv2dReluShader(outCount), input.buffer, outCount, [
     { binding: 1, resource: { buffer: weightBuffer } },
     { binding: 2, resource: { buffer: biasBuffer } },
     { binding: 3, resource: { buffer: uniformBuffer } },
@@ -142,7 +142,7 @@ export const runConv2dBackwardInputBuffer = async (
   const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST });
   gpuDevice.queue.writeBuffer(weightBuffer, 0, weight);
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]));
-  return borrowedBuffer(runUnaryShaderToBuffer(gpuDevice, makeConv2dBackwardInputShader(outCount), gradOut.buffer, outCount, [
+  return ownedBuffer(runUnaryShaderToBuffer(gpuDevice, makeConv2dBackwardInputShader(outCount), gradOut.buffer, outCount, [
     { binding: 1, resource: { buffer: weightBuffer } },
     { binding: 2, resource: { buffer: uniformBuffer } },
   ]));

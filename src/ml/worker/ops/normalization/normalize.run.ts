@@ -3,7 +3,7 @@ import {
   makeNormalizeShader,
 } from "./normalize.shader";
 import {
-  borrowedBuffer,
+  ownedBuffer,
   readGpuBufferToArray,
   releaseOwnedBuffer,
   runUnaryShaderToBuffer,
@@ -32,7 +32,7 @@ export const runNormalizeForwardBuffer = async (
   gpuDevice.queue.writeBuffer(meanBuffer, 0, new Float32Array(mean));
   gpuDevice.queue.writeBuffer(stdBuffer, 0, new Float32Array(std));
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, shape[2], shape[3]]));
-  return borrowedBuffer(runUnaryShaderToBuffer(gpuDevice, makeNormalizeShader(shape[1] * shape[2] * shape[3]), input.buffer, shape[1] * shape[2] * shape[3], [
+  return ownedBuffer(runUnaryShaderToBuffer(gpuDevice, makeNormalizeShader(shape[1] * shape[2] * shape[3]), input.buffer, shape[1] * shape[2] * shape[3], [
     { binding: 1, resource: { buffer: meanBuffer } },
     { binding: 2, resource: { buffer: stdBuffer } },
     { binding: 3, resource: { buffer: uniformBuffer } },
@@ -98,7 +98,7 @@ export const runNormalizeBackwardBuffer = async (
   });
   gpuDevice.queue.writeBuffer(stdBuffer, 0, new Float32Array(std));
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, shape[2], shape[3], 0]));
-  return borrowedBuffer(
+  return ownedBuffer(
     runUnaryShaderToBuffer(
       gpuDevice,
       makeNormalizeBackwardShader(shape[1] * shape[2] * shape[3]),

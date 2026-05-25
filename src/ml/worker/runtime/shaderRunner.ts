@@ -71,11 +71,10 @@ export const runBinaryOpToBuffer = (
   mode: "tensorTensor" | "tensorScalar" | "scalarTensor",
 ): GPUBuffer => {
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
-  const outBuffer = acquireReusableBuffer(
-    gpuDevice,
-    count * 4,
-    BUFFER_USAGE_STORAGE_COPY_SRC,
-  );
+  const outBuffer = gpuDevice.createBuffer({
+    size: count * 4,
+    usage: BUFFER_USAGE_STORAGE_COPY_SRC,
+  });
   const pipeline = gpuDevice.createComputePipeline({
     layout: "auto",
     compute: {

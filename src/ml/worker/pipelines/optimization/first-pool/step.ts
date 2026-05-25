@@ -1,8 +1,7 @@
 import type { WorkerRequest } from "../../../../../types";
 import { readGpuBufferToArray, type GpuBufferRef, type OwnedGpuBuffer } from "../../../runtime/bufferKernels";
-import { BUFFER_USAGE_MAP_READ_COPY_DST, BUFFER_USAGE_STORAGE_COPY_SRC, MAP_MODE_READ } from "../../../runtime/gpuFlags";
 import type { FirstPoolPersistentContext, FirstPoolRuntimeContext, FirstPoolStepResult, TensorShape4D } from "./types";
-import { createFirstPoolTrackedOps } from "./trackedOps";
+import { createOptimizationTrackedOps } from "../trackedOps";
 import { convOutputShape, elementCount, pooledShape } from "./shapes";
 
 const assertShape = (valuesLength: number, shape: TensorShape4D, name: string): void => {
@@ -24,11 +23,7 @@ export const runFirstPoolStep = async (
   const debugValidateStepShapes = payload.debugValidateStepShapes ?? false;
   const debugReadbackGrad = payload.debugReadbackGrad ?? false;
   const debugUseLegacyCpuLossReadback = payload.debugUseLegacyCpuLossReadback ?? true;
-  const acquireMseBuffer = (size: number, usage: number): GPUBuffer => {
-    const floatCount = Math.ceil(size / Float32Array.BYTES_PER_ELEMENT);
-    return runtimeContext.acquireTemp([1, 1, 1, floatCount], usage, "mse-reduction");
-  };
-  const tracked = createFirstPoolTrackedOps(device, runtimeContext);
+  const tracked = createOptimizationTrackedOps(device, runtimeContext);
   try {
     const relu1Shape = convOutputShape(payload.inputShape, persistent.conv1Weight.shape[0]);
     const relu2Shape = convOutputShape(relu1Shape, persistent.conv2Weight.shape[0]);
@@ -51,14 +46,14 @@ export const runFirstPoolStep = async (
     const lossStart = performance.now();
     let totalLoss = 0;
     if (debugUseLegacyCpuLossReadback) {
-      const styleLoss1 = (await tracked.mseScalarReadback({ acquire: acquireMseBuffer, a: relu1GramBuffer, b: persistent.styleGram1Buffer, count: relu1GramCount, reductionUsage: BUFFER_USAGE_STORAGE_COPY_SRC, readUsage: BUFFER_USAGE_MAP_READ_COPY_DST, mapModeRead: MAP_MODE_READ })) * payload.styleWeightConv1;
-      const styleLoss3 = (await tracked.mseScalarReadback({ acquire: acquireMseBuffer, a: relu3GramBuffer, b: persistent.styleGram3Buffer, count: relu3GramCount, reductionUsage: BUFFER_USAGE_STORAGE_COPY_SRC, readUsage: BUFFER_USAGE_MAP_READ_COPY_DST, mapModeRead: MAP_MODE_READ })) * payload.styleWeightConv3;
-      const contentLoss = (await tracked.mseScalarReadback({ acquire: acquireMseBuffer, a: relu2Buffer, b: persistent.contentRelu2Buffer, count: elementCount(relu2Shape), reductionUsage: BUFFER_USAGE_STORAGE_COPY_SRC, readUsage: BUFFER_USAGE_MAP_READ_COPY_DST, mapModeRead: MAP_MODE_READ })) * payload.contentWeight;
+      const styleLoss1 = (await tracked.mseScalarReadback(relu1GramBuffer, persistent.styleGram1Buffer, relu1GramCount)) * payload.styleWeightConv1;
+      const styleLoss3 = (await tracked.mseScalarReadback(relu3GramBuffer, persistent.styleGram3Buffer, relu3GramCount)) * payload.styleWeightConv3;
+      const contentLoss = (await tracked.mseScalarReadback(relu2Buffer, persistent.contentRelu2Buffer, elementCount(relu2Shape))) * payload.contentWeight;
       totalLoss = styleLoss1 + styleLoss3 + contentLoss;
     } else {
-      const styleLoss1Buffer = await tracked.mseScalarBuffer({ acquire: acquireMseBuffer, a: relu1GramBuffer, b: persistent.styleGram1Buffer, count: relu1GramCount, reductionUsage: BUFFER_USAGE_STORAGE_COPY_SRC });
-      const styleLoss3Buffer = await tracked.mseScalarBuffer({ acquire: acquireMseBuffer, a: relu3GramBuffer, b: persistent.styleGram3Buffer, count: relu3GramCount, reductionUsage: BUFFER_USAGE_STORAGE_COPY_SRC });
-      const contentLossBuffer = await tracked.mseScalarBuffer({ acquire: acquireMseBuffer, a: relu2Buffer, b: persistent.contentRelu2Buffer, count: elementCount(relu2Shape), reductionUsage: BUFFER_USAGE_STORAGE_COPY_SRC });
+      const styleLoss1Buffer = await tracked.mseScalarBuffer(relu1GramBuffer, persistent.styleGram1Buffer, relu1GramCount);
+      const styleLoss3Buffer = await tracked.mseScalarBuffer(relu3GramBuffer, persistent.styleGram3Buffer, relu3GramCount);
+      const contentLossBuffer = await tracked.mseScalarBuffer(relu2Buffer, persistent.contentRelu2Buffer, elementCount(relu2Shape));
       const weightedStyle1LossBuffer = tracked.scalarMul(styleLoss1Buffer, 1, payload.styleWeightConv1 / relu1GramCount);
       const weightedStyle3LossBuffer = tracked.scalarMul(styleLoss3Buffer, 1, payload.styleWeightConv3 / relu3GramCount);
       const weightedContentLossBuffer = tracked.scalarMul(contentLossBuffer, 1, payload.contentWeight / elementCount(relu2Shape));

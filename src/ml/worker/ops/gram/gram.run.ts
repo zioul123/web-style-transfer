@@ -1,6 +1,6 @@
 import { makeGramBackwardShader, makeGramMatrixShader } from "./gram.shader";
 import {
-  borrowedBuffer,
+  ownedBuffer,
   readGpuBufferToArray,
   releaseOwnedBuffer,
   runUnaryShaderToBuffer,
@@ -22,7 +22,7 @@ export const runGramMatrixBuffer = async (
   const outCount = channels * channels;
   const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 2 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST });
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, spatial]));
-  return borrowedBuffer(runUnaryShaderToBuffer(gpuDevice, makeGramMatrixShader(outCount), input.buffer, outCount, [
+  return ownedBuffer(runUnaryShaderToBuffer(gpuDevice, makeGramMatrixShader(outCount), input.buffer, outCount, [
     { binding: 1, resource: { buffer: uniformBuffer } },
   ]));
 };
@@ -55,7 +55,7 @@ export const runGramBackwardBuffer = async (
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
   const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST });
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, spatial, norm, 0]));
-  return borrowedBuffer(runUnaryShaderToBuffer(gpuDevice, makeGramBackwardShader(shape[1] * shape[2] * shape[3]), input.buffer, shape[1] * shape[2] * shape[3], [
+  return ownedBuffer(runUnaryShaderToBuffer(gpuDevice, makeGramBackwardShader(shape[1] * shape[2] * shape[3]), input.buffer, shape[1] * shape[2] * shape[3], [
     { binding: 1, resource: { buffer: gradOut.buffer } },
     { binding: 2, resource: { buffer: uniformBuffer } },
   ]));

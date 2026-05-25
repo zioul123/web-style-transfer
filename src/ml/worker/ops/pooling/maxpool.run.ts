@@ -3,7 +3,7 @@ import {
   makeMaxPool2dShader,
 } from "./maxpool.shader";
 import {
-  borrowedBuffer,
+  ownedBuffer,
   readGpuBufferToArray,
   releaseOwnedBuffer,
   runUnaryShaderToBuffer,
@@ -42,7 +42,7 @@ export const runMaxPool2dForwardBuffer = async (
     0,
     new Uint32Array([channels, inHeight, inWidth, outHeight, outWidth]),
   );
-  return borrowedBuffer(
+  return ownedBuffer(
     runUnaryShaderToBuffer(
       gpuDevice,
       makeMaxPool2dShader(outCount),
@@ -92,7 +92,7 @@ export const runMaxPool2dBackwardBuffer = async (
     0,
     new Uint32Array([channels, inHeight, inWidth, outHeight, outWidth, 0, 0, 0]),
   );
-  return borrowedBuffer(
+  return ownedBuffer(
     runUnaryShaderToBuffer(
       gpuDevice,
       makeMaxPool2dBackwardShader(shape[1] * shape[2] * shape[3]),

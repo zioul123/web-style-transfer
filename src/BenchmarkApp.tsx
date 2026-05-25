@@ -1,7 +1,12 @@
-import { useMemo, useState, type ReactElement } from "react";
-import type { WorkerFirstPoolBenchmarkStats, WorkerRequest, WorkerResponse } from "./types";
+import { useState, type ReactElement } from "react";
+import type {
+  WorkerFirstPoolBenchmarkStats,
+  WorkerRequest,
+  WorkerResponse,
+  WorkerRunStats,
+} from "./types";
 
-type VggWeightsFixture = {
+type VggFirstPoolWeightsFixture = {
   conv1WeightShape: [number, number, number, number];
   conv1WeightValues: number[];
   conv1BiasValues: number[];
@@ -13,35 +18,60 @@ type VggWeightsFixture = {
   conv3BiasValues: number[];
 };
 
-type VggCaseFixture = {
+type VggFirstPoolCaseFixture = {
   inputShape: [number, number, number, number];
   inputValues: number[];
   mean: [number, number, number];
   std: [number, number, number];
 };
 
-type BenchmarkResult = {
-  losses: number[];
-  stats?: WorkerFirstPoolBenchmarkStats;
+type Phase3FullPassFixture = {
+  inputShape: [number, number, number, number];
+  inputImageValues: number[];
+  contentImageValues: number[];
+  styleImageValues: number[];
+  mean: [number, number, number];
+  std: [number, number, number];
+  styleLayerIndices: number[];
+  contentLayerIndex: number;
 };
 
-type BenchmarkPreset = "baseline" | "debug-shapes" | "debug-grad" | "debug-both";
+type BenchmarkTab = "first-pool" | "full-style";
+type FirstPoolPipelineMode = "gpu-resident-loss" | "legacy-loss-readback";
+type FullPipelineMode = "gpu-resident" | "legacy";
+
+type BenchmarkStats = WorkerFirstPoolBenchmarkStats | WorkerRunStats;
+
+type BenchmarkResult = {
+  losses: number[];
+  stats?: BenchmarkStats;
+};
+
+type MetricSummary = { mean: number; p50: number; p95: number };
 
 type BenchmarkRunSummary = {
   runs: number;
-  elapsedMs: { mean: number; p50: number; p95: number };
-  readbackMs: { mean: number; p50: number; p95: number };
-  mandatoryReadbackMs: { mean: number; p50: number; p95: number };
-  diagnosticsReadbackMs: { mean: number; p50: number; p95: number };
+  elapsedMs: MetricSummary;
+  forwardMs: MetricSummary;
+  lossMs: MetricSummary;
+  backwardMs: MetricSummary;
+  updateMs: MetricSummary;
+  clampMs?: MetricSummary;
+  readbackMs?: MetricSummary;
+  mandatoryReadbackMs?: MetricSummary;
+  diagnosticsReadbackMs?: MetricSummary;
 };
 
 const percentile = (sortedValues: readonly number[], p: number): number => {
   if (sortedValues.length === 0) return 0;
-  const idx = Math.min(sortedValues.length - 1, Math.max(0, Math.ceil((p / 100) * sortedValues.length) - 1));
+  const idx = Math.min(
+    sortedValues.length - 1,
+    Math.max(0, Math.ceil((p / 100) * sortedValues.length) - 1),
+  );
   return sortedValues[idx];
 };
 
-const summarize = (values: readonly number[]): { mean: number; p50: number; p95: number } => {
+const summarize = (values: readonly number[]): MetricSummary => {
   if (values.length === 0) return { mean: 0, p50: 0, p95: 0 };
   const sorted = [...values].sort((a, b) => a - b);
   const mean = values.reduce((acc, value) => acc + value, 0) / values.length;
@@ -54,7 +84,10 @@ const loadJson = async <T,>(url: string): Promise<T> => {
   return (await response.json()) as T;
 };
 
-const askWorker = (worker: Worker, payload: WorkerRequest): Promise<WorkerResponse> =>
+const askWorker = (
+  worker: Worker,
+  payload: WorkerRequest,
+): Promise<WorkerResponse> =>
   new Promise((resolve) => {
     const handler = (event: MessageEvent<WorkerResponse>): void => {
       if (event.data.id !== payload.id) return;
@@ -65,159 +98,553 @@ const askWorker = (worker: Worker, payload: WorkerRequest): Promise<WorkerRespon
     worker.postMessage(payload);
   });
 
+const hasReadbackStats = (
+  stats: BenchmarkStats,
+): stats is WorkerFirstPoolBenchmarkStats => "readbackMs" in stats;
+
+const summarizeRuns = (runStats: readonly BenchmarkStats[]): BenchmarkRunSummary => {
+  const firstPoolStats = runStats.filter(hasReadbackStats);
+  const fullStats = runStats.filter(
+    (entry): entry is WorkerRunStats => !hasReadbackStats(entry),
+  );
+  return {
+    runs: runStats.length,
+    elapsedMs: summarize(runStats.map((entry) => entry.elapsedMs)),
+    forwardMs: summarize(runStats.map((entry) => entry.forwardMs)),
+    lossMs: summarize(runStats.map((entry) => entry.lossMs)),
+    backwardMs: summarize(runStats.map((entry) => entry.backwardMs)),
+    updateMs: summarize(runStats.map((entry) => entry.updateMs)),
+    clampMs:
+      fullStats.length > 0
+        ? summarize(fullStats.map((entry) => entry.clampMs))
+        : undefined,
+    readbackMs:
+      firstPoolStats.length > 0
+        ? summarize(firstPoolStats.map((entry) => entry.readbackMs))
+        : undefined,
+    mandatoryReadbackMs:
+      firstPoolStats.length > 0
+        ? summarize(firstPoolStats.map((entry) => entry.mandatoryReadbackMs))
+        : undefined,
+    diagnosticsReadbackMs:
+      firstPoolStats.length > 0
+        ? summarize(firstPoolStats.map((entry) => entry.diagnosticsReadbackMs))
+        : undefined,
+  };
+};
+
+const formatMetric = (metric: MetricSummary | undefined): string =>
+  metric === undefined
+    ? "-"
+    : `${metric.mean.toFixed(2)} / ${metric.p50.toFixed(2)} / ${metric.p95.toFixed(2)}`;
+
 export const BenchmarkApp = (): ReactElement => {
-  const [preset, setPreset] = useState<BenchmarkPreset>("baseline");
-  const [steps, setSteps] = useState<number>(6);
-  const [runs, setRuns] = useState<number>(5);
-  const [learningRate, setLearningRate] = useState<number>(0.15);
-  const [contentWeight, setContentWeight] = useState<number>(1);
-  const [styleWeightConv1, setStyleWeightConv1] = useState<number>(30);
-  const [styleWeightConv3, setStyleWeightConv3] = useState<number>(120);
-  const [debugValidateStepShapes, setDebugValidateStepShapes] = useState<boolean>(false);
-  const [debugReadbackGrad, setDebugReadbackGrad] = useState<boolean>(false);
-  const [debugUseLegacyCpuLossReadback, setDebugUseLegacyCpuLossReadback] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<BenchmarkTab>("first-pool");
   const [status, setStatus] = useState<string>("Ready");
+  const [isRunning, setIsRunning] = useState<boolean>(false);
   const [result, setResult] = useState<BenchmarkResult | null>(null);
   const [summary, setSummary] = useState<BenchmarkRunSummary | null>(null);
 
-  const applyPreset = (nextPreset: BenchmarkPreset): void => {
-    setPreset(nextPreset);
-    if (nextPreset === "baseline") {
-      setDebugValidateStepShapes(false);
-      setDebugReadbackGrad(false);
-      return;
-    }
-    if (nextPreset === "debug-shapes") {
-      setDebugValidateStepShapes(true);
-      setDebugReadbackGrad(false);
-      return;
-    }
-    if (nextPreset === "debug-grad") {
-      setDebugValidateStepShapes(false);
-      setDebugReadbackGrad(true);
-      return;
-    }
-    setDebugValidateStepShapes(true);
-    setDebugReadbackGrad(true);
-  };
+  const [firstPoolPipeline, setFirstPoolPipeline] =
+    useState<FirstPoolPipelineMode>("gpu-resident-loss");
+  const [firstPoolSteps, setFirstPoolSteps] = useState<number>(6);
+  const [firstPoolRuns, setFirstPoolRuns] = useState<number>(5);
+  const [firstPoolLearningRate, setFirstPoolLearningRate] =
+    useState<number>(0.15);
+  const [firstPoolContentWeight, setFirstPoolContentWeight] =
+    useState<number>(1);
+  const [styleWeightConv1, setStyleWeightConv1] = useState<number>(30);
+  const [styleWeightConv3, setStyleWeightConv3] = useState<number>(120);
+  const [useFirstPoolFusedConvRelu, setUseFirstPoolFusedConvRelu] =
+    useState<boolean>(true);
+  const [useFirstPoolFusedUpdateClamp, setUseFirstPoolFusedUpdateClamp] =
+    useState<boolean>(true);
+  const [debugValidateStepShapes, setDebugValidateStepShapes] =
+    useState<boolean>(false);
+  const [debugReadbackGrad, setDebugReadbackGrad] = useState<boolean>(false);
 
-  const readbackBreakdown = useMemo((): string => {
-    if (result?.stats === undefined) return "No stats yet";
-    return `total=${result.stats.readbackMs.toFixed(2)}ms, mandatory=${result.stats.mandatoryReadbackMs.toFixed(2)}ms, diagnostics=${result.stats.diagnosticsReadbackMs.toFixed(2)}ms`;
-  }, [result]);
+  const [fullPipeline, setFullPipeline] =
+    useState<FullPipelineMode>("gpu-resident");
+  const [fullSteps, setFullSteps] = useState<number>(1);
+  const [fullRuns, setFullRuns] = useState<number>(3);
+  const [fullLearningRate, setFullLearningRate] = useState<number>(1e-5);
+  const [fullContentWeight, setFullContentWeight] = useState<number>(1);
+  const [fullStyleWeight, setFullStyleWeight] = useState<number>(1);
+  const [fullFusedOps, setFullFusedOps] = useState<boolean>(true);
+  const [fullSuperFusedOps, setFullSuperFusedOps] = useState<boolean>(false);
 
-  const runBenchmark = async (): Promise<void> => {
-    setStatus("Loading fixtures...");
+  const clearResults = (): void => {
     setResult(null);
     setSummary(null);
-    const worker = new Worker(new URL("./styleTransfer.worker.ts", import.meta.url), { type: "module" });
+  };
+
+  const initializeWorker = async (worker: Worker): Promise<void> => {
+    setStatus("Initializing WebGPU...");
+    const init = await askWorker(worker, {
+      type: "init-webgpu",
+      id: "benchmark-init",
+    });
+    if (init.type !== "webgpu-init-result" || !init.ok) {
+      throw new Error(
+        init.type === "webgpu-init-result"
+          ? init.message
+          : "Unexpected init response",
+      );
+    }
+  };
+
+  const runFirstPoolBenchmark = async (worker: Worker): Promise<void> => {
+    setStatus("Loading first-pool fixtures...");
+    const [weights, caseData] = await Promise.all([
+      loadJson<VggFirstPoolWeightsFixture>(
+        "/vgg19-first-pool/vgg19_first_pool_weights.json",
+      ),
+      loadJson<VggFirstPoolCaseFixture>(
+        "/vgg19-first-pool/vgg19_first_pool_case_madeira16.json",
+      ),
+    ]);
+    await initializeWorker(worker);
+    const cappedRuns = Math.max(1, Math.floor(firstPoolRuns));
+    const runStats: WorkerFirstPoolBenchmarkStats[] = [];
+    let lastResult: BenchmarkResult | null = null;
+
+    for (let runIndex = 0; runIndex < cappedRuns; runIndex += 1) {
+      setStatus(`Running first-pool benchmark (${runIndex + 1}/${cappedRuns})...`);
+      const optimized = await askWorker(worker, {
+        type: "run-first-pool-optimizer",
+        id: `benchmark-first-pool-${runIndex}`,
+        inputShape: caseData.inputShape,
+        mean: caseData.mean,
+        std: caseData.std,
+        contentImageValues: caseData.inputValues,
+        styleImageValues: [...caseData.inputValues].reverse(),
+        initialInputValues: caseData.inputValues,
+        conv1Weight: {
+          shape: weights.conv1WeightShape,
+          values: weights.conv1WeightValues,
+        },
+        conv1Bias: weights.conv1BiasValues,
+        conv2Weight: {
+          shape: weights.conv2WeightShape,
+          values: weights.conv2WeightValues,
+        },
+        conv2Bias: weights.conv2BiasValues,
+        conv3Weight: {
+          shape: weights.conv3WeightShape,
+          values: weights.conv3WeightValues,
+        },
+        conv3Bias: weights.conv3BiasValues,
+        contentWeight: firstPoolContentWeight,
+        styleWeightConv1,
+        styleWeightConv3,
+        learningRate: firstPoolLearningRate,
+        steps: firstPoolSteps,
+        useFusedConvRelu: useFirstPoolFusedConvRelu,
+        useFusedUpdateClamp: useFirstPoolFusedUpdateClamp,
+        debugValidateStepShapes,
+        debugReadbackGrad,
+        debugUseLegacyCpuLossReadback:
+          firstPoolPipeline === "legacy-loss-readback",
+        collectBenchmarkStats: true,
+      });
+      if (optimized.type !== "run-first-pool-optimizer-result") {
+        throw new Error("Unexpected first-pool run response");
+      }
+      if (!optimized.ok) throw new Error(optimized.message);
+      lastResult = { losses: optimized.losses, stats: optimized.stats };
+      if (optimized.stats !== undefined) runStats.push(optimized.stats);
+    }
+
+    if (lastResult !== null) setResult(lastResult);
+    if (runStats.length > 0) setSummary(summarizeRuns(runStats));
+  };
+
+  const runFullStyleBenchmark = async (worker: Worker): Promise<void> => {
+    setStatus("Loading full style-transfer fixtures...");
+    const [weights, fixture] = await Promise.all([
+      loadJson<Record<string, number[] | [number, number, number, number]>>(
+        "/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json",
+      ),
+      loadJson<Phase3FullPassFixture>(
+        "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
+      ),
+    ]);
+    await initializeWorker(worker);
+    const cappedRuns = Math.max(1, Math.floor(fullRuns));
+    const runStats: WorkerRunStats[] = [];
+    let lastResult: BenchmarkResult | null = null;
+
+    for (let runIndex = 0; runIndex < cappedRuns; runIndex += 1) {
+      setStatus(`Running full style-transfer benchmark (${runIndex + 1}/${cappedRuns})...`);
+      const optimized = await askWorker(worker, {
+        type: "run-style-transfer",
+        id: `benchmark-full-style-${runIndex}`,
+        optimizer: "sgd",
+        gpuResident: fullPipeline === "gpu-resident",
+        fusedOps: fullFusedOps,
+        superFusedOps:
+          fullPipeline === "legacy" ? fullSuperFusedOps : false,
+        inputShape: fixture.inputShape,
+        inputImageValues: fixture.inputImageValues,
+        contentImageValues: fixture.contentImageValues,
+        styleImageValues: fixture.styleImageValues,
+        mean: fixture.mean,
+        std: fixture.std,
+        styleLayerIndices: fixture.styleLayerIndices,
+        contentLayerIndex: fixture.contentLayerIndex,
+        weights,
+        contentWeight: fullContentWeight,
+        styleWeight: fullStyleWeight,
+        learningRate: fullLearningRate,
+        steps: fullSteps,
+      });
+      if (optimized.type !== "run-style-transfer-result") {
+        throw new Error("Unexpected full style-transfer run response");
+      }
+      if (!optimized.ok) throw new Error(optimized.message);
+      lastResult = { losses: optimized.losses, stats: optimized.stats };
+      runStats.push(optimized.stats);
+    }
+
+    if (lastResult !== null) setResult(lastResult);
+    if (runStats.length > 0) setSummary(summarizeRuns(runStats));
+  };
+
+  const runBenchmark = async (): Promise<void> => {
+    setIsRunning(true);
+    clearResults();
+    const worker = new Worker(new URL("./styleTransfer.worker.ts", import.meta.url), {
+      type: "module",
+    });
     try {
-      const [weights, caseData] = await Promise.all([
-        loadJson<VggWeightsFixture>("/vgg19-first-pool/vgg19_first_pool_weights.json"),
-        loadJson<VggCaseFixture>("/vgg19-first-pool/vgg19_first_pool_case_madeira16.json"),
-      ]);
-      setStatus("Initializing WebGPU...");
-      const init = await askWorker(worker, { type: "init-webgpu", id: "benchmark-init" });
-      if (init.type !== "webgpu-init-result" || !init.ok) {
-        throw new Error(init.type === "webgpu-init-result" ? init.message : "Unexpected init response");
-      }
-
-      const cappedRuns = Math.max(1, Math.floor(runs));
-      const runStats: WorkerFirstPoolBenchmarkStats[] = [];
-      let lastResult: BenchmarkResult | null = null;
-
-      for (let runIndex = 0; runIndex < cappedRuns; runIndex += 1) {
-        setStatus(`Running first-pool benchmark (${runIndex + 1}/${cappedRuns})...`);
-        const optimized = await askWorker(worker, {
-          type: "run-first-pool-optimizer",
-          id: `benchmark-run-${runIndex}`,
-          inputShape: caseData.inputShape,
-          mean: caseData.mean,
-          std: caseData.std,
-          contentImageValues: caseData.inputValues,
-          styleImageValues: [...caseData.inputValues].reverse(),
-          initialInputValues: caseData.inputValues,
-          conv1Weight: { shape: weights.conv1WeightShape, values: weights.conv1WeightValues },
-          conv1Bias: weights.conv1BiasValues,
-          conv2Weight: { shape: weights.conv2WeightShape, values: weights.conv2WeightValues },
-          conv2Bias: weights.conv2BiasValues,
-          conv3Weight: { shape: weights.conv3WeightShape, values: weights.conv3WeightValues },
-          conv3Bias: weights.conv3BiasValues,
-          contentWeight,
-          styleWeightConv1,
-          styleWeightConv3,
-          learningRate,
-          steps,
-          collectBenchmarkStats: true,
-          debugValidateStepShapes,
-          debugReadbackGrad,
-          debugUseLegacyCpuLossReadback,
-        });
-        if (optimized.type !== "run-first-pool-optimizer-result") throw new Error("Unexpected run response");
-        if (!optimized.ok) throw new Error(optimized.message);
-        lastResult = { losses: optimized.losses, stats: optimized.stats };
-        if (optimized.stats !== undefined) runStats.push(optimized.stats);
-      }
-
-      if (lastResult !== null) setResult(lastResult);
-      if (runStats.length > 0) {
-        setSummary({
-          runs: runStats.length,
-          elapsedMs: summarize(runStats.map((entry) => entry.elapsedMs)),
-          readbackMs: summarize(runStats.map((entry) => entry.readbackMs)),
-          mandatoryReadbackMs: summarize(runStats.map((entry) => entry.mandatoryReadbackMs)),
-          diagnosticsReadbackMs: summarize(runStats.map((entry) => entry.diagnosticsReadbackMs)),
-        });
+      if (activeTab === "first-pool") {
+        await runFirstPoolBenchmark(worker);
+      } else {
+        await runFullStyleBenchmark(worker);
       }
       setStatus("Done");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Benchmark failed");
     } finally {
       worker.terminate();
+      setIsRunning(false);
     }
   };
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-4 px-6 py-8 text-slate-100">
-      <h1 className="text-3xl font-semibold">First-Pool Benchmark</h1>
-      <p className="text-slate-300">Use this page to compare mandatory vs diagnostics readback overhead.</p>
-      <p className="rounded border border-slate-700 bg-slate-900/60 p-3">Status: {status}</p>
+    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-5 px-6 py-8 text-slate-100">
+      <header className="flex flex-col gap-2">
+        <h1 className="text-3xl font-semibold">WebGPU Pipeline Benchmark</h1>
+        <p className="text-slate-300">
+          Compare first-pool and full style-transfer pipeline variants.
+        </p>
+      </header>
 
-      <section className="grid gap-3 rounded-xl border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
-        <label className="flex flex-col gap-1">Preset
-          <select value={preset} onChange={(event) => { const nextPreset = event.target.value; if (nextPreset === "baseline" || nextPreset === "debug-shapes" || nextPreset === "debug-grad" || nextPreset === "debug-both") applyPreset(nextPreset); }}>
-            <option value="baseline">baseline</option>
-            <option value="debug-shapes">debug-shapes</option>
-            <option value="debug-grad">debug-grad</option>
-            <option value="debug-both">debug-both</option>
-          </select>
-        </label>
-        <label className="flex flex-col gap-1">Steps<input type="number" min={1} value={steps} onChange={(event) => setSteps(Number(event.target.value))} /></label>
-        <label className="flex flex-col gap-1">Runs<input type="number" min={1} value={runs} onChange={(event) => setRuns(Number(event.target.value))} /></label>
-        <label className="flex flex-col gap-1">Learning rate<input type="number" step={0.001} value={learningRate} onChange={(event) => setLearningRate(Number(event.target.value))} /></label>
-        <label className="flex flex-col gap-1">Content weight<input type="number" value={contentWeight} onChange={(event) => setContentWeight(Number(event.target.value))} /></label>
-        <label className="flex flex-col gap-1">Style weight conv1<input type="number" value={styleWeightConv1} onChange={(event) => setStyleWeightConv1(Number(event.target.value))} /></label>
-        <label className="flex flex-col gap-1">Style weight conv3<input type="number" value={styleWeightConv3} onChange={(event) => setStyleWeightConv3(Number(event.target.value))} /></label>
-        <div className="flex flex-col gap-2 pt-2">
-          <label className="flex items-center gap-2"><input type="checkbox" checked={debugValidateStepShapes} onChange={(event) => setDebugValidateStepShapes(event.target.checked)} /><span>debugValidateStepShapes</span></label>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={debugReadbackGrad} onChange={(event) => setDebugReadbackGrad(event.target.checked)} /><span>debugReadbackGrad</span></label>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={debugUseLegacyCpuLossReadback} onChange={(event) => setDebugUseLegacyCpuLossReadback(event.target.checked)} /><span>debugUseLegacyCpuLossReadback</span></label>
+      <div className="flex w-fit overflow-hidden rounded border border-slate-700">
+        <button
+          className={`px-4 py-2 ${activeTab === "first-pool" ? "bg-emerald-500 text-black" : "bg-slate-900 text-slate-200"}`}
+          onClick={() => {
+            setActiveTab("first-pool");
+            clearResults();
+          }}
+          type="button"
+        >
+          First pool
+        </button>
+        <button
+          className={`px-4 py-2 ${activeTab === "full-style" ? "bg-emerald-500 text-black" : "bg-slate-900 text-slate-200"}`}
+          onClick={() => {
+            setActiveTab("full-style");
+            clearResults();
+          }}
+          type="button"
+        >
+          Full style transfer
+        </button>
+      </div>
+
+      <p className="rounded border border-slate-700 bg-slate-900/60 p-3">
+        Status: {status}
+      </p>
+
+      {activeTab === "first-pool" ? (
+        <section className="grid gap-3 rounded border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
+          <label className="flex flex-col gap-1">
+            Pipeline
+            <select
+              value={firstPoolPipeline}
+              onChange={(event) =>
+                setFirstPoolPipeline(event.target.value as FirstPoolPipelineMode)
+              }
+            >
+              <option value="gpu-resident-loss">GPU-resident loss</option>
+              <option value="legacy-loss-readback">CPU loss readback</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            Steps
+            <input
+              min={1}
+              type="number"
+              value={firstPoolSteps}
+              onChange={(event) => setFirstPoolSteps(Number(event.target.value))}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            Runs
+            <input
+              min={1}
+              type="number"
+              value={firstPoolRuns}
+              onChange={(event) => setFirstPoolRuns(Number(event.target.value))}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            Learning rate
+            <input
+              step={0.001}
+              type="number"
+              value={firstPoolLearningRate}
+              onChange={(event) =>
+                setFirstPoolLearningRate(Number(event.target.value))
+              }
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            Content weight
+            <input
+              type="number"
+              value={firstPoolContentWeight}
+              onChange={(event) =>
+                setFirstPoolContentWeight(Number(event.target.value))
+              }
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            Style weight conv1
+            <input
+              type="number"
+              value={styleWeightConv1}
+              onChange={(event) => setStyleWeightConv1(Number(event.target.value))}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            Style weight conv3
+            <input
+              type="number"
+              value={styleWeightConv3}
+              onChange={(event) => setStyleWeightConv3(Number(event.target.value))}
+            />
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              checked={useFirstPoolFusedConvRelu}
+              type="checkbox"
+              onChange={(event) =>
+                setUseFirstPoolFusedConvRelu(event.target.checked)
+              }
+            />
+            <span>Fused conv+relu</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              checked={useFirstPoolFusedUpdateClamp}
+              type="checkbox"
+              onChange={(event) =>
+                setUseFirstPoolFusedUpdateClamp(event.target.checked)
+              }
+            />
+            <span>Fused update+clamp</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              checked={debugValidateStepShapes}
+              type="checkbox"
+              onChange={(event) =>
+                setDebugValidateStepShapes(event.target.checked)
+              }
+            />
+            <span>Shape readback diagnostics</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              checked={debugReadbackGrad}
+              type="checkbox"
+              onChange={(event) => setDebugReadbackGrad(event.target.checked)}
+            />
+            <span>Gradient readback diagnostics</span>
+          </label>
+        </section>
+      ) : (
+        <section className="grid gap-3 rounded border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
+          <label className="flex flex-col gap-1">
+            Pipeline
+            <select
+              value={fullPipeline}
+              onChange={(event) =>
+                setFullPipeline(event.target.value as FullPipelineMode)
+              }
+            >
+              <option value="gpu-resident">GPU resident</option>
+              <option value="legacy">CPU resident legacy</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            Steps
+            <input
+              min={1}
+              type="number"
+              value={fullSteps}
+              onChange={(event) => setFullSteps(Number(event.target.value))}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            Runs
+            <input
+              min={1}
+              type="number"
+              value={fullRuns}
+              onChange={(event) => setFullRuns(Number(event.target.value))}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            Learning rate
+            <input
+              step={0.00001}
+              type="number"
+              value={fullLearningRate}
+              onChange={(event) =>
+                setFullLearningRate(Number(event.target.value))
+              }
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            Content weight
+            <input
+              type="number"
+              value={fullContentWeight}
+              onChange={(event) =>
+                setFullContentWeight(Number(event.target.value))
+              }
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            Style weight
+            <input
+              type="number"
+              value={fullStyleWeight}
+              onChange={(event) => setFullStyleWeight(Number(event.target.value))}
+            />
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              checked={fullFusedOps}
+              type="checkbox"
+              onChange={(event) => setFullFusedOps(event.target.checked)}
+            />
+            <span>Fused conv+relu</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              checked={fullSuperFusedOps}
+              disabled={fullPipeline === "gpu-resident"}
+              type="checkbox"
+              onChange={(event) => setFullSuperFusedOps(event.target.checked)}
+            />
+            <span>Super fused blocks</span>
+          </label>
+        </section>
+      )}
+
+      <button
+        className="w-fit rounded bg-emerald-500 px-4 py-2 font-semibold text-black disabled:cursor-not-allowed disabled:bg-slate-600 disabled:text-slate-300"
+        disabled={isRunning}
+        onClick={() => void runBenchmark()}
+        type="button"
+      >
+        {isRunning ? "Running..." : "Run benchmark"}
+      </button>
+
+      <section className="rounded border border-slate-700 bg-slate-900/60 p-4">
+        <div className="grid gap-2 text-sm md:grid-cols-2">
+          <p>Initial loss: {result?.losses[0]?.toFixed(6) ?? "-"}</p>
+          <p>Final loss: {result?.losses.at(-1)?.toFixed(6) ?? "-"}</p>
+          <p>Steps in last run: {result?.stats?.steps ?? "-"}</p>
+          <p>Last elapsed: {result?.stats?.elapsedMs.toFixed(2) ?? "-"} ms</p>
         </div>
-      </section>
-
-      <button className="w-fit rounded bg-emerald-500 px-4 py-2 font-semibold text-black" onClick={() => void runBenchmark()}>Run benchmark</button>
-
-      <section className="rounded-xl border border-slate-700 bg-slate-900/60 p-4">
-        <p>Readback breakdown: {readbackBreakdown}</p>
-        <p>Initial loss: {result?.losses[0]?.toFixed(6) ?? "—"}</p>
-        <p>Final loss: {(result?.losses.at(-1))?.toFixed(6) ?? "—"}</p>
         {summary === null ? null : (
-          <div className="mt-3 grid gap-1 text-sm text-slate-300">
-            <p>Summary over {summary.runs} runs</p>
-            <p>Elapsed ms (mean/p50/p95): {summary.elapsedMs.mean.toFixed(2)} / {summary.elapsedMs.p50.toFixed(2)} / {summary.elapsedMs.p95.toFixed(2)}</p>
-            <p>Total readback ms (mean/p50/p95): {summary.readbackMs.mean.toFixed(2)} / {summary.readbackMs.p50.toFixed(2)} / {summary.readbackMs.p95.toFixed(2)}</p>
-            <p>Mandatory readback ms (mean/p50/p95): {summary.mandatoryReadbackMs.mean.toFixed(2)} / {summary.mandatoryReadbackMs.p50.toFixed(2)} / {summary.mandatoryReadbackMs.p95.toFixed(2)}</p>
-            <p>Diagnostics readback ms (mean/p50/p95): {summary.diagnosticsReadbackMs.mean.toFixed(2)} / {summary.diagnosticsReadbackMs.p50.toFixed(2)} / {summary.diagnosticsReadbackMs.p95.toFixed(2)}</p>
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[620px] border-collapse text-left text-sm">
+              <thead className="text-slate-300">
+                <tr>
+                  <th className="border-b border-slate-700 py-2 pr-4">Metric</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
+                    mean / p50 / p95 ms
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className="border-b border-slate-800 py-2 pr-4">Elapsed</td>
+                  <td className="border-b border-slate-800 py-2 pr-4">
+                    {formatMetric(summary.elapsedMs)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-slate-800 py-2 pr-4">Forward</td>
+                  <td className="border-b border-slate-800 py-2 pr-4">
+                    {formatMetric(summary.forwardMs)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-slate-800 py-2 pr-4">Loss</td>
+                  <td className="border-b border-slate-800 py-2 pr-4">
+                    {formatMetric(summary.lossMs)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-slate-800 py-2 pr-4">Backward</td>
+                  <td className="border-b border-slate-800 py-2 pr-4">
+                    {formatMetric(summary.backwardMs)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-slate-800 py-2 pr-4">Update</td>
+                  <td className="border-b border-slate-800 py-2 pr-4">
+                    {formatMetric(summary.updateMs)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-slate-800 py-2 pr-4">Clamp</td>
+                  <td className="border-b border-slate-800 py-2 pr-4">
+                    {formatMetric(summary.clampMs)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-slate-800 py-2 pr-4">Readback</td>
+                  <td className="border-b border-slate-800 py-2 pr-4">
+                    {formatMetric(summary.readbackMs)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-slate-800 py-2 pr-4">
+                    Mandatory readback
+                  </td>
+                  <td className="border-b border-slate-800 py-2 pr-4">
+                    {formatMetric(summary.mandatoryReadbackMs)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-2 pr-4">Diagnostics readback</td>
+                  <td className="py-2 pr-4">
+                    {formatMetric(summary.diagnosticsReadbackMs)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p className="mt-3 text-sm text-slate-400">
+              Summary over {summary.runs} run{summary.runs === 1 ? "" : "s"}.
+            </p>
           </div>
         )}
       </section>
