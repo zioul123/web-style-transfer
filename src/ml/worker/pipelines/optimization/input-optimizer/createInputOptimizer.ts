@@ -84,8 +84,14 @@ export const createInputOptimizer = <TVector>(
 
     for (let i = 0; i < lbfgsHistory.length; i += 1) {
       const { oldDir, oldStep, rho } = lbfgsHistory[i];
-      const beta = rho * (await ops.dot(oldDir, q));
-      const nextQ = await ops.addScaled(q, oldStep, alphas[i] - beta);
+      const nextQ = await ops.addScaledByDot(
+        q,
+        oldStep,
+        oldDir,
+        q,
+        -rho,
+        alphas[i],
+      );
       ops.dispose(q);
       q = nextQ;
     }

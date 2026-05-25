@@ -39,6 +39,23 @@ export const createCpuVectorOps = (
     return out;
   },
 
+  addScaledByDot: async (
+    input: Float32Array,
+    direction: Float32Array,
+    dotLeft: Float32Array,
+    dotRight: Float32Array,
+    dotScale: number,
+    dotBias: number,
+  ): Promise<Float32Array> => {
+    let dot = 0;
+    for (let i = 0; i < count; i += 1) dot += dotLeft[i] * dotRight[i];
+    const scalar = dotScale * dot + dotBias;
+    const out = new Float32Array(count);
+    for (let i = 0; i < count; i += 1)
+      out[i] = input[i] + direction[i] * scalar;
+    return out;
+  },
+
   dot: async (a: Float32Array, b: Float32Array): Promise<number> => {
     let total = 0;
     for (let i = 0; i < count; i += 1) total += a[i] * b[i];

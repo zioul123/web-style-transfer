@@ -26,6 +26,14 @@ export type InputOptimizerVectorOps<TVector> = {
     direction: TVector,
     scalar: number,
   ) => Promise<TVector>;
+  addScaledByDot: (
+    input: TVector,
+    direction: TVector,
+    dotLeft: TVector,
+    dotRight: TVector,
+    dotScale: number,
+    dotBias: number,
+  ) => Promise<TVector>;
   dot: (a: TVector, b: TVector) => Promise<number>;
   dotPairWithRight: (
     leftA: TVector,
