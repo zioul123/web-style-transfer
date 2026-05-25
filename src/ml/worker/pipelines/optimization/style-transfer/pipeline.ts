@@ -13,8 +13,8 @@ import {
 } from "../trackedOps";
 import { createInputOptimizer } from "../input-optimizer/createInputOptimizer";
 import { createGpuVectorOps } from "../input-optimizer/gpuVectorOps";
-import type { InputOptimizerConfig } from "../input-optimizer/types";
-import { elementCount } from "../../../runtime/tensorShapes";
+import type { InputOptimizer, InputOptimizerConfig } from "../input-optimizer/types";
+import { elementCount, type TensorShape4D } from "../../../runtime/tensorShapes";
 import { parseVgg19ConvLayerCache } from "../../../models/vgg19/weights";
 import { createPersistentTargetContext } from "./persistentTargetContext";
 import {
@@ -26,11 +26,114 @@ import type {
   StyleTransferRunResult,
 } from "./types";
 
+type OptimizerSession = {
+  key: string;
+  stepOffset: number;
+  inputOptimizer: InputOptimizer<GpuBufferRef>;
+};
+
+const optimizerSessionById = new Map<string, OptimizerSession>();
+
+const buildOptimizerKey = (
+  payload: StyleTransferPayload,
+  inputCount: number,
+): string =>
+  JSON.stringify({
+    optimizer: payload.optimizer ?? "lbfgs",
+    count: inputCount,
+    learningRate: payload.learningRate,
+    adamBeta1: payload.adamBeta1 ?? 0.9,
+    adamBeta2: payload.adamBeta2 ?? 0.999,
+    adamEpsilon: payload.adamEpsilon ?? 1e-8,
+    lbfgsMemory: payload.lbfgsMemory ?? 100,
+    lbfgsEpsilon: payload.lbfgsEpsilon ?? 1e-9,
+  });
+
+const createSessionOptimizer = (
+  device: GPUDevice,
+  inputCount: number,
+  optimizerConfig: InputOptimizerConfig,
+): InputOptimizer<GpuBufferRef> =>
+  createInputOptimizer(optimizerConfig, createGpuVectorOps(device, inputCount));
+
+const getOrCreateOptimizer = (
+  payload: StyleTransferPayload,
+  device: GPUDevice,
+  inputCount: number,
+  optimizerConfig: InputOptimizerConfig,
+): {
+  inputOptimizer: InputOptimizer<GpuBufferRef>;
+  sessionId: string | null;
+  stepOffset: number;
+} => {
+  const sessionId = payload.sessionId ?? null;
+  if (sessionId === null) {
+    return {
+      inputOptimizer: createSessionOptimizer(device, inputCount, optimizerConfig),
+      sessionId: null,
+      stepOffset: 0,
+    };
+  }
+
+  const key = buildOptimizerKey(payload, inputCount);
+  const existing = optimizerSessionById.get(sessionId);
+  if (existing === undefined || existing.key !== key) {
+    if (existing !== undefined) existing.inputOptimizer.dispose();
+    const inputOptimizer = createSessionOptimizer(device, inputCount, optimizerConfig);
+    optimizerSessionById.set(sessionId, {
+      key,
+      stepOffset: 0,
+      inputOptimizer,
+    });
+    return { inputOptimizer, sessionId, stepOffset: 0 };
+  }
+
+  return {
+    inputOptimizer: existing.inputOptimizer,
+    sessionId,
+    stepOffset: existing.stepOffset,
+  };
+};
+
+export const clearStyleTransferOptimizerSession = (sessionId: string): void => {
+  const session = optimizerSessionById.get(sessionId);
+  if (session === undefined) return;
+  session.inputOptimizer.dispose();
+  optimizerSessionById.delete(sessionId);
+};
+
+const shapesMatch = (a: TensorShape4D, b: TensorShape4D): boolean =>
+  a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+
+const assertValuesMatchShape = (
+  label: string,
+  values: readonly number[],
+  shape: TensorShape4D,
+): void => {
+  const expectedCount = elementCount(shape);
+  if (values.length !== expectedCount) {
+    throw new Error(
+      `${label} has ${values.length} values, expected ${expectedCount} for shape [${shape.join(", ")}].`,
+    );
+  }
+};
+
 export const runStyleTransferPipeline = async (
   payload: StyleTransferPayload,
 ): Promise<StyleTransferRunResult> => {
   const device = getGpuDevice();
   if (device === null) throw new Error("WebGPU device is not initialized.");
+
+  const contentShape: TensorShape4D = payload.contentShape ?? payload.inputShape;
+  const styleShape: TensorShape4D = payload.styleShape ?? payload.inputShape;
+  if (!shapesMatch(payload.inputShape, contentShape)) {
+    throw new Error(
+      "Style transfer expects the optimized input shape to match the content image shape.",
+    );
+  }
+  assertValuesMatchShape("inputImageValues", payload.inputImageValues, payload.inputShape);
+  assertValuesMatchShape("contentImageValues", payload.contentImageValues, contentShape);
+  assertValuesMatchShape("styleImageValues", payload.styleImageValues, styleShape);
 
   const runtimeContext = createOptimizationRuntimeContext(device);
   const convLayerCache = parseVgg19ConvLayerCache(payload.weights);
@@ -39,23 +142,26 @@ export const runStyleTransferPipeline = async (
   let backwardMs = 0;
   let lossMs = 0;
   let updateMs = 0;
-  let clampMs = 0;
+  const clampMs = 0;
   const totalStart = performance.now();
   const inputCount = elementCount(payload.inputShape);
   const optimizerConfig: InputOptimizerConfig = {
-    optimizer: payload.optimizer ?? "sgd",
+    optimizer: payload.optimizer ?? "lbfgs",
     count: inputCount,
     learningRate: payload.learningRate,
     adamBeta1: payload.adamBeta1 ?? 0.9,
     adamBeta2: payload.adamBeta2 ?? 0.999,
     adamEpsilon: payload.adamEpsilon ?? 1e-8,
-    lbfgsMemory: payload.lbfgsMemory ?? 10,
-    lbfgsEpsilon: payload.lbfgsEpsilon ?? 1e-8,
+    lbfgsMemory: payload.lbfgsMemory ?? 100,
+    lbfgsEpsilon: payload.lbfgsEpsilon ?? 1e-9,
   };
-  const inputOptimizer = createInputOptimizer(
+  const optimizerRunContext = getOrCreateOptimizer(
+    payload,
+    device,
+    inputCount,
     optimizerConfig,
-    createGpuVectorOps(device, inputCount),
   );
+  const { inputOptimizer, sessionId, stepOffset } = optimizerRunContext;
 
   let inputBuffer: GpuBufferRef | null = uploadToOwnedBuffer(
     device,
@@ -79,27 +185,27 @@ export const runStyleTransferPipeline = async (
     const targetTracked = createOptimizationTrackedOps(device, targetContext);
     const contentNorm = await targetTracked.normalizeForward(
       contentImageBuffer,
-      payload.inputShape,
+      contentShape,
       payload.mean,
       payload.std,
     );
     const styleNorm = await targetTracked.normalizeForward(
       styleImageBuffer,
-      payload.inputShape,
+      styleShape,
       payload.mean,
       payload.std,
     );
     const contentTargets = await runStyleTransferForward(
-      payload,
       convLayerCache,
       targetTracked,
       contentNorm,
+      contentShape,
     );
     const styleTargets = await runStyleTransferForward(
-      payload,
       convLayerCache,
       targetTracked,
       styleNorm,
+      styleShape,
     );
     const contentTargetRelu = contentTargets.reluOut[payload.contentLayerIndex];
     if (contentTargetRelu === undefined) {
@@ -135,14 +241,13 @@ export const runStyleTransferPipeline = async (
           inputBuffer,
           tracked,
           inputOptimizer,
-          step,
+          stepOffset + step,
         );
         losses.push(stepResult.totalLoss);
         forwardMs += stepResult.forwardMs;
         lossMs += stepResult.lossMs;
         backwardMs += stepResult.backwardMs;
         updateMs += stepResult.updateMs;
-        clampMs += stepResult.updateMs;
         const previousInput = inputBuffer;
         inputBuffer = stepResult.nextInputBuffer;
         releaseOwnedBuffer(previousInput);
@@ -175,7 +280,13 @@ export const runStyleTransferPipeline = async (
   } finally {
     if (inputBuffer !== null) releaseOwnedBuffer(inputBuffer);
     for (const buffer of persistentBuffers) releaseOwnedBuffer(buffer);
-    inputOptimizer.dispose();
+    if (sessionId === null) inputOptimizer.dispose();
+    if (sessionId !== null) {
+      const existing = optimizerSessionById.get(sessionId);
+      if (existing !== undefined && existing.inputOptimizer === inputOptimizer) {
+        existing.stepOffset += payload.steps;
+      }
+    }
     runtimeContext.disposeAll();
   }
 };

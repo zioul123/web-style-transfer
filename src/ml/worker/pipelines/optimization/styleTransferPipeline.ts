@@ -1,7 +1,10 @@
 /// <reference lib="webworker" />
 
 import type { WorkerRequest } from "../../../../types";
-import { runStyleTransferPipeline } from "./style-transfer/pipeline";
+import {
+  clearStyleTransferOptimizerSession,
+  runStyleTransferPipeline,
+} from "./style-transfer/pipeline";
 
 type StyleTransferPayload = Extract<
   WorkerRequest,
@@ -26,3 +29,7 @@ export type StyleTransferRunResult = {
 export const runStyleTransfer = async (
   payload: StyleTransferPayload,
 ): Promise<StyleTransferRunResult> => runStyleTransferPipeline(payload);
+
+export const clearStyleTransferSession = (sessionId: string): void => {
+  clearStyleTransferOptimizerSession(sessionId);
+};

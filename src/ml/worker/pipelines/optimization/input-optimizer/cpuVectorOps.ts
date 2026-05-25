@@ -45,6 +45,12 @@ export const createCpuVectorOps = (
     return total;
   },
 
+  absSum: async (input: Float32Array): Promise<number> => {
+    let total = 0;
+    for (let i = 0; i < count; i += 1) total += Math.abs(input[i]);
+    return total;
+  },
+
   updateClamp: async (
     input: Float32Array,
     direction: Float32Array,
