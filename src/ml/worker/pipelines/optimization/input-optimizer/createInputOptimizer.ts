@@ -52,9 +52,8 @@ export const createInputOptimizer = <TVector>(
       return;
     const oldStep = await ops.scale(previousDirection, previousStepSize);
     const oldDir = await ops.sub(grad, previousGrad);
-    const ys = await ops.dot(oldDir, oldStep);
+    const [ys, yy] = await ops.dotPairWithRight(oldStep, oldDir, oldDir);
     if (ys > 1e-10) {
-      const yy = await ops.dot(oldDir, oldDir);
       lbfgsHDiag = ys / yy;
       lbfgsHistory.push({ oldDir, oldStep, rho: 1 / ys });
       if (lbfgsHistory.length > config.lbfgsMemory) {
@@ -68,13 +67,18 @@ export const createInputOptimizer = <TVector>(
   };
 
   const makeLbfgsDirection = async (grad: TVector): Promise<TVector> => {
+    // Two-loop L-BFGS recursion. We keep alpha_i as GPU scalar buffers to avoid
+    // scalar readbacks between loops; the second loop consumes those buffers.
     let q = await ops.scale(grad, -1);
-    const alphas = new Float32Array(lbfgsHistory.length);
+    const alphaBuffers: TVector[] = [];
+    const rhos = new Float32Array(lbfgsHistory.length);
     for (let i = lbfgsHistory.length - 1; i >= 0; i -= 1) {
       const { oldDir, oldStep, rho } = lbfgsHistory[i];
-      const alpha = rho * (await ops.dot(oldStep, q));
-      alphas[i] = alpha;
-      const nextQ = await ops.addScaled(q, oldDir, -alpha);
+      const alphaBuffer = await ops.dotToScalarBuffer(oldStep, q);
+      alphaBuffers[i] = alphaBuffer;
+      rhos[i] = rho;
+      // q <- q - (rho_i * alphaRaw_i) * y_i, with alphaRaw_i = dot(s_i, q)
+      const nextQ = await ops.addScaledByScalarBuffer(q, oldDir, alphaBuffer, -rho);
       ops.dispose(q);
       q = nextQ;
     }
@@ -85,8 +89,17 @@ export const createInputOptimizer = <TVector>(
 
     for (let i = 0; i < lbfgsHistory.length; i += 1) {
       const { oldDir, oldStep, rho } = lbfgsHistory[i];
-      const beta = rho * (await ops.dot(oldDir, q));
-      const nextQ = await ops.addScaled(q, oldStep, alphas[i] - beta);
+      // q <- q + (rho_i * alphaRaw_i - rho_i * dot(y_i, q)) * s_i
+      const nextQ = await ops.addScaledByDotAndScalarBuffer(
+        q,
+        oldStep,
+        oldDir,
+        q,
+        -rho,
+        alphaBuffers[i],
+        rhos[i],
+      );
+      ops.dispose(alphaBuffers[i]);
       ops.dispose(q);
       q = nextQ;
     }
@@ -113,12 +126,10 @@ export const createInputOptimizer = <TVector>(
     );
 
     const nextPreviousGrad = await ops.clone(grad);
-    const nextPreviousDirection = await ops.clone(direction);
-    ops.dispose(direction);
     if (previousGrad !== null) ops.dispose(previousGrad);
     if (previousDirection !== null) ops.dispose(previousDirection);
     previousGrad = nextPreviousGrad;
-    previousDirection = nextPreviousDirection;
+    previousDirection = direction;
     previousStepSize = stepSize;
     return nextInput;
   };

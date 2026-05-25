@@ -563,6 +563,70 @@ test("phase 5 style transfer supports adam and lbfgs", async ({
   }
 });
 
+test("phase 5 gpu vector reductions match cpu references", async ({ page }) => {
+  test.setTimeout(120000);
+  await gotoStableApp(page);
+  const result = await page.evaluate(async () => {
+    if (!("gpu" in navigator))
+      return { ok: false as const, reason: "webgpu-unavailable" as const };
+    const adapter = await navigator.gpu.requestAdapter();
+    if (adapter === null)
+      return { ok: false as const, reason: "adapter-unavailable" as const };
+    const device = await adapter.requestDevice();
+    const { createGpuVectorOps } = await import(
+      "/src/ml/worker/pipelines/optimization/input-optimizer/gpuVectorOps.ts"
+    );
+    const { uploadToOwnedBuffer, releaseOwnedBuffer } = await import(
+      "/src/ml/worker/runtime/bufferKernels.ts"
+    );
+
+    const count = 3 * 128 + 17;
+    const a = new Float32Array(count);
+    const b = new Float32Array(count);
+    for (let i = 0; i < count; i += 1) {
+      a[i] = Math.sin(i * 0.17) * 0.75;
+      b[i] = Math.cos(i * 0.11) * 0.5;
+    }
+
+    let expectedDot = 0;
+    let expectedAbs = 0;
+    for (let i = 0; i < count; i += 1) {
+      expectedDot += a[i] * b[i];
+      expectedAbs += Math.abs(a[i]);
+    }
+
+    const aBuffer = uploadToOwnedBuffer(device, a);
+    const bBuffer = uploadToOwnedBuffer(device, b);
+    try {
+      const ops = createGpuVectorOps(device, count);
+      const dot = await ops.dot(aBuffer, bBuffer);
+      const abs = await ops.absSum(aBuffer);
+      return {
+        ok: true as const,
+        dot,
+        abs,
+        expectedDot,
+        expectedAbs,
+        dotDiff: Math.abs(dot - expectedDot),
+        absDiff: Math.abs(abs - expectedAbs),
+      };
+    } finally {
+      releaseOwnedBuffer(aBuffer);
+      releaseOwnedBuffer(bBuffer);
+      device.destroy();
+    }
+  });
+  if (!result.ok) throw new Error(result.reason);
+  expect(
+    result.dotDiff,
+    `dot=${result.dot}, expectedDot=${result.expectedDot}`,
+  ).toBeLessThan(1e-2);
+  expect(
+    result.absDiff,
+    `abs=${result.abs}, expectedAbs=${result.expectedAbs}`,
+  ).toBeLessThan(1e-2);
+});
+
 test("phase 5 fused conv+relu op matches separate ops", async ({ page }) => {
   test.setTimeout(120000);
   await gotoStableApp(page);

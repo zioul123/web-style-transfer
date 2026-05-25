@@ -136,7 +136,7 @@ export const useStyleTransferController =
       useState<ResolutionPreset>("128x128");
     const [styleResolution, setStyleResolution] =
       useState<ResolutionPreset>("128x192");
-    const [stepsPerChunk, setStepsPerChunk] = useState<number>(4);
+    const [stepsPerChunk, setStepsPerChunk] = useState<number>(10);
     const [contentWeight, setContentWeight] = useState<number>(1);
     const [styleWeight, setStyleWeight] = useState<number>(500000);
     const [learningRate, setLearningRate] = useState<number>(1);

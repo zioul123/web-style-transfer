@@ -80,6 +80,5 @@ export type WorkerRunStats = {
   backwardMs: number;
   lossMs: number;
   updateMs: number;
-  clampMs: number;
   steps: number;
 };

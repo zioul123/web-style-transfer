@@ -39,10 +39,65 @@ export const createCpuVectorOps = (
     return out;
   },
 
+  addScaledByDotAndScalarBuffer: async (
+    input: Float32Array,
+    direction: Float32Array,
+    dotLeft: Float32Array,
+    dotRight: Float32Array,
+    dotScale: number,
+    scalarBuffer: Float32Array,
+    scalarScale: number,
+  ): Promise<Float32Array> => {
+    let dot = 0;
+    for (let i = 0; i < count; i += 1) dot += dotLeft[i] * dotRight[i];
+    const scalar = dotScale * dot + scalarScale * scalarBuffer[0];
+    const out = new Float32Array(count);
+    for (let i = 0; i < count; i += 1)
+      out[i] = input[i] + direction[i] * scalar;
+    return out;
+  },
+
+  dotToScalarBuffer: async (
+    a: Float32Array,
+    b: Float32Array,
+  ): Promise<Float32Array> => {
+    let dot = 0;
+    for (let i = 0; i < count; i += 1) dot += a[i] * b[i];
+    return new Float32Array([dot]);
+  },
+
+  addScaledByScalarBuffer: async (
+    input: Float32Array,
+    direction: Float32Array,
+    scalarBuffer: Float32Array,
+    scalarScale: number,
+  ): Promise<Float32Array> => {
+    const scalar = scalarBuffer[0] * scalarScale;
+    const out = new Float32Array(count);
+    for (let i = 0; i < count; i += 1)
+      out[i] = input[i] + direction[i] * scalar;
+    return out;
+  },
+
   dot: async (a: Float32Array, b: Float32Array): Promise<number> => {
     let total = 0;
     for (let i = 0; i < count; i += 1) total += a[i] * b[i];
     return total;
+  },
+
+  dotPairWithRight: async (
+    leftA: Float32Array,
+    leftB: Float32Array,
+    right: Float32Array,
+  ): Promise<readonly [number, number]> => {
+    let totalA = 0;
+    let totalB = 0;
+    for (let i = 0; i < count; i += 1) {
+      const rightValue = right[i];
+      totalA += leftA[i] * rightValue;
+      totalB += leftB[i] * rightValue;
+    }
+    return [totalA, totalB] as const;
   },
 
   absSum: async (input: Float32Array): Promise<number> => {

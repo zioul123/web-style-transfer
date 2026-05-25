@@ -1,4 +1,5 @@
 import { acquireReusableBuffer, releaseReusableBuffer } from "./bufferPool";
+import { getOrCreateComputePipeline } from "./computePipelineCache";
 import {
   BUFFER_USAGE_MAP_READ_COPY_DST,
   BUFFER_USAGE_STORAGE_COPY_DST,
@@ -75,15 +76,11 @@ export const runBinaryOpToBuffer = (
     size: count * 4,
     usage: BUFFER_USAGE_STORAGE_COPY_SRC,
   });
-  const pipeline = gpuDevice.createComputePipeline({
-    layout: "auto",
-    compute: {
-      module: gpuDevice.createShaderModule({
-        code: makeBinaryOpShader(op, count, mode),
-      }),
-      entryPoint: "main",
-    },
-  });
+  const pipeline = getOrCreateComputePipeline(
+    gpuDevice,
+    `binary:${op}:${count}:${mode}`,
+    makeBinaryOpShader(op, count, mode),
+  );
   const bindGroup = gpuDevice.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
     entries: [

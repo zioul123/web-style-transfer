@@ -142,7 +142,6 @@ export const runStyleTransferPipeline = async (
   let backwardMs = 0;
   let lossMs = 0;
   let updateMs = 0;
-  const clampMs = 0;
   const totalStart = performance.now();
   const inputCount = elementCount(payload.inputShape);
   const optimizerConfig: InputOptimizerConfig = {
@@ -273,7 +272,6 @@ export const runStyleTransferPipeline = async (
         backwardMs,
         lossMs,
         updateMs,
-        clampMs,
         steps: payload.steps,
       },
     };
