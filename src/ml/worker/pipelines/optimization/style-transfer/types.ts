@@ -1,18 +1,14 @@
 import type { WorkerRequest } from "../../../../../types";
+import type { Vgg19ConvLayerCacheEntry } from "../../../models/vgg19/weights";
 import type { GpuBufferRef } from "../../../runtime/bufferKernels";
+import type { TensorShape4D } from "../../../runtime/tensorShapes";
 
 export type StyleTransferPayload = Extract<
   WorkerRequest,
   { type: "run-style-transfer" }
 >;
 
-export type TensorShape4D = readonly [number, number, number, number];
-
-export type ConvLayerCacheEntry = {
-  shape: [number, number, number, number];
-  values: Float32Array;
-  bias: Float32Array;
-};
+export type ConvLayerCacheEntry = Vgg19ConvLayerCacheEntry;
 
 export type StyleTransferForwardResult = {
   reluOut: Record<number, GpuBufferRef | undefined>;

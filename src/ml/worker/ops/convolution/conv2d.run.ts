@@ -54,7 +54,7 @@ export const runConv2dForwardBuffer = async (
   ]));
 };
 
-export const runConv2dForward = async (
+export const runConv2dForwardReadback = async (
   _gpuDevice: GPUDevice | null,
   _runUnaryShader: (code: string, input: Float32Array, outCount: number, extraEntries?: GPUBindGroupEntry[]) => Promise<Float32Array>,
   input: Float32Array,
@@ -62,8 +62,6 @@ export const runConv2dForward = async (
   weight: Float32Array,
   weightShape: readonly [number, number, number, number],
   bias: ArrayLike<number>,
-  _BUFFER_USAGE_STORAGE_COPY_DST: number,
-  _BUFFER_USAGE_UNIFORM_COPY_DST: number,
 ): Promise<Float32Array> => {
   const inputBuffer = uploadToOwnedBuffer(getGpuDevice(), input);
   const outCount = weightShape[0] * inputShape[2] * inputShape[3];
@@ -74,7 +72,7 @@ export const runConv2dForward = async (
   return output;
 };
 
-export const runConv2dReluForward = async (
+export const runConv2dReluForwardReadback = async (
   gpuDevice: GPUDevice | null,
   runUnaryShader: (code: string, input: Float32Array, outCount: number, extraEntries?: GPUBindGroupEntry[]) => Promise<Float32Array>,
   input: Float32Array,
@@ -148,15 +146,13 @@ export const runConv2dBackwardInputBuffer = async (
   ]));
 };
 
-export const runConv2dBackwardInput = async (
+export const runConv2dBackwardInputReadback = async (
   _gpuDevice: GPUDevice | null,
   _runUnaryShader: (code: string, input: Float32Array, outCount: number, extraEntries?: GPUBindGroupEntry[]) => Promise<Float32Array>,
   inputShape: readonly [number, number, number, number],
   gradOut: Float32Array,
   weight: Float32Array,
   weightShape: readonly [number, number, number, number],
-  _BUFFER_USAGE_STORAGE_COPY_DST: number,
-  _BUFFER_USAGE_UNIFORM_COPY_DST: number,
 ): Promise<Float32Array> => {
   const gradOutBuffer = uploadToOwnedBuffer(getGpuDevice(), gradOut);
   const outputBuffer = await runConv2dBackwardInputBuffer(gradOutBuffer, inputShape, weight, weightShape);

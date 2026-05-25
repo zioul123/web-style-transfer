@@ -1,8 +1,9 @@
 import type { createTensor } from "../../../../index";
 import type { GpuBufferRef, OwnedGpuBuffer } from "../../../runtime/bufferKernels";
 import type { OptimizationRuntimeContext } from "../../../runtime/optimizationContext";
+import type { TensorShape4D } from "../../../runtime/tensorShapes";
 
-export type TensorShape4D = readonly [number, number, number, number];
+export type { TensorShape4D };
 
 export type FirstPoolPersistentContext = {
   conv1Weight: ReturnType<typeof createTensor>;

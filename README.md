@@ -94,15 +94,10 @@ Important design choice: gradients are computed for the **input image tensor onl
 
 This keeps implementation deterministic and reviewable while preserving a direct numerical baseline against PyTorch.
 
-### Fused execution modes (Phase 6+)
+### GPU-resident style-transfer execution
 
-`run-style-transfer` now supports two optional performance flags:
-
-- `fusedOps`: uses fused conv+ReLU in forward and compatible ReLU backward gating.
-- `superFusedOps`: runs conv/relu layers in VGG-stage block scheduling (between pool boundaries) while still materializing required ReLU taps for style/content losses.
-
-These can be toggled from the UI (`Use fused conv+relu`, `Use super fused blocks`) for benchmarking.
+`run-style-transfer` uses the GPU-resident optimization path. Intermediate tensors remain on GPU where possible, with readback limited to scalar loss reporting and final/output snapshots.
 
 ### Current transfer bottleneck notes
 
-Most heavy math is on GPU, but each op still maps results back to CPU (`runUnaryShader`) before the next op. This is the dominant remaining overhead. Recent cleanup reduces avoidable CPU allocations (pre-cached conv weights/biases), but the next major win is a GPU-resident execution chain (buffer reuse + deferred readback at chunk boundaries).
+The optimization pipelines keep intermediate tensors GPU-resident and only read back scalar losses plus final/output snapshots. The remaining readback-heavy paths are the op-level worker routes used by parity tests and debugging; those intentionally return JSON-friendly arrays to the main thread.

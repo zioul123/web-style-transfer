@@ -2,7 +2,7 @@ import type { WorkerRequest } from "../../../../../types";
 import { readGpuBufferToArray, type GpuBufferRef, type OwnedGpuBuffer } from "../../../runtime/bufferKernels";
 import type { FirstPoolPersistentContext, FirstPoolRuntimeContext, FirstPoolStepResult, TensorShape4D } from "./types";
 import { createOptimizationTrackedOps } from "../trackedOps";
-import { convOutputShape, elementCount, pooledShape } from "./shapes";
+import { convOutputShape, elementCount, pooledShape } from "../../../runtime/tensorShapes";
 
 const assertShape = (valuesLength: number, shape: TensorShape4D, name: string): void => {
   const expectedLength = elementCount(shape);
@@ -22,7 +22,6 @@ export const runFirstPoolStep = async (
   const useFusedUpdateClamp = payload.useFusedUpdateClamp ?? true;
   const debugValidateStepShapes = payload.debugValidateStepShapes ?? false;
   const debugReadbackGrad = payload.debugReadbackGrad ?? false;
-  const debugUseLegacyCpuLossReadback = payload.debugUseLegacyCpuLossReadback ?? true;
   const tracked = createOptimizationTrackedOps(device, runtimeContext);
   try {
     const relu1Shape = convOutputShape(payload.inputShape, persistent.conv1Weight.shape[0]);
@@ -44,23 +43,15 @@ export const runFirstPoolStep = async (
     const relu3GramBuffer = await tracked.gram(relu3Buffer, relu3Shape);
 
     const lossStart = performance.now();
-    let totalLoss = 0;
-    if (debugUseLegacyCpuLossReadback) {
-      const styleLoss1 = (await tracked.mseScalarReadback(relu1GramBuffer, persistent.styleGram1Buffer, relu1GramCount)) * payload.styleWeightConv1;
-      const styleLoss3 = (await tracked.mseScalarReadback(relu3GramBuffer, persistent.styleGram3Buffer, relu3GramCount)) * payload.styleWeightConv3;
-      const contentLoss = (await tracked.mseScalarReadback(relu2Buffer, persistent.contentRelu2Buffer, elementCount(relu2Shape))) * payload.contentWeight;
-      totalLoss = styleLoss1 + styleLoss3 + contentLoss;
-    } else {
-      const styleLoss1Buffer = await tracked.mseScalarBuffer(relu1GramBuffer, persistent.styleGram1Buffer, relu1GramCount);
-      const styleLoss3Buffer = await tracked.mseScalarBuffer(relu3GramBuffer, persistent.styleGram3Buffer, relu3GramCount);
-      const contentLossBuffer = await tracked.mseScalarBuffer(relu2Buffer, persistent.contentRelu2Buffer, elementCount(relu2Shape));
-      const weightedStyle1LossBuffer = tracked.scalarMul(styleLoss1Buffer, 1, payload.styleWeightConv1 / relu1GramCount);
-      const weightedStyle3LossBuffer = tracked.scalarMul(styleLoss3Buffer, 1, payload.styleWeightConv3 / relu3GramCount);
-      const weightedContentLossBuffer = tracked.scalarMul(contentLossBuffer, 1, payload.contentWeight / elementCount(relu2Shape));
-      const styleLossTotalBuffer = tracked.add(weightedStyle1LossBuffer, weightedStyle3LossBuffer, 1);
-      const totalLossBuffer = tracked.add(styleLossTotalBuffer, weightedContentLossBuffer, 1);
-      totalLoss = (await readGpuBufferToArray(device, totalLossBuffer.buffer, 1))[0];
-    }
+    const styleLoss1Buffer = await tracked.mseScalarBuffer(relu1GramBuffer, persistent.styleGram1Buffer, relu1GramCount);
+    const styleLoss3Buffer = await tracked.mseScalarBuffer(relu3GramBuffer, persistent.styleGram3Buffer, relu3GramCount);
+    const contentLossBuffer = await tracked.mseScalarBuffer(relu2Buffer, persistent.contentRelu2Buffer, elementCount(relu2Shape));
+    const weightedStyle1LossBuffer = tracked.scalarMul(styleLoss1Buffer, 1, payload.styleWeightConv1 / relu1GramCount);
+    const weightedStyle3LossBuffer = tracked.scalarMul(styleLoss3Buffer, 1, payload.styleWeightConv3 / relu3GramCount);
+    const weightedContentLossBuffer = tracked.scalarMul(contentLossBuffer, 1, payload.contentWeight / elementCount(relu2Shape));
+    const styleLossTotalBuffer = tracked.add(weightedStyle1LossBuffer, weightedStyle3LossBuffer, 1);
+    const totalLossBuffer = tracked.add(styleLossTotalBuffer, weightedContentLossBuffer, 1);
+    const totalLoss = (await readGpuBufferToArray(device, totalLossBuffer.buffer, 1))[0];
     const lossMs = performance.now() - lossStart;
 
     const backwardStart = performance.now();

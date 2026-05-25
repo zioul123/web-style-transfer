@@ -4,9 +4,6 @@ export type WorkerRunStyleTransferRequest = {
   type: "run-style-transfer";
   id: string;
   optimizer: "sgd" | "adam" | "lbfgs";
-  gpuResident?: boolean;
-  fusedOps?: boolean;
-  superFusedOps?: boolean;
   adamBeta1?: number;
   adamBeta2?: number;
   adamEpsilon?: number;
@@ -51,7 +48,6 @@ export type WorkerRunFirstPoolOptimizerRequest = {
   useFusedUpdateClamp?: boolean;
   debugValidateStepShapes?: boolean;
   debugReadbackGrad?: boolean;
-  debugUseLegacyCpuLossReadback?: boolean;
   collectBenchmarkStats?: boolean;
 };
 

@@ -207,120 +207,7 @@ test("phase 5 run-style-transfer first-step gradient matches pytorch oracle", as
   expect(result.meanDiff).toBeLessThan(2e-2);
 });
 
-test("phase 5 gpu-resident style transfer matches legacy for single step", async ({
-  page,
-}) => {
-  test.setTimeout(300000);
-  await gotoStableApp(page);
-  const result = await page.evaluate(async () => {
-    const loadJson = async <T>(url: string): Promise<T | null> => {
-      const response = await fetch(url);
-      if (!response.ok) return null;
-      const text = await response.text();
-      try {
-        return JSON.parse(text) as T;
-      } catch {
-        return null;
-      }
-    };
-    const weights = await loadJson<
-      Record<string, number[] | [number, number, number, number]>
-    >("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
-    const fixture = await loadJson<Phase3FullPassFixture>(
-      "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
-    );
-    if (weights === null || fixture === null)
-      return { ok: false as const, reason: "missing-fixtures" as const };
-    const worker = new Worker(
-      new URL("/src/styleTransfer.worker.ts", window.location.origin),
-      { type: "module" },
-    );
-    const ask = (payload: WorkerRequest): Promise<WorkerResponse> =>
-      new Promise((resolve) => {
-        const handler = (event: MessageEvent<WorkerResponse>): void => {
-          if (event.data.id === payload.id) {
-            worker.removeEventListener("message", handler);
-            resolve(event.data);
-          }
-        };
-        worker.addEventListener("message", handler);
-        worker.postMessage(payload);
-      });
-    await ask({ type: "init-webgpu", id: "phase5-gpu-resident-init" });
-    const common = {
-      type: "run-style-transfer" as const,
-      inputShape: fixture.inputShape,
-      inputImageValues: fixture.inputImageValues,
-      contentImageValues: fixture.contentImageValues,
-      styleImageValues: fixture.styleImageValues,
-      mean: fixture.mean,
-      std: fixture.std,
-      styleLayerIndices: fixture.styleLayerIndices,
-      contentLayerIndex: fixture.contentLayerIndex,
-      weights,
-      optimizer: "sgd" as const,
-      contentWeight: 1,
-      styleWeight: 1,
-      learningRate: 1e-5,
-      steps: 1,
-      fusedOps: true,
-    };
-    const legacy = await ask({
-      ...common,
-      id: "phase5-gpu-resident-legacy",
-      gpuResident: false,
-    });
-    const gpuResident = await ask({
-      ...common,
-      id: "phase5-gpu-resident-run",
-      gpuResident: true,
-    });
-    worker.terminate();
-    if (legacy.type !== "run-style-transfer-result")
-      return { ok: false as const, reason: "legacy-wrong-response" as const };
-    if (!legacy.ok)
-      return {
-        ok: false as const,
-        reason: "legacy-failed" as const,
-        message: legacy.message,
-      };
-    if (gpuResident.type !== "run-style-transfer-result")
-      return { ok: false as const, reason: "gpu-wrong-response" as const };
-    if (!gpuResident.ok)
-      return {
-        ok: false as const,
-        reason: "gpu-failed" as const,
-        message: gpuResident.message,
-      };
-    let maxDiff = 0;
-    for (let i = 0; i < legacy.finalValues.length; i += 1) {
-      maxDiff = Math.max(
-        maxDiff,
-        Math.abs(legacy.finalValues[i] - gpuResident.finalValues[i]),
-      );
-    }
-    return {
-      ok: true as const,
-      maxDiff,
-      legacyLoss: legacy.losses[0],
-      gpuLoss: gpuResident.losses[0],
-    };
-  });
-  test.skip(
-    !result.ok && result.reason === "missing-fixtures",
-    "Missing phase3 full-pass fixtures.",
-  );
-  if (!result.ok && result.reason !== "missing-fixtures") {
-    throw new Error(
-      `${result.reason}${"message" in result && result.message !== undefined ? `: ${result.message}` : ""}`,
-    );
-  }
-  if (!result.ok) return;
-  expect(result.maxDiff).toBeLessThan(2e-3);
-  expect(result.gpuLoss).toBeCloseTo(result.legacyLoss, 4);
-});
-
-test("phase 5 gpu-resident style transfer supports adam and lbfgs", async ({
+test("phase 5 style transfer supports adam and lbfgs", async ({
   page,
 }) => {
   test.setTimeout(300000);
@@ -374,7 +261,6 @@ test("phase 5 gpu-resident style transfer supports adam and lbfgs", async ({
       contentWeight: 1,
       styleWeight: 1,
       learningRate: 1e-5,
-      fusedOps: true,
     };
     const cases: readonly {
       optimizer: "adam" | "lbfgs";
@@ -385,63 +271,42 @@ test("phase 5 gpu-resident style transfer supports adam and lbfgs", async ({
       { optimizer: "adam", steps: 3, id: "adam-3" },
       { optimizer: "lbfgs", steps: 3, id: "lbfgs-3" },
     ];
-    const comparisons: {
+    const results: {
       id: string;
-      maxDiff: number;
-      legacyLoss: number;
-      gpuLoss: number;
+      finalLoss: number;
+      finalValuesLength: number;
     }[] = [];
     for (const testCase of cases) {
-      const legacy = await ask({
+      const run = await ask({
         ...common,
-        id: `phase5-optimizer-${testCase.id}-legacy`,
+        id: `phase5-optimizer-${testCase.id}`,
         optimizer: testCase.optimizer,
         steps: testCase.steps,
-        gpuResident: false,
       });
-      const gpuResident = await ask({
-        ...common,
-        id: `phase5-optimizer-${testCase.id}-gpu`,
-        optimizer: testCase.optimizer,
-        steps: testCase.steps,
-        gpuResident: true,
-      });
-      if (legacy.type !== "run-style-transfer-result" || gpuResident.type !== "run-style-transfer-result") {
+      if (run.type !== "run-style-transfer-result") {
         worker.terminate();
         return { ok: false as const, reason: "wrong-response" as const };
       }
-      if (!legacy.ok) {
+      if (!run.ok) {
         worker.terminate();
         return {
           ok: false as const,
-          reason: "legacy-failed" as const,
-          message: legacy.message,
+          reason: "worker-failed" as const,
+          message: run.message,
         };
       }
-      if (!gpuResident.ok) {
-        worker.terminate();
-        return {
-          ok: false as const,
-          reason: "gpu-failed" as const,
-          message: gpuResident.message,
-        };
-      }
-      let maxDiff = 0;
-      for (let i = 0; i < legacy.finalValues.length; i += 1) {
-        maxDiff = Math.max(
-          maxDiff,
-          Math.abs(legacy.finalValues[i] - gpuResident.finalValues[i]),
-        );
-      }
-      comparisons.push({
+      results.push({
         id: testCase.id,
-        maxDiff,
-        legacyLoss: legacy.losses[legacy.losses.length - 1],
-        gpuLoss: gpuResident.losses[gpuResident.losses.length - 1],
+        finalLoss: run.losses[run.losses.length - 1],
+        finalValuesLength: run.finalValues.length,
       });
     }
     worker.terminate();
-    return { ok: true as const, comparisons };
+    return {
+      ok: true as const,
+      results,
+      expectedLength: fixture.inputImageValues.length,
+    };
   });
   test.skip(
     !result.ok && result.reason === "missing-fixtures",
@@ -453,12 +318,14 @@ test("phase 5 gpu-resident style transfer supports adam and lbfgs", async ({
     );
   }
   if (!result.ok) return;
-  for (const comparison of result.comparisons) {
-    expect(comparison.maxDiff, comparison.id).toBeLessThan(5e-3);
+  for (const optimizerResult of result.results) {
     expect(
-      Math.abs(comparison.gpuLoss - comparison.legacyLoss),
-      comparison.id,
-    ).toBeLessThan(1e-3);
+      Number.isFinite(optimizerResult.finalLoss),
+      optimizerResult.id,
+    ).toBeTruthy();
+    expect(optimizerResult.finalValuesLength, optimizerResult.id).toBe(
+      result.expectedLength,
+    );
   }
 });
 
@@ -527,130 +394,4 @@ test("phase 5 fused conv+relu op matches separate ops", async ({ page }) => {
   });
   if (!result.ok) throw new Error(result.reason);
   expect(result.maxDiff).toBeLessThan(1e-4);
-});
-
-test("phase 5 super fused forward path matches baseline for single step", async ({
-  page,
-}) => {
-  test.setTimeout(300000);
-  await gotoStableApp(page);
-  const result = await page.evaluate(async () => {
-    const loadJson = async <T>(url: string): Promise<T | null> => {
-      const response = await fetch(url);
-      if (!response.ok) return null;
-      const text = await response.text();
-      try {
-        return JSON.parse(text) as T;
-      } catch {
-        return null;
-      }
-    };
-    const weights = await loadJson<
-      Record<string, number[] | [number, number, number, number]>
-    >("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
-    const fixture = await loadJson<Phase3FullPassFixture>(
-      "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
-    );
-    if (weights === null || fixture === null)
-      return { ok: false as const, reason: "missing-fixtures" as const };
-    const worker = new Worker(
-      new URL("/src/styleTransfer.worker.ts", window.location.origin),
-      { type: "module" },
-    );
-    const ask = (payload: WorkerRequest): Promise<WorkerResponse> =>
-      new Promise((resolve) => {
-        const handler = (event: MessageEvent<WorkerResponse>): void => {
-          if (event.data.id === payload.id) {
-            worker.removeEventListener("message", handler);
-            resolve(event.data);
-          }
-        };
-        worker.addEventListener("message", handler);
-        worker.postMessage(payload);
-      });
-    await ask({ type: "init-webgpu", id: "phase5-super-init" });
-    const common = {
-      type: "run-style-transfer" as const,
-      inputShape: fixture.inputShape,
-      inputImageValues: fixture.inputImageValues,
-      contentImageValues: fixture.contentImageValues,
-      styleImageValues: fixture.styleImageValues,
-      mean: fixture.mean,
-      std: fixture.std,
-      styleLayerIndices: fixture.styleLayerIndices,
-      contentLayerIndex: fixture.contentLayerIndex,
-      weights,
-      contentWeight: 1,
-      styleWeight: 1,
-      learningRate: 1e-5,
-      steps: 1,
-      optimizer: "sgd" as const,
-    };
-    const base = await ask({
-      ...common,
-      id: "phase5-super-base",
-      fusedOps: false,
-      superFusedOps: false,
-    });
-    const superFused = await ask({
-      ...common,
-      id: "phase5-super-fused",
-      fusedOps: true,
-      superFusedOps: true,
-    });
-    worker.terminate();
-    if (base.type !== "run-style-transfer-result")
-      return {
-        ok: false as const,
-        reason: "base-wrong-response" as const,
-        responseType: base.type,
-      };
-    if (!base.ok)
-      return {
-        ok: false as const,
-        reason: "base-failed" as const,
-        message: base.message,
-      };
-    if (superFused.type !== "run-style-transfer-result")
-      return {
-        ok: false as const,
-        reason: "super-wrong-response" as const,
-        responseType: superFused.type,
-      };
-    if (!superFused.ok)
-      return {
-        ok: false as const,
-        reason: "super-failed" as const,
-        message: superFused.message,
-      };
-    let maxDiff = 0;
-    let maxDiffIndex = -1;
-    for (let i = 0; i < base.finalValues.length; i += 1) {
-      const diff = Math.abs(base.finalValues[i] - superFused.finalValues[i]);
-      if (diff > maxDiff) {
-        maxDiff = diff;
-        maxDiffIndex = i;
-      }
-    }
-    return {
-      ok: true as const,
-      maxDiff,
-      maxDiffIndex,
-      baseLoss: base.losses[0] ?? null,
-      superLoss: superFused.losses[0] ?? null,
-      baseStats: base.stats,
-      superStats: superFused.stats,
-    };
-  });
-  test.skip(
-    !result.ok && result.reason === "missing-fixtures",
-    "Missing phase3 full-pass fixtures.",
-  );
-  if (!result.ok && result.reason !== "missing-fixtures") {
-    throw new Error(
-      `${result.reason}${"message" in result && result.message !== undefined ? `: ${result.message}` : ""}${"responseType" in result && result.responseType !== undefined ? ` (responseType=${String(result.responseType)})` : ""}`,
-    );
-  }
-  if (!result.ok) return;
-  expect(result.maxDiff).toBeLessThan(2e-3);
 });
