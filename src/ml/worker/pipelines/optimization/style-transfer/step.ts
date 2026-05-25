@@ -14,6 +14,14 @@ import type {
 import { VGG19_STYLE_TRANSFER_PLAN } from "./vgg19Plan";
 
 type ConvLayerCache = Record<number, ConvLayerCacheEntry | undefined>;
+type StyleLayerLossContext = {
+  reluLayerIndex: number;
+  inputRelu: GpuBufferRef;
+  reluShape: TensorShape4D;
+  targetGram: GpuBufferRef;
+  reluCount: number;
+  inputGram: GpuBufferRef;
+};
 
 const addReluGradient = (
   tracked: OptimizationTrackedOps,
@@ -87,8 +95,10 @@ const computeStepLoss = async (
   tracked: OptimizationTrackedOps,
   run: StyleTransferForwardResult,
   persistent: StyleTransferPersistentContext,
-): Promise<number> => {
+): Promise<{ totalLoss: number; styleLayerContexts: StyleLayerLossContext[] }> => {
   const scalarLossBuffers: GpuBufferRef[] = [];
+  const scalarWeights: number[] = [];
+  const styleLayerContexts: StyleLayerLossContext[] = [];
   for (const reluLayerIndex of payload.styleLayerIndices) {
     const inputRelu = run.reluOut[reluLayerIndex];
     const reluShape = run.reluShape[reluLayerIndex];
@@ -105,19 +115,23 @@ const computeStepLoss = async (
       );
     }
 
-    const inputGram = await tracked.gram(inputRelu, reluShape);
-    const styleSse = await tracked.mseScalarBuffer(
-      inputGram,
+    const gramCount = gramElementCount(reluShape);
+    const reluCount = elementCount(reluShape);
+    const styleLossTerms = await tracked.styleLossTerms(
+      inputRelu,
+      reluShape,
       targetGram,
-      gramElementCount(reluShape),
     );
-    scalarLossBuffers.push(
-      tracked.scalarMul(
-        styleSse,
-        1,
-        payload.styleWeight / gramElementCount(reluShape),
-      ),
-    );
+    scalarLossBuffers.push(styleLossTerms.styleSse);
+    scalarWeights.push(payload.styleWeight / gramCount);
+    styleLayerContexts.push({
+      reluLayerIndex,
+      inputRelu,
+      reluShape,
+      targetGram,
+      reluCount,
+      inputGram: styleLossTerms.inputGram,
+    });
   }
 
   const contentRelu = run.reluOut[payload.contentLayerIndex];
@@ -132,58 +146,40 @@ const computeStepLoss = async (
     persistent.contentTargetRelu,
     elementCount(contentReluShape),
   );
-  scalarLossBuffers.push(
-    tracked.scalarMul(
-      contentSse,
-      1,
-      payload.contentWeight / elementCount(contentReluShape),
-    ),
-  );
-
-  let totalLossBuffer = scalarLossBuffers[0];
-  if (totalLossBuffer === undefined) throw new Error("No loss terms were produced.");
-  for (let i = 1; i < scalarLossBuffers.length; i += 1) {
-    totalLossBuffer = tracked.add(totalLossBuffer, scalarLossBuffers[i], 1);
-  }
-  return (await readGpuBufferToArray(device, totalLossBuffer.buffer, 1))[0];
+  scalarLossBuffers.push(contentSse);
+  scalarWeights.push(payload.contentWeight / elementCount(contentReluShape));
+  const totalLossBuffer = tracked.weightedScalarSum(scalarLossBuffers, scalarWeights);
+  return {
+    totalLoss: (await readGpuBufferToArray(device, totalLossBuffer.buffer, 1))[0],
+    styleLayerContexts,
+  };
 };
 
 const seedReluGradients = async (
   payload: StyleTransferPayload,
   tracked: OptimizationTrackedOps,
+  styleLayerContexts: readonly StyleLayerLossContext[],
   run: StyleTransferForwardResult,
   persistent: StyleTransferPersistentContext,
 ): Promise<Record<number, GpuBufferRef | undefined>> => {
   const gradByReluLayer: Record<number, GpuBufferRef | undefined> = {};
-  for (const reluLayerIndex of payload.styleLayerIndices) {
-    const inputRelu = run.reluOut[reluLayerIndex];
-    const reluShape = run.reluShape[reluLayerIndex];
-    const targetGram = persistent.styleGramTargets[reluLayerIndex];
-    if (inputRelu === undefined) {
-      throw new Error(
-        `Missing ReLU activation for style gradient layer index ${reluLayerIndex}.`,
-      );
-    }
-    if (reluShape === undefined) {
-      throw new Error(`Unsupported ReLU style gradient layer index ${reluLayerIndex}.`);
-    }
-    if (targetGram === undefined) {
-      throw new Error(
-        `Missing precomputed style gram gradient target for ReLU layer index ${reluLayerIndex}.`,
-      );
-    }
-
-    const styleGrad = await tracked.styleLossBackward(inputRelu, reluShape, targetGram);
+  for (const styleLayerContext of styleLayerContexts) {
+    const styleGrad = await tracked.styleLossBackwardFromInputGram(
+      styleLayerContext.inputRelu,
+      styleLayerContext.reluShape,
+      styleLayerContext.inputGram,
+      styleLayerContext.targetGram,
+    );
     const weightedStyleGrad =
       payload.styleWeight === 1
         ? styleGrad
-        : tracked.scalarMul(styleGrad, elementCount(reluShape), payload.styleWeight);
+        : tracked.scalarMul(styleGrad, styleLayerContext.reluCount, payload.styleWeight);
     addReluGradient(
       tracked,
       gradByReluLayer,
-      reluLayerIndex,
+      styleLayerContext.reluLayerIndex,
       weightedStyleGrad,
-      elementCount(reluShape),
+      styleLayerContext.reluCount,
     );
   }
 
@@ -290,11 +286,17 @@ export const runStyleTransferStep = async (
   const forwardMs = performance.now() - forwardStart;
 
   const lossStart = performance.now();
-  const totalLoss = await computeStepLoss(device, payload, tracked, run, persistent);
+  const lossResult = await computeStepLoss(device, payload, tracked, run, persistent);
   const lossMs = performance.now() - lossStart;
 
   const backwardStart = performance.now();
-  const gradByReluLayer = await seedReluGradients(payload, tracked, run, persistent);
+  const gradByReluLayer = await seedReluGradients(
+    payload,
+    tracked,
+    lossResult.styleLayerContexts,
+    run,
+    persistent,
+  );
   const gInput = await backpropagateToInput(
     payload,
     convLayerCache,
@@ -308,5 +310,12 @@ export const runStyleTransferStep = async (
   const nextInputBuffer = await inputOptimizer.step(inputBuffer, gInput, step);
   const updateMs = performance.now() - updateStart;
 
-  return { nextInputBuffer, totalLoss, forwardMs, lossMs, backwardMs, updateMs };
+  return {
+    nextInputBuffer,
+    totalLoss: lossResult.totalLoss,
+    forwardMs,
+    lossMs,
+    backwardMs,
+    updateMs,
+  };
 };
