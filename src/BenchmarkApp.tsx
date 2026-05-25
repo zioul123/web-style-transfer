@@ -54,7 +54,6 @@ type BenchmarkRunSummary = {
   lossMs: MetricSummary;
   backwardMs: MetricSummary;
   updateMs: MetricSummary;
-  clampMs?: MetricSummary;
   readbackMs?: MetricSummary;
   mandatoryReadbackMs?: MetricSummary;
   diagnosticsReadbackMs?: MetricSummary;
@@ -102,9 +101,6 @@ const hasReadbackStats = (
 
 const summarizeRuns = (runStats: readonly BenchmarkStats[]): BenchmarkRunSummary => {
   const firstPoolStats = runStats.filter(hasReadbackStats);
-  const fullStats = runStats.filter(
-    (entry): entry is WorkerRunStats => !hasReadbackStats(entry),
-  );
   return {
     runs: runStats.length,
     elapsedMs: summarize(runStats.map((entry) => entry.elapsedMs)),
@@ -112,10 +108,6 @@ const summarizeRuns = (runStats: readonly BenchmarkStats[]): BenchmarkRunSummary
     lossMs: summarize(runStats.map((entry) => entry.lossMs)),
     backwardMs: summarize(runStats.map((entry) => entry.backwardMs)),
     updateMs: summarize(runStats.map((entry) => entry.updateMs)),
-    clampMs:
-      fullStats.length > 0
-        ? summarize(fullStats.map((entry) => entry.clampMs))
-        : undefined,
     readbackMs:
       firstPoolStats.length > 0
         ? summarize(firstPoolStats.map((entry) => entry.readbackMs))
@@ -557,12 +549,6 @@ export const BenchmarkApp = (): ReactElement => {
                   <td className="border-b border-slate-800 py-2 pr-4">Update</td>
                   <td className="border-b border-slate-800 py-2 pr-4">
                     {formatMetric(summary.updateMs)}
-                  </td>
-                </tr>
-                <tr>
-                  <td className="border-b border-slate-800 py-2 pr-4">Clamp</td>
-                  <td className="border-b border-slate-800 py-2 pr-4">
-                    {formatMetric(summary.clampMs)}
                   </td>
                 </tr>
                 <tr>

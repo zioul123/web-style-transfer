@@ -43,7 +43,6 @@ export type StyleTransferRunResult = {
     backwardMs: number;
     lossMs: number;
     updateMs: number;
-    clampMs: number;
     steps: number;
   };
 };
