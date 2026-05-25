@@ -39,7 +39,7 @@ Important local constants and knobs include:
 - Style/content tap indices from `src/ml/constants/vgg19.ts` (`VGG19_RELU_TAP_STYLE_LAYER_INDICES`, `VGG19_RELU_TAP_CONTENT_LAYER_INDEX`) using torch `vgg19.features` post-ReLU indices.
 - Resolution presets.
 - Optimizer mode and hyperparameters (`sgd`, `adam`, `lbfgs`).
-- Fusion flags (`fusedOps`, `superFusedOps`).
+- Optional fused conv+ReLU execution (`fusedOps`).
 
 ### Out-of-place note
 
@@ -172,9 +172,9 @@ Ops are split by domain and pair `.run.ts` wrappers with shader sources in `.sha
 
 This structure matches the phased implementation plan and supports isolated parity testing.
 
-### Out-of-place note
+### Cleanup note
 
-The naming convention mixes conceptual level in a few places (`conv2d.superfused.ts` vs pipeline-level super-fusion control). It works, but documenting whether fusion is an **op implementation detail** or **pipeline scheduling policy** would reduce ambiguity.
+The legacy CPU-resident full style-transfer path and super-fused block scheduler have been removed. The remaining full style-transfer endpoint always uses the GPU-resident pipeline, with fusion treated as an op-level implementation detail.
 
 ---
 

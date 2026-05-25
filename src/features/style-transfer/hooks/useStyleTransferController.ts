@@ -95,7 +95,6 @@ export const useStyleTransferController =
     const [learningRate, setLearningRate] = useState<number>(1);
     const [optimizer, setOptimizer] = useState<"sgd" | "adam" | "lbfgs">("sgd");
     const [fusedOps, setFusedOps] = useState<boolean>(false);
-    const [superFusedOps, setSuperFusedOps] = useState<boolean>(false);
     const [adamBeta1, setAdamBeta1] = useState<number>(0.9);
     const [adamBeta2, setAdamBeta2] = useState<number>(0.999);
     const [adamEpsilon, setAdamEpsilon] = useState<number>(1e-8);
@@ -231,7 +230,6 @@ export const useStyleTransferController =
         id: createMessageId(),
         optimizer,
         fusedOps,
-        superFusedOps,
         adamBeta1: optimizer === "adam" ? adamBeta1 : undefined,
         adamBeta2: optimizer === "adam" ? adamBeta2 : undefined,
         adamEpsilon: optimizer === "adam" ? adamEpsilon : undefined,
@@ -252,7 +250,6 @@ export const useStyleTransferController =
         contentWeight,
         styleWeight,
         learningRate,
-        gpuResident: true,
         steps: stepsPerChunk,
       } satisfies WorkerRequest);
     }, [
@@ -262,7 +259,6 @@ export const useStyleTransferController =
       contentTensor,
       contentWeight,
       fusedOps,
-      superFusedOps,
       inputTensor,
       isRunning,
       iterations,
@@ -316,8 +312,6 @@ export const useStyleTransferController =
         setOptimizer,
         fusedOps,
         setFusedOps,
-        superFusedOps,
-        setSuperFusedOps,
         adamBeta1,
         setAdamBeta1,
         adamBeta2,

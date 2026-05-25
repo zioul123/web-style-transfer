@@ -66,11 +66,6 @@ const releaseUnpersistedBuffers = (
 export const runStyleTransferGpuResident = async (
   payload: StyleTransferPayload,
 ): Promise<StyleTransferRunResult> => {
-  if (payload.superFusedOps === true) {
-    throw new Error(
-      "GPU-resident style transfer does not yet support superFusedOps; use fusedOps without superFusedOps or run the legacy pipeline.",
-    );
-  }
   const device = getGpuDevice();
   if (device === null) throw new Error("WebGPU device is not initialized.");
 

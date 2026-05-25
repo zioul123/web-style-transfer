@@ -2,7 +2,6 @@
 
 import type { WorkerRequest } from "../../../../types";
 import { runStyleTransferGpuResident } from "./style-transfer/gpuResidentPipeline";
-import { runStyleTransferLegacy } from "./style-transfer/legacyPipeline";
 
 type StyleTransferPayload = Extract<
   WorkerRequest,
@@ -26,7 +25,4 @@ export type StyleTransferRunResult = {
 
 export const runStyleTransfer = async (
   payload: StyleTransferPayload,
-): Promise<StyleTransferRunResult> =>
-  payload.gpuResident === true
-    ? runStyleTransferGpuResident(payload)
-    : runStyleTransferLegacy(payload);
+): Promise<StyleTransferRunResult> => runStyleTransferGpuResident(payload);

@@ -289,17 +289,11 @@ When encoding uniforms for backward kernels in WGSL, ensure 16-byte alignment fo
 
 ## Implementation update (May 19, 2026)
 
-### Added optimization modes
+### Added optimization mode
 
 - `fusedOps`: fused conv+ReLU path in worker forward execution.
-- `superFusedOps`: stage-block scheduling for conv/relu sequences grouped by pool boundaries:
-  - block1: conv0..conv1 (pool at 4)
-  - block2: conv2..conv3 (pool at 9)
-  - block3/4: conv5..conv8 and conv10..conv13
-  - block5/6: conv14..conv17 and conv19..conv22
-  - block7/8: conv23..conv26 and conv28..conv29
 
-Both modes preserve style/content tap extraction for configured ReLU layers.
+The older CPU-resident full pipeline and super-fused block scheduling path have since been removed; the full style-transfer endpoint now uses the GPU-resident pipeline as the single production path.
 
 ### Readability and transfer-focused cleanup
 
