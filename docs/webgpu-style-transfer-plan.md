@@ -291,7 +291,7 @@ When encoding uniforms for backward kernels in WGSL, ensure 16-byte alignment fo
 
 ### Optimization mode cleanup
 
-The older CPU-resident full pipeline and super-fused block scheduling path have since been removed; the full style-transfer endpoint now uses the GPU-resident pipeline as the single production path. Fused conv+ReLU is now fixed behavior in the full style-transfer pipeline rather than a request flag.
+Alternate full-pipeline execution modes have since been removed; the full style-transfer endpoint now has a single production implementation. Fused conv+ReLU is fixed behavior in that implementation rather than a request flag.
 
 ### Readability and transfer-focused cleanup
 
@@ -300,4 +300,4 @@ The older CPU-resident full pipeline and super-fused block scheduling path have 
 
 ### Remaining easy optimization target
 
-The worker currently performs per-op GPU->CPU readback in `runUnaryShader`. This keeps correctness straightforward but creates serialization overhead. The next pragmatic performance milestone is introducing GPU-resident intermediate buffers and only reading back at required boundaries (loss scalar extraction and final/output snapshots).
+The full style-transfer and first-pool optimization loops now keep intermediate tensors on GPU and read back only scalar losses plus final/output snapshots. The remaining readback-heavy surfaces are the op-level worker routes used by parity tests and debugging, where JSON-friendly arrays are the expected protocol output.

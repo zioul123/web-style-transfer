@@ -162,7 +162,7 @@ Runtime primitives are fairly reusable and reasonably separated, but some API si
 
 Ops are split by domain and pair `.run.ts` wrappers with shader sources in `.shader.ts` files.
 
-- `convolution/`: conv forward/backward-input, fused conv+relu, and super-fused variants.
+- `convolution/`: conv forward/backward-input and fused conv+relu.
 - `relu/`: forward/backward.
 - `pooling/`: maxpool forward/backward.
 - `normalization/`: forward/backward.
@@ -173,7 +173,7 @@ This structure matches the phased implementation plan and supports isolated pari
 
 ### Cleanup note
 
-The legacy CPU-resident full style-transfer path and super-fused block scheduler have been removed. The remaining full style-transfer endpoint always uses the GPU-resident pipeline, with fused conv+ReLU treated as an implementation detail.
+Alternate full style-transfer pipeline modes have been removed. The `run-style-transfer` endpoint now has one production implementation, with fused conv+ReLU treated as an implementation detail.
 
 ---
 
@@ -189,18 +189,14 @@ Contains the targeted optimization route for the early VGG slice. It performs:
 - backward pass for image gradient
 - optimizer update + clamp loop
 
-Also exports a shared `runUnary` function used by the message router’s op paths.
-
-### Out-of-place note
-
-`runUnary` is a low-level runtime helper and not conceptually owned by the first-pool pipeline. It likely belongs in `runtime/` (or a worker compute facade), with both pipelines and router importing it from there.
+This route remains useful as a compact benchmark and regression target for the early VGG slice, but it now uses the same GPU-buffer loss accumulation style as the full pipeline.
 
 ## 7.2 Style transfer pipeline (`styleTransferPipeline.ts`)
 
 Contains the full VGG-style optimization orchestration:
 
 - constructs conv layer cache from payload weights
-- runs baseline/fused/super-fused forward depending on flags
+- runs the fixed fused conv+ReLU forward plan
 - computes style + content losses
 - backpropagates through required ops
 - applies SGD/Adam/LBFGS update
@@ -214,7 +210,6 @@ Centralized constants:
 
 - ReLU layer indices
 - pool layer indices
-- super-fused block boundaries
 
 Good separation of schedule policy from execution logic.
 
@@ -246,7 +241,7 @@ Playwright e2e suite validates progressive phases:
 - VGG forward parity
 - loss parity
 - backward parity
-- endpoint optimization behaviors (including fused and super-fused paths)
+- endpoint optimization behavior for the first-pool and full style-transfer pipelines
 
 Fixture generation scripts in `python-reference/` provide deterministic baselines for parity checks.
 
@@ -295,10 +290,10 @@ Steps:
 5. Add a small protocol-focused test (or extend existing worker protocol tests) that verifies representative success + failure responses still match `WorkerResponse` unions.
 :::
 
-### Issue: Runtime op execution still relies on per-op GPU→CPU readback (`runUnaryShader`) in many paths, making control flow and performance tradeoffs hard to follow.
+### Issue: Op-level worker routes still rely on per-op GPU→CPU readback (`runUnaryShader`), making their performance profile very different from the optimization pipelines.
 
 :::task-stub{title="Introduce explicit GPU-resident execution boundaries in worker runtime"}
-Refactor runtime execution to model buffer-resident intermediate tensors and explicit readback boundaries, improving both readability and future performance work.
+Refactor runtime execution to make buffer-resident tensors and explicit readback boundaries reusable beyond the optimization pipelines.
 
 Steps:
 1. In `src/ml/worker/runtime/`, define a minimal intermediate representation for GPU-resident tensor handles (buffer + shape metadata + lifecycle ownership).
@@ -306,7 +301,7 @@ Steps:
    - op-to-op chaining without immediate readback,
    - explicit scalar readback points (loss extraction),
    - explicit image snapshot readback points (preview/final output).
-3. Migrate one constrained path first (e.g., first-pool optimizer or a short style-transfer segment) to prove API clarity before broad rollout.
+3. Migrate one constrained op-level route first to prove API clarity before broad rollout.
 4. Update buffer-pool ownership/release rules to prevent leaks when handles survive across multiple ops.
 5. Document the new boundary model in `docs/architecture-overview.md` and/or runtime module docs so contributors can reason about when data is on GPU vs CPU.
 :::

@@ -37,7 +37,6 @@ type Phase3FullPassFixture = {
 };
 
 type BenchmarkTab = "first-pool" | "full-style";
-type FirstPoolPipelineMode = "gpu-resident-loss" | "legacy-loss-readback";
 
 type BenchmarkStats = WorkerFirstPoolBenchmarkStats | WorkerRunStats;
 
@@ -144,8 +143,6 @@ export const BenchmarkApp = (): ReactElement => {
   const [result, setResult] = useState<BenchmarkResult | null>(null);
   const [summary, setSummary] = useState<BenchmarkRunSummary | null>(null);
 
-  const [firstPoolPipeline, setFirstPoolPipeline] =
-    useState<FirstPoolPipelineMode>("gpu-resident-loss");
   const [firstPoolSteps, setFirstPoolSteps] = useState<number>(6);
   const [firstPoolRuns, setFirstPoolRuns] = useState<number>(5);
   const [firstPoolLearningRate, setFirstPoolLearningRate] =
@@ -238,8 +235,6 @@ export const BenchmarkApp = (): ReactElement => {
         useFusedUpdateClamp: useFirstPoolFusedUpdateClamp,
         debugValidateStepShapes,
         debugReadbackGrad,
-        debugUseLegacyCpuLossReadback:
-          firstPoolPipeline === "legacy-loss-readback",
         collectBenchmarkStats: true,
       });
       if (optimized.type !== "run-first-pool-optimizer-result") {
@@ -327,7 +322,7 @@ export const BenchmarkApp = (): ReactElement => {
       <header className="flex flex-col gap-2">
         <h1 className="text-3xl font-semibold">WebGPU Pipeline Benchmark</h1>
         <p className="text-slate-300">
-          Compare first-pool and full style-transfer pipeline variants.
+          Measure first-pool and full style-transfer pipeline timings.
         </p>
       </header>
 
@@ -360,18 +355,6 @@ export const BenchmarkApp = (): ReactElement => {
 
       {activeTab === "first-pool" ? (
         <section className="grid gap-3 rounded border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
-          <label className="flex flex-col gap-1">
-            Pipeline
-            <select
-              value={firstPoolPipeline}
-              onChange={(event) =>
-                setFirstPoolPipeline(event.target.value as FirstPoolPipelineMode)
-              }
-            >
-              <option value="gpu-resident-loss">GPU-resident loss</option>
-              <option value="legacy-loss-readback">CPU loss readback</option>
-            </select>
-          </label>
           <label className="flex flex-col gap-1">
             Steps
             <input

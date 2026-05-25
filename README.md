@@ -100,4 +100,4 @@ This keeps implementation deterministic and reviewable while preserving a direct
 
 ### Current transfer bottleneck notes
 
-Most heavy math is on GPU, but each op still maps results back to CPU (`runUnaryShader`) before the next op. This is the dominant remaining overhead. Recent cleanup reduces avoidable CPU allocations (pre-cached conv weights/biases), but the next major win is a GPU-resident execution chain (buffer reuse + deferred readback at chunk boundaries).
+The optimization pipelines keep intermediate tensors GPU-resident and only read back scalar losses plus final/output snapshots. The remaining readback-heavy paths are the op-level worker routes used by parity tests and debugging; those intentionally return JSON-friendly arrays to the main thread.

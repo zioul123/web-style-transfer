@@ -207,7 +207,7 @@ test("phase 5 run-style-transfer first-step gradient matches pytorch oracle", as
   expect(result.meanDiff).toBeLessThan(2e-2);
 });
 
-test("phase 5 gpu-resident style transfer supports adam and lbfgs", async ({
+test("phase 5 style transfer supports adam and lbfgs", async ({
   page,
 }) => {
   test.setTimeout(300000);
@@ -279,7 +279,7 @@ test("phase 5 gpu-resident style transfer supports adam and lbfgs", async ({
     for (const testCase of cases) {
       const run = await ask({
         ...common,
-        id: `phase5-optimizer-${testCase.id}-gpu`,
+        id: `phase5-optimizer-${testCase.id}`,
         optimizer: testCase.optimizer,
         steps: testCase.steps,
       });
@@ -291,7 +291,7 @@ test("phase 5 gpu-resident style transfer supports adam and lbfgs", async ({
         worker.terminate();
         return {
           ok: false as const,
-          reason: "gpu-failed" as const,
+          reason: "worker-failed" as const,
           message: run.message,
         };
       }

@@ -59,9 +59,9 @@ test("phase 5 optimizer loop decreases first-pool graph objective", async ({
       });
 
     const init = await ask({ type: "init-webgpu", id: "phase5-init" });
-    const makeRequest = (id: string, debugUseLegacyCpuLossReadback: boolean): WorkerRequest => ({
+    const request: WorkerRequest = {
       type: "run-first-pool-optimizer",
-      id,
+      id: "phase5-run-first-pool-optimizer",
       inputShape: caseData.inputShape,
       mean: caseData.mean,
       std: caseData.std,
@@ -88,10 +88,8 @@ test("phase 5 optimizer loop decreases first-pool graph objective", async ({
       styleWeightConv3: 120,
       learningRate: 0.15,
       steps: 6,
-      debugUseLegacyCpuLossReadback,
-    });
-    const optimized = await ask(makeRequest("phase5-run-first-pool-optimizer-gpu", false));
-    const optimizedLegacy = await ask(makeRequest("phase5-run-first-pool-optimizer-legacy", true));
+    };
+    const optimized = await ask(request);
     worker.terminate();
     if (optimized.type !== "run-first-pool-optimizer-result")
       return {
@@ -105,19 +103,7 @@ test("phase 5 optimizer loop decreases first-pool graph objective", async ({
         reason: "worker-failed" as const,
         message: optimized.message,
       };
-    if (optimizedLegacy.type !== "run-first-pool-optimizer-result")
-      return {
-        ok: false as const,
-        reason: "unexpected-response" as const,
-        responseType: optimizedLegacy.type,
-      };
-    if (!optimizedLegacy.ok)
-      return {
-        ok: false as const,
-        reason: "worker-failed" as const,
-        message: optimizedLegacy.message,
-      };
-    return { ok: true as const, init, losses: optimized.losses, legacyLosses: optimizedLegacy.losses };
+    return { ok: true as const, init, losses: optimized.losses };
   });
 
   test.skip(
@@ -139,12 +125,6 @@ test("phase 5 optimizer loop decreases first-pool graph objective", async ({
   expect(Number.isFinite(result.losses.at(-1) ?? Number.NaN)).toBeTruthy();
   expect(result.losses[0]).toBeGreaterThanOrEqual(0);
   expect(result.losses.at(-1) ?? -1).toBeGreaterThanOrEqual(0);
-  expect(result.legacyLosses.length).toBeGreaterThan(1);
-  expect(Number.isFinite(result.legacyLosses[0])).toBeTruthy();
-  expect(Number.isFinite(result.legacyLosses.at(-1) ?? Number.NaN)).toBeTruthy();
-  expect(result.legacyLosses[0]).toBeGreaterThanOrEqual(0);
-  expect(result.legacyLosses.at(-1) ?? -1).toBeGreaterThanOrEqual(0);
-  expect(result.losses[0]).toBeCloseTo(result.legacyLosses[0], 5);
 });
 
 test("phase 5 first-pool optimizer supports non-16x16 dynamic spatial shape", async ({
@@ -245,7 +225,6 @@ test("phase 5 first-pool optimizer supports non-16x16 dynamic spatial shape", as
       styleWeightConv3: 120,
       learningRate: 0.15,
       steps: 4,
-      debugUseLegacyCpuLossReadback: false,
     };
     const optimized = await ask(request);
     worker.terminate();

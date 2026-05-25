@@ -1,16 +1,14 @@
 import { runConv2dBackwardInputBuffer, runConv2dForwardBuffer, runConv2dReluForwardBuffer } from "../../ops/convolution/conv2d.run";
 import { runGramMatrixBuffer } from "../../ops/gram/gram.run";
 import { runContentLossBackwardBuffer } from "../../ops/loss/contentLoss.run";
-import { runMseBuffer, runMseBufferToScalarBuffer } from "../../ops/loss/mse.run";
+import { runMseBufferToScalarBuffer } from "../../ops/loss/mse.run";
 import { runStyleLossBackwardFromTargetGramBuffer } from "../../ops/loss/styleLoss.run";
 import { runNormalizeBackwardBuffer, runNormalizeForwardBuffer } from "../../ops/normalization/normalize.run";
 import { runMaxPool2dBackwardBuffer, runMaxPool2dForwardBuffer } from "../../ops/pooling/maxpool.run";
 import { runReluBackwardBuffer, runReluForwardBuffer } from "../../ops/relu/relu.run";
 import type { GpuBufferRef, OwnedGpuBuffer } from "../../runtime/bufferKernels";
 import {
-  BUFFER_USAGE_MAP_READ_COPY_DST,
   BUFFER_USAGE_STORAGE_COPY_SRC,
-  MAP_MODE_READ,
 } from "../../runtime/gpuFlags";
 import type { OptimizationRuntimeContext, OptimizationShape4D } from "../../runtime/optimizationContext";
 import { runBinaryOpToBuffer } from "../../runtime/shaderRunner";
@@ -41,7 +39,6 @@ export const createOptimizationTrackedOps = (
 
   const loss = {
     mseScalarBuffer: async (a: GpuBufferRef, b: GpuBufferRef, count: number): Promise<GpuBufferRef> => own(await runMseBufferToScalarBuffer(device, acquireMseBuffer, a, b, count, BUFFER_USAGE_STORAGE_COPY_SRC)),
-    mseScalarReadback: async (a: GpuBufferRef, b: GpuBufferRef, count: number): Promise<number> => runMseBuffer(device, acquireMseBuffer, a, b, count, BUFFER_USAGE_STORAGE_COPY_SRC, BUFFER_USAGE_MAP_READ_COPY_DST, MAP_MODE_READ),
     scalarMul: (input: GpuBufferRef, count: number, scalar: number): GpuBufferRef => own(runScalarMulBuffer(device, input, count, scalar)),
     add: (a: GpuBufferRef, b: GpuBufferRef, count: number): GpuBufferRef => own({ buffer: runBinaryOpToBuffer(device, "add", a.buffer, b.buffer, count, "tensorTensor"), owned: true }),
   };
