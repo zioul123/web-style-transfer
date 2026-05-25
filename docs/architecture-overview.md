@@ -39,7 +39,6 @@ Important local constants and knobs include:
 - Style/content tap indices from `src/ml/constants/vgg19.ts` (`VGG19_RELU_TAP_STYLE_LAYER_INDICES`, `VGG19_RELU_TAP_CONTENT_LAYER_INDEX`) using torch `vgg19.features` post-ReLU indices.
 - Resolution presets.
 - Optimizer mode and hyperparameters (`sgd`, `adam`, `lbfgs`).
-- Optional fused conv+ReLU execution (`fusedOps`).
 
 ### Out-of-place note
 
@@ -174,7 +173,7 @@ This structure matches the phased implementation plan and supports isolated pari
 
 ### Cleanup note
 
-The legacy CPU-resident full style-transfer path and super-fused block scheduler have been removed. The remaining full style-transfer endpoint always uses the GPU-resident pipeline, with fusion treated as an op-level implementation detail.
+The legacy CPU-resident full style-transfer path and super-fused block scheduler have been removed. The remaining full style-transfer endpoint always uses the GPU-resident pipeline, with fused conv+ReLU treated as an implementation detail.
 
 ---
 

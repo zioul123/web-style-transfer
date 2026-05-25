@@ -167,7 +167,6 @@ export const BenchmarkApp = (): ReactElement => {
   const [fullLearningRate, setFullLearningRate] = useState<number>(1e-5);
   const [fullContentWeight, setFullContentWeight] = useState<number>(1);
   const [fullStyleWeight, setFullStyleWeight] = useState<number>(1);
-  const [fullFusedOps, setFullFusedOps] = useState<boolean>(true);
 
   const clearResults = (): void => {
     setResult(null);
@@ -276,7 +275,6 @@ export const BenchmarkApp = (): ReactElement => {
         type: "run-style-transfer",
         id: `benchmark-full-style-${runIndex}`,
         optimizer: "sgd",
-        fusedOps: fullFusedOps,
         inputShape: fixture.inputShape,
         inputImageValues: fixture.inputImageValues,
         contentImageValues: fixture.contentImageValues,
@@ -516,14 +514,6 @@ export const BenchmarkApp = (): ReactElement => {
               value={fullStyleWeight}
               onChange={(event) => setFullStyleWeight(Number(event.target.value))}
             />
-          </label>
-          <label className="flex items-center gap-2">
-            <input
-              checked={fullFusedOps}
-              type="checkbox"
-              onChange={(event) => setFullFusedOps(event.target.checked)}
-            />
-            <span>Fused conv+relu</span>
           </label>
         </section>
       )}

@@ -98,8 +98,6 @@ This keeps implementation deterministic and reviewable while preserving a direct
 
 `run-style-transfer` uses the GPU-resident optimization path. Intermediate tensors remain on GPU where possible, with readback limited to scalar loss reporting and final/output snapshots.
 
-- `fusedOps`: optional fused conv+ReLU forward execution with compatible ReLU backward gating.
-
 ### Current transfer bottleneck notes
 
 Most heavy math is on GPU, but each op still maps results back to CPU (`runUnaryShader`) before the next op. This is the dominant remaining overhead. Recent cleanup reduces avoidable CPU allocations (pre-cached conv weights/biases), but the next major win is a GPU-resident execution chain (buffer reuse + deferred readback at chunk boundaries).

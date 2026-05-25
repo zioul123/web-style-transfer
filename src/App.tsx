@@ -120,14 +120,6 @@ function App() {
             <option value="lbfgs">L-BFGS</option>
           </select>
         </label>
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={controls.fusedOps}
-            onChange={(event) => controls.setFusedOps(event.target.checked)}
-          />
-          <span>Use fused conv+relu</span>
-        </label>
         {controls.optimizer === "adam" ? (
           <>
             <label className="flex flex-col gap-1">

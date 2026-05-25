@@ -261,7 +261,6 @@ test("phase 5 gpu-resident style transfer supports adam and lbfgs", async ({
       contentWeight: 1,
       styleWeight: 1,
       learningRate: 1e-5,
-      fusedOps: true,
     };
     const cases: readonly {
       optimizer: "adam" | "lbfgs";

@@ -43,7 +43,6 @@ export const runStyleTransferForward = async (
   const convInShape: Record<number, TensorShape4D | undefined> = {};
   const layerInput: Record<number, GpuBufferRef | undefined> = {};
   const layerInputShape: Record<number, TensorShape4D | undefined> = {};
-  const useFusedConvRelu = payload.fusedOps ?? false;
 
   for (const planStep of VGG19_STYLE_TRANSFER_PLAN) {
     if (planStep.kind === "pool") {
@@ -60,27 +59,13 @@ export const runStyleTransferForward = async (
     if (convLayer === undefined) continue;
 
     convInShape[planStep.convLayerIndex] = shape;
-    if (useFusedConvRelu) {
-      values = await tracked.conv2dReluForward(
-        values,
-        shape,
-        convLayer.values,
-        convLayer.shape,
-        convLayer.bias,
-      );
-    } else {
-      const convValues = await tracked.conv2dForward(
-        values,
-        shape,
-        convLayer.values,
-        convLayer.shape,
-        convLayer.bias,
-      );
-      values = await tracked.reluForward(
-        convValues,
-        elementCount(convOutputShape(shape, convLayer.shape[0])),
-      );
-    }
+    values = await tracked.conv2dReluForward(
+      values,
+      shape,
+      convLayer.values,
+      convLayer.shape,
+      convLayer.bias,
+    );
 
     shape = convOutputShape(shape, convLayer.shape[0]);
     reluOut[planStep.reluLayerIndex] = values;

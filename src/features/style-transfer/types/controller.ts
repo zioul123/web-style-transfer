@@ -21,8 +21,6 @@ export interface StyleTransferControls {
   setLearningRate: Dispatch<SetStateAction<number>>;
   optimizer: OptimizerMode;
   setOptimizer: Dispatch<SetStateAction<OptimizerMode>>;
-  fusedOps: boolean;
-  setFusedOps: Dispatch<SetStateAction<boolean>>;
   adamBeta1: number;
   setAdamBeta1: Dispatch<SetStateAction<number>>;
   adamBeta2: number;
