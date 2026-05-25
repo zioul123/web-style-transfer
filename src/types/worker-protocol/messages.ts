@@ -3,7 +3,7 @@ import type {
   WorkerTensor,
   WorkerTensorOpResponse,
 } from "./core";
-import type { WorkerFirstPoolBenchmarkStats, WorkerRunStats, WorkerRunFirstPoolOptimizerRequest, WorkerRunStyleTransferRequest } from "./pipelines";
+import type { WorkerClearStyleTransferSessionRequest, WorkerFirstPoolBenchmarkStats, WorkerRunStats, WorkerRunFirstPoolOptimizerRequest, WorkerRunStyleTransferRequest } from "./pipelines";
 import type { WorkerTensorOpRequest } from "./tensor-ops";
 
 export type WorkerRequest =
@@ -12,6 +12,7 @@ export type WorkerRequest =
   | { type: "tensor-roundtrip"; id: string; tensor: WorkerTensor }
   | WorkerRunFirstPoolOptimizerRequest
   | WorkerRunStyleTransferRequest
+  | WorkerClearStyleTransferSessionRequest
   | WorkerTensorOpRequest;
 
 export type WorkerResponse =
@@ -44,6 +45,17 @@ export type WorkerResponse =
     }
   | {
       type: "run-style-transfer-result";
+      id: string;
+      ok: false;
+      message: string;
+    }
+  | {
+      type: "clear-style-transfer-session-result";
+      id: string;
+      ok: true;
+    }
+  | {
+      type: "clear-style-transfer-session-result";
       id: string;
       ok: false;
       message: string;

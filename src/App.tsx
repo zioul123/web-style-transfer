@@ -254,6 +254,20 @@ function App() {
         >
           ⏸ Pause
         </button>
+        <button
+          className="rounded bg-sky-500 px-4 py-2 font-semibold text-black"
+          onClick={controls.resetOptimizerState}
+          disabled={status.isRunning}
+        >
+          Reset optimizer state
+        </button>
+        <button
+          className="rounded bg-rose-500 px-4 py-2 font-semibold text-black"
+          onClick={controls.resetOutputImage}
+          disabled={images.contentImage === null}
+        >
+          Reset output image
+        </button>
         <p>Iterations: {status.iterations}</p>
         <p>
           Loss: {status.lastLoss === null ? "—" : status.lastLoss.toFixed(4)}

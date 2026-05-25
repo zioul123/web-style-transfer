@@ -3,6 +3,7 @@ import type { TensorShape, WorkerTensor } from "./core";
 export type WorkerRunStyleTransferRequest = {
   type: "run-style-transfer";
   id: string;
+  sessionId?: string;
   optimizer: "sgd" | "adam" | "lbfgs";
   adamBeta1?: number;
   adamBeta2?: number;
@@ -24,6 +25,12 @@ export type WorkerRunStyleTransferRequest = {
   styleWeight: number;
   learningRate: number;
   steps: number;
+};
+
+export type WorkerClearStyleTransferSessionRequest = {
+  type: "clear-style-transfer-session";
+  id: string;
+  sessionId: string;
 };
 
 export type WorkerRunFirstPoolOptimizerRequest = {

@@ -39,6 +39,17 @@ const resolvePresetUpdate = (
 const createMessageId = (): string =>
   `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
+const createOptimizationSessionId = (): string =>
+  `style-transfer-session-${createMessageId()}`;
+
+const toResolvedState = <T,>(
+  update: SetStateAction<T>,
+  current: T,
+): T =>
+  typeof update === "function"
+    ? (update as (previous: T) => T)(current)
+    : update;
+
 const readFileAsImage = (file: File): Promise<HTMLImageElement> =>
   new Promise((resolve, reject) => {
     const objectUrl = URL.createObjectURL(file);
@@ -150,6 +161,8 @@ export const useStyleTransferController =
     const [contentTensor, setContentTensor] = useState<number[] | null>(null);
     const [styleTensor, setStyleTensor] = useState<number[] | null>(null);
     const [inputTensor, setInputTensor] = useState<number[] | null>(null);
+    const [optimizationSessionId, setOptimizationSessionId] =
+      useState<string>(createOptimizationSessionId);
     const [runStats, setRunStats] = useState<
       import("../../../types").WorkerRunStats | null
     >(null);
@@ -163,6 +176,20 @@ export const useStyleTransferController =
     );
     const canRun =
       contentTensor !== null && styleTensor !== null && weights !== null;
+
+    const clearWorkerSession = (sessionId: string): void => {
+      if (workerRef.current === null) return;
+      workerRef.current.postMessage({
+        type: "clear-style-transfer-session",
+        id: createMessageId(),
+        sessionId,
+      } satisfies WorkerRequest);
+    };
+
+    const rotateOptimizationSession = (clearCurrent: boolean): void => {
+      if (clearCurrent) clearWorkerSession(optimizationSessionId);
+      setOptimizationSessionId(createOptimizationSessionId());
+    };
 
     useEffect(() => {
       void fetch("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json")
@@ -192,6 +219,8 @@ export const useStyleTransferController =
             payload.ok ? payload.message : `Fallback: ${payload.message}`,
           );
         if (payload.type === "error") setWorkerStatus(payload.message);
+        if (payload.type === "clear-style-transfer-session-result" && !payload.ok)
+          setWorkerStatus(payload.message);
         if (payload.type === "run-style-transfer-result") {
           if (!payload.ok) {
             setWorkerStatus(payload.message);
@@ -203,7 +232,7 @@ export const useStyleTransferController =
           setOutputImage(
             tensorValuesToDataUrl(nextValues, contentImageResolution),
           );
-          setIterations((value) => value + stepsPerChunk);
+          setIterations((value) => value + payload.stats.steps);
           if (payload.losses.length > 0)
             setLastLoss(payload.losses[payload.losses.length - 1]);
           setRunStats(payload.stats);
@@ -223,7 +252,7 @@ export const useStyleTransferController =
         worker.terminate();
         workerRef.current = null;
       };
-    }, [contentImageResolution, stepsPerChunk]);
+    }, [contentImageResolution]);
 
     useEffect(() => {
       void (async (): Promise<void> => {
@@ -272,6 +301,7 @@ export const useStyleTransferController =
       workerRef.current.postMessage({
         type: "run-style-transfer",
         id: createMessageId(),
+        sessionId: optimizationSessionId,
         optimizer,
         adamBeta1: optimizer === "adam" ? adamBeta1 : undefined,
         adamBeta2: optimizer === "adam" ? adamBeta2 : undefined,
@@ -310,6 +340,7 @@ export const useStyleTransferController =
       lbfgsMemory,
       learningRate,
       optimizer,
+      optimizationSessionId,
       contentImageResolution,
       styleImageResolution,
       stepsPerChunk,
@@ -322,6 +353,7 @@ export const useStyleTransferController =
       image: HTMLImageElement,
       resolution: ImageResolution,
     ): void => {
+      rotateOptimizationSession(true);
       const tensor = imageToTensorValues(image, resolution);
       setContentTensor(tensor);
       setInputTensor(tensor);
@@ -337,6 +369,7 @@ export const useStyleTransferController =
       image: HTMLImageElement,
       resolution: ImageResolution,
     ): void => {
+      rotateOptimizationSession(true);
       const tensor = imageToTensorValues(image, resolution);
       setStyleTensor(tensor);
       setStyleImage(tensorValuesToDataUrl(tensor, resolution));
@@ -380,6 +413,36 @@ export const useStyleTransferController =
       }
     };
 
+    const updateOptimizerConfigWhenPaused = <T,>(
+      update: SetStateAction<T>,
+      current: T,
+      setter: Dispatch<SetStateAction<T>>,
+    ): void => {
+      const next = toResolvedState(update, current);
+      if (Object.is(next, current)) return;
+      if (!isRunning) rotateOptimizationSession(true);
+      setter(next);
+    };
+
+    const resetOptimizerState = (): void => {
+      rotateOptimizationSession(true);
+      setIterations(0);
+      setLastLoss(null);
+      setRunStats(null);
+      setIsRunning(false);
+    };
+
+    const resetOutputImage = (): void => {
+      if (contentTensor === null) return;
+      rotateOptimizationSession(true);
+      setInputTensor(contentTensor);
+      setOutputImage(tensorValuesToDataUrl(contentTensor, contentImageResolution));
+      setIterations(0);
+      setLastLoss(null);
+      setRunStats(null);
+      setIsRunning(false);
+    };
+
     return {
       controls: {
         contentResolution,
@@ -393,19 +456,40 @@ export const useStyleTransferController =
         styleWeight,
         setStyleWeight,
         learningRate,
-        setLearningRate,
+        setLearningRate: (update) =>
+          updateOptimizerConfigWhenPaused(
+            update,
+            learningRate,
+            setLearningRate,
+          ),
         optimizer,
-        setOptimizer,
+        setOptimizer: (update) =>
+          updateOptimizerConfigWhenPaused(update, optimizer, setOptimizer),
         adamBeta1,
-        setAdamBeta1,
+        setAdamBeta1: (update) =>
+          updateOptimizerConfigWhenPaused(update, adamBeta1, setAdamBeta1),
         adamBeta2,
-        setAdamBeta2,
+        setAdamBeta2: (update) =>
+          updateOptimizerConfigWhenPaused(update, adamBeta2, setAdamBeta2),
         adamEpsilon,
-        setAdamEpsilon,
+        setAdamEpsilon: (update) =>
+          updateOptimizerConfigWhenPaused(update, adamEpsilon, setAdamEpsilon),
         lbfgsMemory,
-        setLbfgsMemory,
+        setLbfgsMemory: (update) =>
+          updateOptimizerConfigWhenPaused(
+            update,
+            lbfgsMemory,
+            setLbfgsMemory,
+          ),
         lbfgsEpsilon,
-        setLbfgsEpsilon,
+        setLbfgsEpsilon: (update) =>
+          updateOptimizerConfigWhenPaused(
+            update,
+            lbfgsEpsilon,
+            setLbfgsEpsilon,
+          ),
+        resetOptimizerState,
+        resetOutputImage,
       },
       status: {
         workerStatus,

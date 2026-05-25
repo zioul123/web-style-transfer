@@ -3,9 +3,13 @@
 import type { WorkerRequest } from "../../../types";
 import { createTensor } from "../../index";
 import { runFirstPoolOptimizer } from "../pipelines/optimization/firstPoolOptimizer";
-import { runStyleTransfer } from "../pipelines/optimization/styleTransferPipeline";
+import {
+  clearStyleTransferSession,
+  runStyleTransfer,
+} from "../pipelines/optimization/styleTransferPipeline";
 import { initWebGpu } from "./initWebGpu";
 import {
+  sendClearStyleTransferSessionResult,
   sendPongResponse,
   sendRunFirstPoolOptimizerResult,
   sendRunStyleTransferResult,
@@ -85,6 +89,21 @@ export const routeWorkerMessage = (
           });
         }
       })();
+      break;
+    }
+    case "clear-style-transfer-session": {
+      try {
+        clearStyleTransferSession(payload.sessionId);
+        sendClearStyleTransferSessionResult(payload.id, { ok: true });
+      } catch (error: unknown) {
+        sendClearStyleTransferSessionResult(payload.id, {
+          ok: false,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Failed to clear style transfer session.",
+        });
+      }
       break;
     }
     case "tensor-op": {

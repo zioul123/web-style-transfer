@@ -109,3 +109,10 @@ export const sendRunStyleTransferResult = (
 ): void => {
   postResponse({ type: "run-style-transfer-result", id, ...result });
 };
+
+export const sendClearStyleTransferSessionResult = (
+  id: string,
+  result: { ok: true } | { ok: false; message: string },
+): void => {
+  postResponse({ type: "clear-style-transfer-session-result", id, ...result });
+};
