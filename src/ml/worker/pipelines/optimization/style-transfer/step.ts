@@ -3,14 +3,13 @@ import { readGpuBufferToArray } from "../../../runtime/bufferKernels";
 import type { InputOptimizer } from "../input-optimizer/types";
 import { POOL_LAYERS, RELU_LAYERS } from "../layerSchedules";
 import type { OptimizationTrackedOps } from "../trackedOps";
-import { convOutputShape, elementCount, gramElementCount, pooledShape } from "./shapes";
+import { convOutputShape, elementCount, gramElementCount, pooledShape, type TensorShape4D } from "../../../runtime/tensorShapes";
 import type {
   ConvLayerCacheEntry,
   StyleTransferForwardResult,
   StyleTransferPayload,
   StyleTransferPersistentContext,
   StyleTransferStepResult,
-  TensorShape4D,
 } from "./types";
 import { VGG19_STYLE_TRANSFER_PLAN } from "./vgg19Plan";
 

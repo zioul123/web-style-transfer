@@ -3,9 +3,9 @@ import type { WorkerRequest } from "../../../types";
 type TensorOpRequest = Extract<WorkerRequest, { type: "tensor-op" }>;
 import { createTensor } from "../../index";
 import {
-  runConv2dBackwardInput,
-  runConv2dForward,
-  runConv2dReluForward,
+  runConv2dBackwardInputReadback,
+  runConv2dForwardReadback,
+  runConv2dReluForwardReadback,
 } from "../ops/convolution/conv2d.run";
 import { runGramBackward, runGramMatrix } from "../ops/gram/gram.run";
 import { runContentLossBackward } from "../ops/loss/contentLoss.run";
@@ -57,7 +57,7 @@ export const routeTensorOp = async (
       const weight = createTensor(payload.weight.shape, payload.weight.values);
       const output =
         payload.op === "conv2d-relu-forward"
-          ? await runConv2dReluForward(
+          ? await runConv2dReluForwardReadback(
               getGpuDevice(),
               runUnary,
               input.values,
@@ -68,7 +68,7 @@ export const routeTensorOp = async (
               BUFFER_USAGE_STORAGE_COPY_DST,
               BUFFER_USAGE_UNIFORM_COPY_DST,
             )
-          : await runConv2dForward(
+          : await runConv2dForwardReadback(
               getGpuDevice(),
               runUnary,
               input.values,
@@ -76,8 +76,6 @@ export const routeTensorOp = async (
               weight.values,
               weight.shape,
               payload.bias,
-              BUFFER_USAGE_STORAGE_COPY_DST,
-              BUFFER_USAGE_UNIFORM_COPY_DST,
             );
       sendTensorOpResult(payload.id, { values: output });
       return;
@@ -215,15 +213,13 @@ export const routeTensorOp = async (
         payload.gradOut.values,
       );
       const weight = createTensor(payload.weight.shape, payload.weight.values);
-      const gradIn = await runConv2dBackwardInput(
+      const gradIn = await runConv2dBackwardInputReadback(
         getGpuDevice(),
         runUnary,
         payload.inputShape,
         gradOut.values,
         weight.values,
         weight.shape,
-        BUFFER_USAGE_STORAGE_COPY_DST,
-        BUFFER_USAGE_UNIFORM_COPY_DST,
       );
       sendTensorOpResult(payload.id, { values: gradIn });
       return;

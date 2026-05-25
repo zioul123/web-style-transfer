@@ -7,70 +7,33 @@ import {
   uploadToOwnedBuffer,
   type GpuBufferRef,
 } from "../../../runtime/bufferKernels";
-import {
-  createOptimizationRuntimeContext,
-  type OptimizationRuntimeContext,
-} from "../../../runtime/optimizationContext";
+import { createOptimizationRuntimeContext } from "../../../runtime/optimizationContext";
 import {
   createOptimizationTrackedOps,
 } from "../trackedOps";
 import { createInputOptimizer } from "../input-optimizer/createInputOptimizer";
 import { createGpuVectorOps } from "../input-optimizer/gpuVectorOps";
 import type { InputOptimizerConfig } from "../input-optimizer/types";
-import { elementCount } from "./shapes";
+import { elementCount } from "../../../runtime/tensorShapes";
+import { parseVgg19ConvLayerCache } from "../../../models/vgg19/weights";
+import { createPersistentTargetContext } from "./persistentTargetContext";
 import {
   runStyleTransferForward,
   runStyleTransferStep,
 } from "./step";
 import type {
-  ConvLayerCacheEntry,
   StyleTransferPayload,
   StyleTransferRunResult,
 } from "./types";
 
-const parseConvLayerCache = (
-  weights: StyleTransferPayload["weights"],
-): Record<number, ConvLayerCacheEntry | undefined> => {
-  const convLayerCache: Record<number, ConvLayerCacheEntry | undefined> = {};
-  for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
-    const weightShapeRaw = weights[`conv${layerIndex}.weightShape`];
-    const weightValues = weights[`conv${layerIndex}.weightValues`];
-    const biasValues = weights[`conv${layerIndex}.biasValues`];
-    if (
-      Array.isArray(weightShapeRaw) &&
-      Array.isArray(weightValues) &&
-      Array.isArray(biasValues)
-    ) {
-      convLayerCache[layerIndex] = {
-        shape: weightShapeRaw as [number, number, number, number],
-        values: new Float32Array(weightValues),
-        bias: new Float32Array(biasValues),
-      };
-    }
-  }
-  return convLayerCache;
-};
-
-const releaseUnpersistedBuffers = (
-  ownedBuffers: readonly GpuBufferRef[],
-  persistentBuffers: readonly GpuBufferRef[],
-): void => {
-  const persistentBufferSet = new Set<GPUBuffer>(
-    persistentBuffers.map((ref) => ref.buffer),
-  );
-  for (const ref of ownedBuffers) {
-    if (!persistentBufferSet.has(ref.buffer)) releaseOwnedBuffer(ref);
-  }
-};
-
-export const runStyleTransferGpuResident = async (
+export const runStyleTransferPipeline = async (
   payload: StyleTransferPayload,
 ): Promise<StyleTransferRunResult> => {
   const device = getGpuDevice();
   if (device === null) throw new Error("WebGPU device is not initialized.");
 
   const runtimeContext = createOptimizationRuntimeContext(device);
-  const convLayerCache = parseConvLayerCache(payload.weights);
+  const convLayerCache = parseVgg19ConvLayerCache(payload.weights);
   const losses: number[] = [];
   let forwardMs = 0;
   let backwardMs = 0;
@@ -109,19 +72,10 @@ export const runStyleTransferGpuResident = async (
   const persistentBuffers: GpuBufferRef[] = [contentImageBuffer, styleImageBuffer];
 
   try {
-    const targetOwnedBuffers: GpuBufferRef[] = [];
-    const targetContext: OptimizationRuntimeContext = {
-      acquireTemp: runtimeContext.acquireTemp,
-      trackOwned: <T extends GpuBufferRef>(...refs: T[]): T => {
-        targetOwnedBuffers.push(...refs);
-        return refs[refs.length - 1];
-      },
-      releaseStepOwned: (): void => {
-        releaseUnpersistedBuffers(targetOwnedBuffers, persistentBuffers);
-        targetOwnedBuffers.length = 0;
-      },
-      disposeAll: (): void => undefined,
-    };
+    const targetContext = createPersistentTargetContext(
+      runtimeContext,
+      persistentBuffers,
+    );
     const targetTracked = createOptimizationTrackedOps(device, targetContext);
     const contentNorm = await targetTracked.normalizeForward(
       contentImageBuffer,

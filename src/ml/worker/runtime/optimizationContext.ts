@@ -1,7 +1,8 @@
 import { releaseOwnedBuffer, type GpuBufferRef } from "./bufferKernels";
 import { acquireReusableBuffer, releaseReusableBuffer } from "./bufferPool";
+import { elementCount, type TensorShape4D } from "./tensorShapes";
 
-export type OptimizationShape4D = readonly [number, number, number, number];
+export type OptimizationShape4D = TensorShape4D;
 
 type TempRecord = {
   shape: OptimizationShape4D;
@@ -15,8 +16,6 @@ export type OptimizationRuntimeContext = {
   releaseStepOwned: () => void;
   disposeAll: () => void;
 };
-
-const elementCount = (shape: OptimizationShape4D): number => shape[0] * shape[1] * shape[2] * shape[3];
 
 export const createOptimizationRuntimeContext = (device: GPUDevice): OptimizationRuntimeContext => {
   const tempByKey: Map<string, TempRecord> = new Map();

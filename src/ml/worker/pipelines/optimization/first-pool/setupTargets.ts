@@ -5,7 +5,7 @@ import { runGramMatrixBuffer } from "../../../ops/gram/gram.run";
 import { runNormalizeForwardBuffer } from "../../../ops/normalization/normalize.run";
 import { runMaxPool2dForwardBuffer } from "../../../ops/pooling/maxpool.run";
 import { readGpuBufferToArray, releaseOwnedBuffer, uploadToOwnedBuffer } from "../../../runtime/bufferKernels";
-import { convOutputShape, elementCount, pooledShape } from "./shapes";
+import { convOutputShape, elementCount, pooledShape } from "../../../runtime/tensorShapes";
 import type { FirstPoolPersistentContext } from "./types";
 
 export const setupFirstPoolTargets = async (device: GPUDevice, payload: Extract<WorkerRequest, { type: "run-first-pool-optimizer" }>): Promise<FirstPoolPersistentContext> => {

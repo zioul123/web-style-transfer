@@ -2,7 +2,7 @@ import type { WorkerRequest } from "../../../../../types";
 import { readGpuBufferToArray, type GpuBufferRef, type OwnedGpuBuffer } from "../../../runtime/bufferKernels";
 import type { FirstPoolPersistentContext, FirstPoolRuntimeContext, FirstPoolStepResult, TensorShape4D } from "./types";
 import { createOptimizationTrackedOps } from "../trackedOps";
-import { convOutputShape, elementCount, pooledShape } from "./shapes";
+import { convOutputShape, elementCount, pooledShape } from "../../../runtime/tensorShapes";
 
 const assertShape = (valuesLength: number, shape: TensorShape4D, name: string): void => {
   const expectedLength = elementCount(shape);
