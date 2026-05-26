@@ -38,13 +38,14 @@ export const runStyleLossTermsFromTargetGramBuffer = async (
     usage: BUFFER_USAGE_UNIFORM_COPY_DST,
   });
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, spatial]));
+  const workgroupCount = Math.ceil(gramCount / 64);
 
   const inputGramBuffer = gpuDevice.createBuffer({
     size: gramCount * Float32Array.BYTES_PER_ELEMENT,
     usage: BUFFER_USAGE_STORAGE_COPY_SRC,
   });
   let currentBuffer = acquireReusableBuffer(
-    gramCount * Float32Array.BYTES_PER_ELEMENT,
+    workgroupCount * Float32Array.BYTES_PER_ELEMENT,
     BUFFER_USAGE_STORAGE_COPY_SRC,
   );
 
@@ -67,11 +68,11 @@ export const runStyleLossTermsFromTargetGramBuffer = async (
   const termsPass = termsEncoder.beginComputePass();
   termsPass.setPipeline(termsPipeline);
   termsPass.setBindGroup(0, termsBindGroup);
-  termsPass.dispatchWorkgroups(Math.ceil(gramCount / 64));
+  termsPass.dispatchWorkgroups(workgroupCount);
   termsPass.end();
   gpuDevice.queue.submit([termsEncoder.finish()]);
 
-  let currentCount = gramCount;
+  let currentCount = workgroupCount;
   while (currentCount > 1) {
     const nextCount = Math.ceil(currentCount / 64);
     const nextBuffer = acquireReusableBuffer(
