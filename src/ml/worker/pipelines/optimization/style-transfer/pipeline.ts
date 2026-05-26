@@ -56,6 +56,12 @@ const createSessionOptimizer = (
 ): InputOptimizer<GpuBufferRef> =>
   createInputOptimizer(optimizerConfig, createGpuVectorOps(device, inputCount));
 
+const normalizeLossReadbackInterval = (interval: number | undefined): number => {
+  if (interval === undefined) return 5;
+  if (!Number.isFinite(interval)) return 5;
+  return Math.max(1, Math.floor(interval));
+};
+
 const getOrCreateOptimizer = (
   payload: StyleTransferPayload,
   device: GPUDevice,
@@ -161,6 +167,10 @@ export const runStyleTransferPipeline = async (
     optimizerConfig,
   );
   const { inputOptimizer, sessionId, stepOffset } = optimizerRunContext;
+  const lossReadbackInterval = normalizeLossReadbackInterval(
+    payload.lossReadbackInterval,
+  );
+  const synchronizePhaseTimings = payload.synchronizePhaseTimings ?? false;
 
   let inputBuffer: GpuBufferRef | null = uploadToOwnedBuffer(
     device,
@@ -241,8 +251,10 @@ export const runStyleTransferPipeline = async (
           tracked,
           inputOptimizer,
           stepOffset + step,
+          step % lossReadbackInterval === 0 || step === payload.steps - 1,
+          synchronizePhaseTimings,
         );
-        losses.push(stepResult.totalLoss);
+        if (stepResult.totalLoss !== null) losses.push(stepResult.totalLoss);
         forwardMs += stepResult.forwardMs;
         lossMs += stepResult.lossMs;
         backwardMs += stepResult.backwardMs;

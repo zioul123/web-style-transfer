@@ -90,12 +90,11 @@ export const runStyleTransferForward = async (
 };
 
 const computeStepLoss = async (
-  device: GPUDevice,
   payload: StyleTransferPayload,
   tracked: OptimizationTrackedOps,
   run: StyleTransferForwardResult,
   persistent: StyleTransferPersistentContext,
-): Promise<{ totalLoss: number; styleLayerContexts: StyleLayerLossContext[] }> => {
+): Promise<{ totalLossBuffer: GpuBufferRef; styleLayerContexts: StyleLayerLossContext[] }> => {
   const scalarLossBuffers: GpuBufferRef[] = [];
   const scalarWeights: number[] = [];
   const styleLayerContexts: StyleLayerLossContext[] = [];
@@ -150,7 +149,7 @@ const computeStepLoss = async (
   scalarWeights.push(payload.contentWeight / elementCount(contentReluShape));
   const totalLossBuffer = tracked.weightedScalarSum(scalarLossBuffers, scalarWeights);
   return {
-    totalLoss: (await readGpuBufferToArray(device, totalLossBuffer.buffer, 1))[0],
+    totalLossBuffer,
     styleLayerContexts,
   };
 };
@@ -269,6 +268,8 @@ export const runStyleTransferStep = async (
   tracked: OptimizationTrackedOps,
   inputOptimizer: InputOptimizer<GpuBufferRef>,
   step: number,
+  readLoss: boolean,
+  synchronizePhaseTimings: boolean,
 ): Promise<StyleTransferStepResult> => {
   const forwardStart = performance.now();
   const norm = await tracked.normalizeForward(
@@ -283,10 +284,15 @@ export const runStyleTransferStep = async (
     norm,
     payload.inputShape,
   );
+  if (synchronizePhaseTimings) await device.queue.onSubmittedWorkDone();
   const forwardMs = performance.now() - forwardStart;
 
   const lossStart = performance.now();
-  const lossResult = await computeStepLoss(device, payload, tracked, run, persistent);
+  const lossResult = await computeStepLoss(payload, tracked, run, persistent);
+  const totalLoss = readLoss
+    ? (await readGpuBufferToArray(device, lossResult.totalLossBuffer.buffer, 1))[0]
+    : null;
+  if (synchronizePhaseTimings) await device.queue.onSubmittedWorkDone();
   const lossMs = performance.now() - lossStart;
 
   const backwardStart = performance.now();
@@ -304,15 +310,17 @@ export const runStyleTransferStep = async (
     run,
     gradByReluLayer,
   );
+  if (synchronizePhaseTimings) await device.queue.onSubmittedWorkDone();
   const backwardMs = performance.now() - backwardStart;
 
   const updateStart = performance.now();
   const nextInputBuffer = await inputOptimizer.step(inputBuffer, gInput, step);
+  if (synchronizePhaseTimings) await device.queue.onSubmittedWorkDone();
   const updateMs = performance.now() - updateStart;
 
   return {
     nextInputBuffer,
-    totalLoss: lossResult.totalLoss,
+    totalLoss,
     forwardMs,
     lossMs,
     backwardMs,
