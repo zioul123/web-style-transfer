@@ -198,12 +198,12 @@ export const useStyleTransferController =
     useEffect(() => {
       const loadWeights = async (): Promise<void> => {
         try {
-          const manifestResponse = await fetch("/vgg19-models/manifest.json");
+          const manifestResponse = await fetch("/vgg19-models/fp32/manifest.json");
           if (!manifestResponse.ok) throw new Error("manifest fetch failed");
           const manifest = (await manifestResponse.json()) as Vgg19WeightsManifest;
           const shardEntries = await Promise.all(
             manifest.shards.map(async (shard) => {
-              const response = await fetch(`/vgg19-models/${shard.name}`);
+              const response = await fetch(`/vgg19-models/fp32/${shard.name}`);
               if (!response.ok) throw new Error(`shard fetch failed: ${shard.name}`);
               return [shard.name, await response.arrayBuffer()] as const;
             }),
