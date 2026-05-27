@@ -42,7 +42,7 @@ def sha256_hex(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-PACKS = ('fp32', 'fp16', 'int8-per-channel')
+PACKS = ('fp32', 'fp16', 'int8-per-channel', 'int4-experimental')
 
 
 def quantize_int8_per_channel(weight: torch.Tensor) -> tuple[torch.Tensor, list[float], list[int]]:
@@ -59,6 +59,32 @@ def quantize_int8_per_channel(weight: torch.Tensor) -> tuple[torch.Tensor, list[
         scales.append(float(scale))
         zero_points.append(0)
     return quantized, scales, zero_points
+
+
+def _pack_signed_int4(values: torch.Tensor) -> bytes:
+    flat = values.contiguous().view(-1).to(torch.int16)
+    packed = bytearray((flat.numel() + 1) // 2)
+    for i in range(0, flat.numel(), 2):
+        low = int(flat[i].item()) & 0x0F
+        high = int(flat[i + 1].item()) & 0x0F if i + 1 < flat.numel() else 0
+        packed[i // 2] = low | (high << 4)
+    return bytes(packed)
+
+
+def quantize_int4_per_channel(weight: torch.Tensor) -> tuple[bytes, list[float], list[int]]:
+    out_channels = weight.shape[0]
+    quantized = torch.empty_like(weight, dtype=torch.int8)
+    scales: list[float] = []
+    zero_points: list[int] = []
+    for channel_index in range(out_channels):
+        channel = weight[channel_index]
+        max_abs = channel.abs().max().item()
+        scale = max(max_abs / 7.0, 1e-8)
+        q = torch.clamp(torch.round(channel / scale), -7, 7).to(torch.int8)
+        quantized[channel_index] = q
+        scales.append(float(scale))
+        zero_points.append(0)
+    return _pack_signed_int4(quantized), scales, zero_points
 
 
 def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool, pack: str) -> None:
@@ -98,6 +124,16 @@ def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool, pack: 
                     'axis': 0,
                     'scale': scales,
                     'zeroPoint': zero_points,
+                }
+            elif pack == 'int4-experimental':
+                weight_dtype = 'int4-packed'
+                weight_bytes, scales, zero_points = quantize_int4_per_channel(weight)
+                layer_quantization = {
+                    'scheme': 'per-channel-symmetric',
+                    'axis': 0,
+                    'scale': scales,
+                    'zeroPoint': zero_points,
+                    'packing': 'int4x2-lsn-first',
                 }
             else:
                 raise RuntimeError(f'Unsupported pack: {pack}')
@@ -146,7 +182,10 @@ def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool, pack: 
                 shard_name: sha256_hex(shard_path),
             },
         },
-        'quantization': {'scheme': 'none' if pack != 'int8-per-channel' else 'per-channel-symmetric', 'dtype': pack},
+        'quantization': {
+            'scheme': 'none' if pack in ('fp32', 'fp16') else 'per-channel-symmetric',
+            'dtype': pack,
+        },
     }
 
     manifest_path = pack_dir / 'manifest.json'

@@ -14,6 +14,15 @@ CONTENT_LAYER_INDEX = 22
 LAST_LAYER_INDEX = 29
 
 
+def _unpack_int4_to_int8(data: bytes, expected_values: int) -> torch.Tensor:
+    unpacked = torch.empty(expected_values, dtype=torch.int8)
+    for idx in range(expected_values):
+        byte = data[idx // 2]
+        nibble = byte & 0x0F if idx % 2 == 0 else (byte >> 4) & 0x0F
+        unpacked[idx] = nibble - 16 if nibble >= 8 else nibble
+    return unpacked
+
+
 def _load_pack_model(pack: str) -> nn.Sequential:
     model = vgg19(weights=VGG19_Weights.DEFAULT).features.eval()
     manifest = json.loads((MODEL_ROOT / pack / 'manifest.json').read_text())
@@ -34,6 +43,13 @@ def _load_pack_model(pack: str) -> nn.Sequential:
         elif w['dtype'] == 'int8':
             q = torch.frombuffer(bytearray(w_bytes), dtype=torch.int8).clone().to(torch.float32).view(w['shape'])
             quant = w['quantization']
+            scale = torch.tensor(quant['scale'], dtype=torch.float32).view(-1, 1, 1, 1)
+            zp = torch.tensor(quant['zeroPoint'], dtype=torch.float32).view(-1, 1, 1, 1)
+            w_t = (q - zp) * scale
+        elif w['dtype'] == 'int4-packed':
+            quant = w['quantization']
+            expected_values = int(torch.tensor(w['shape']).prod().item())
+            q = _unpack_int4_to_int8(w_bytes, expected_values).to(torch.float32).view(w['shape'])
             scale = torch.tensor(quant['scale'], dtype=torch.float32).view(-1, 1, 1, 1)
             zp = torch.tensor(quant['zeroPoint'], dtype=torch.float32).view(-1, 1, 1, 1)
             w_t = (q - zp) * scale
@@ -71,7 +87,7 @@ def main() -> None:
     baseline_layers = _forward_layers(baseline, input_image)
 
     report: dict[str, object] = {'packs': {}}
-    for pack in ('fp16', 'int8-per-channel'):
+    for pack in ('fp16', 'int8-per-channel', 'int4-experimental'):
         model = _load_pack_model(pack)
         layers = _forward_layers(model, input_image)
         layer_error = {
@@ -89,6 +105,7 @@ def main() -> None:
             'acceptance': {
                 'fp16NearBaseline': pack != 'fp16' or abs(style_loss - style_loss_base) < 1e-3,
                 'int8Acceptable': pack != 'int8-per-channel' or abs(style_loss - style_loss_base) < 5e-2,
+                'int4ExperimentalAcceptable': pack != 'int4-experimental' or abs(style_loss - style_loss_base) < 1e-1,
             },
         }
 

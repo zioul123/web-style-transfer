@@ -2,7 +2,7 @@
 
 ## File layout
 
-- `fp32/manifest.json`, `fp16/manifest.json`, `int8-per-channel/manifest.json`: pack-specific metadata.
+- `fp32/manifest.json`, `fp16/manifest.json`, `int8-per-channel/manifest.json`, `int4-experimental/manifest.json`: pack-specific metadata.
 - `*/shard-000.bin`: pack payload shards.
 - Optional transition artifact per-pack: `*/vgg19_conv0_to_conv28_weights.json` (legacy).
 
@@ -47,3 +47,4 @@
 - Default acceptance thresholds:
   - `fp16`: style/content loss deltas near baseline (`|delta| < 1e-3`).
   - `int8-per-channel`: acceptable if style loss delta stays under `5e-2` and visual QA confirms no severe artifacts.
+  - `int4-experimental`: exploratory-only pack with relaxed style-loss delta threshold (`|delta| < 1e-1`) until visual QA gates are finalized.
