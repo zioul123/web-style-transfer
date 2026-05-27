@@ -1,6 +1,13 @@
 import { useState, type ReactElement } from "react";
-import { buildPackAcceptanceRows, type PackComparisonRow, type VggPackName } from "./features/style-transfer/benchmark/packAcceptance";
-import { parseVgg19ManifestBackedLayerCache, type Vgg19WeightsManifest } from "./ml/worker/models/vgg19/weights";
+import { buildPackAcceptanceRows, type PackComparisonRow } from "./features/style-transfer/benchmark/packAcceptance";
+import {
+  VGG_PACK_OPTIONS,
+  type VggPackName,
+} from "./features/style-transfer/modelPacks";
+import {
+  parseVgg19ManifestBackedLayerCache,
+  type Vgg19WeightsManifest,
+} from "./ml/worker/models/vgg19/weights";
 import type {
   WorkerFirstPoolBenchmarkStats,
   WorkerRequest,
@@ -89,9 +96,13 @@ const loadJson = async <T,>(url: string): Promise<T> => {
   return (await response.json()) as T;
 };
 
-const loadManifestWeights = async (pack: VggPackName): Promise<{ weights: Record<string, number[] | [number, number, number, number]>; stats: WeightLoadStats }> => {
+const loadManifestWeights = async (
+  pack: VggPackName,
+): Promise<{ weights: Record<string, number[] | [number, number, number, number]>; stats: WeightLoadStats }> => {
   const decodeStart = performance.now();
-  const manifest = await loadJson<Vgg19WeightsManifest>(`/vgg19-models/${pack}/manifest.json`);
+  const manifest = await loadJson<Vgg19WeightsManifest>(
+    `/vgg19-models/${pack}/manifest.json`,
+  );
   const shardEntries = await Promise.all(
     manifest.shards.map(async (shard) => {
       const response = await fetch(`/vgg19-models/${pack}/${shard.name}`);
@@ -109,8 +120,17 @@ const loadManifestWeights = async (pack: VggPackName): Promise<{ weights: Record
     weights[`conv${layerIndex}.weightValues`] = Array.from(layer.values);
     weights[`conv${layerIndex}.biasValues`] = Array.from(layer.bias);
   }
-  const downloadSizeBytes = shardEntries.reduce((acc, [, buffer]) => acc + buffer.byteLength, 0);
-  return { weights, stats: { downloadSizeBytes, decodeLoadMs: performance.now() - decodeStart } };
+  const downloadSizeBytes = shardEntries.reduce(
+    (acc, [, buffer]) => acc + buffer.byteLength,
+    0,
+  );
+  return {
+    weights,
+    stats: {
+      downloadSizeBytes,
+      decodeLoadMs: performance.now() - decodeStart,
+    },
+  };
 };
 
 const askWorker = (
@@ -282,14 +302,14 @@ export const BenchmarkApp = (): ReactElement => {
     const fixture = await loadJson<Phase3FullPassFixture>(
       "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
     );
-    const packs: VggPackName[] = ["fp32", "fp16", "int8-per-channel", "int8log-per-channel"];
+    const packs: VggPackName[] = VGG_PACK_OPTIONS.map((option) => option.name);
     const comparisonRows: PackComparisonRow[] = [];
-    let finalWeightsResult: { weights: Record<string, number[] | [number, number, number, number]>; stats: WeightLoadStats } | null = null;
+    let finalWeightsResult: Record<string, number[] | [number, number, number, number]> | null = null;
     for (const pack of packs) {
       try {
         setStatus(`Loading ${pack} weights for pack comparison...`);
         const weightsResult = await loadManifestWeights(pack);
-        if (pack === "fp32") finalWeightsResult = weightsResult;
+        if (pack === "fp32") finalWeightsResult = weightsResult.weights;
         await initializeWorker(worker);
         setStatus(`Running pack comparison for ${pack}...`);
         const singleRun = await askWorker(worker, {
@@ -316,7 +336,13 @@ export const BenchmarkApp = (): ReactElement => {
         if (!singleRun.ok) {
           throw new Error(singleRun.message);
         }
-        comparisonRows.push({ pack, elapsedMs: singleRun.stats.elapsedMs, avgStepMs: singleRun.stats.avgStepMs, finalLoss: singleRun.losses.at(-1) ?? 0, downloadSizeBytes: weightsResult.stats.downloadSizeBytes });
+        comparisonRows.push({
+          pack,
+          elapsedMs: singleRun.stats.elapsedMs,
+          avgStepMs: singleRun.stats.avgStepMs,
+          finalLoss: singleRun.losses.at(-1) ?? 0,
+          downloadSizeBytes: weightsResult.stats.downloadSizeBytes,
+        });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         throw new Error(`Pack comparison failed for ${pack}: ${errorMessage}`);
@@ -324,8 +350,8 @@ export const BenchmarkApp = (): ReactElement => {
     }
     setPackComparison(comparisonRows);
     setPackAcceptance(buildPackAcceptanceRows(comparisonRows));
-    const weightsResult = finalWeightsResult ?? (await loadManifestWeights("fp32"));
-    const resolvedWeights = weightsResult.weights;
+    const fp32WeightsResult = await loadManifestWeights("fp32");
+    const resolvedWeights = finalWeightsResult ?? fp32WeightsResult.weights;
     await initializeWorker(worker);
     const cappedRuns = Math.max(1, Math.floor(fullRuns));
     const runStats: WorkerRunStats[] = [];
@@ -364,8 +390,8 @@ export const BenchmarkApp = (): ReactElement => {
       const perf = performance as Performance & { memory?: { usedJSHeapSize: number } };
       setSummary({
         ...summarizeRuns(runStats),
-        downloadSizeBytes: weightsResult.stats.downloadSizeBytes,
-        decodeLoadMs: weightsResult.stats.decodeLoadMs,
+        downloadSizeBytes: fp32WeightsResult.stats.downloadSizeBytes,
+        decodeLoadMs: fp32WeightsResult.stats.decodeLoadMs,
         firstIterationMs: runStats[0].avgStepMs,
         peakMemoryBytes: perf.memory?.usedJSHeapSize,
       });

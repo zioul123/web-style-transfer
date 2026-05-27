@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { WorkerRunStats } from "../../../types/worker-protocol/pipelines";
+import type { VggPackName } from "../modelPacks";
 
 export type ResolutionPreset =
   | "128x128"
@@ -30,6 +31,8 @@ export interface StyleTransferControls {
   setStyleWeight: Dispatch<SetStateAction<number>>;
   learningRate: number;
   setLearningRate: Dispatch<SetStateAction<number>>;
+  selectedPack: VggPackName;
+  setSelectedPack: Dispatch<SetStateAction<VggPackName>>;
   optimizer: OptimizerMode;
   setOptimizer: Dispatch<SetStateAction<OptimizerMode>>;
   adamBeta1: number;

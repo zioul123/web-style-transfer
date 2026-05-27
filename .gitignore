@@ -26,6 +26,7 @@ dist-ssr
 # Artifacts
 __pycache__
 .venv
+.wst
 *.tsbuildinfo
 .vite
 test-results
