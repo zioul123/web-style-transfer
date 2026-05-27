@@ -1,4 +1,4 @@
-export type VggPackName = "fp32" | "fp16" | "int8-per-channel" | "int8log-per-channel";
+import type { VggPackName } from "../modelPacks";
 
 export type PackComparisonRow = {
   pack: VggPackName;
