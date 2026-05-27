@@ -26,7 +26,7 @@ export type StyleTransferPersistentContext = {
 
 export type StyleTransferStepResult = {
   nextInputBuffer: GpuBufferRef;
-  totalLoss: number;
+  totalLoss: number | null;
   forwardMs: number;
   lossMs: number;
   backwardMs: number;

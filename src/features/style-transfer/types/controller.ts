@@ -42,6 +42,8 @@ export interface StyleTransferControls {
   setLbfgsMemory: Dispatch<SetStateAction<number>>;
   lbfgsEpsilon: number;
   setLbfgsEpsilon: Dispatch<SetStateAction<number>>;
+  synchronizePhaseTimings: boolean;
+  setSynchronizePhaseTimings: Dispatch<SetStateAction<boolean>>;
   resetOptimizerState: () => void;
   resetOutputImage: () => void;
 }

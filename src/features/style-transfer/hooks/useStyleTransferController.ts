@@ -147,6 +147,8 @@ export const useStyleTransferController =
     const [adamEpsilon, setAdamEpsilon] = useState<number>(1e-8);
     const [lbfgsMemory, setLbfgsMemory] = useState<number>(100);
     const [lbfgsEpsilon, setLbfgsEpsilon] = useState<number>(1e-9);
+    const [synchronizePhaseTimings, setSynchronizePhaseTimings] =
+      useState<boolean>(false);
     const [iterations, setIterations] = useState<number>(0);
     const [isRunning, setIsRunning] = useState<boolean>(false);
     const [lastLoss, setLastLoss] = useState<number | null>(null);
@@ -326,6 +328,8 @@ export const useStyleTransferController =
         styleWeight,
         learningRate,
         steps: stepsPerChunk,
+        lossReadbackInterval: stepsPerChunk,
+        synchronizePhaseTimings,
       } satisfies WorkerRequest);
     }, [
       adamBeta1,
@@ -346,6 +350,7 @@ export const useStyleTransferController =
       stepsPerChunk,
       styleTensor,
       styleWeight,
+      synchronizePhaseTimings,
       weights,
     ]);
 
@@ -487,6 +492,13 @@ export const useStyleTransferController =
             update,
             lbfgsEpsilon,
             setLbfgsEpsilon,
+          ),
+        synchronizePhaseTimings,
+        setSynchronizePhaseTimings: (update) =>
+          updateOptimizerConfigWhenPaused(
+            update,
+            synchronizePhaseTimings,
+            setSynchronizePhaseTimings,
           ),
         resetOptimizerState,
         resetOutputImage,

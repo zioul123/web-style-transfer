@@ -2,7 +2,12 @@ import { runConv2dBackwardInputBuffer, runConv2dForwardBuffer, runConv2dReluForw
 import { runGramMatrixBuffer } from "../../ops/gram/gram.run";
 import { runContentLossBackwardBuffer } from "../../ops/loss/contentLoss.run";
 import { runMseBufferToScalarBuffer } from "../../ops/loss/mse.run";
-import { runStyleLossBackwardFromTargetGramBuffer } from "../../ops/loss/styleLoss.run";
+import {
+  runStyleLossTermsFromTargetGramBuffer,
+  runStyleLossBackwardFromInputGramBuffer,
+  runStyleLossBackwardFromTargetGramBuffer,
+} from "../../ops/loss/styleLoss.run";
+import { runWeightedScalarSumBuffer } from "../../ops/loss/weightedScalarSum.run";
 import { runNormalizeBackwardBuffer, runNormalizeForwardBuffer } from "../../ops/normalization/normalize.run";
 import { runMaxPool2dBackwardBuffer, runMaxPool2dForwardBuffer } from "../../ops/pooling/maxpool.run";
 import { runReluBackwardBuffer, runReluForwardBuffer } from "../../ops/relu/relu.run";
@@ -41,10 +46,16 @@ export const createOptimizationTrackedOps = (
     mseScalarBuffer: async (a: GpuBufferRef, b: GpuBufferRef, count: number): Promise<GpuBufferRef> => own(await runMseBufferToScalarBuffer(device, acquireMseBuffer, a, b, count, BUFFER_USAGE_STORAGE_COPY_SRC)),
     scalarMul: (input: GpuBufferRef, count: number, scalar: number): GpuBufferRef => own(runScalarMulBuffer(device, input, count, scalar)),
     add: (a: GpuBufferRef, b: GpuBufferRef, count: number): GpuBufferRef => own({ buffer: runBinaryOpToBuffer(device, "add", a.buffer, b.buffer, count, "tensorTensor"), owned: true }),
+    weightedScalarSum: (scalars: readonly GpuBufferRef[], weights: readonly number[]): GpuBufferRef => own(runWeightedScalarSumBuffer(scalars, weights)),
+    styleLossTerms: async (relu: GpuBufferRef, shape: TensorShape4D, targetGram: GpuBufferRef): Promise<{ inputGram: GpuBufferRef; styleSse: GpuBufferRef }> => {
+      const terms = await runStyleLossTermsFromTargetGramBuffer(acquireMseBuffer, relu, shape, targetGram);
+      return { inputGram: own(terms.inputGram), styleSse: own(terms.styleSse) };
+    },
   };
 
   const backward = {
     styleLossBackward: async (relu: GpuBufferRef, shape: TensorShape4D, targetGram: GpuBufferRef): Promise<GpuBufferRef> => own(await runStyleLossBackwardFromTargetGramBuffer(relu, shape, targetGram)),
+    styleLossBackwardFromInputGram: async (relu: GpuBufferRef, shape: TensorShape4D, inputGram: GpuBufferRef, targetGram: GpuBufferRef): Promise<GpuBufferRef> => own(await runStyleLossBackwardFromInputGramBuffer(relu, shape, inputGram, targetGram)),
     contentLossBackward: async (relu: GpuBufferRef, target: GpuBufferRef, count: number): Promise<GpuBufferRef> => own(await runContentLossBackwardBuffer(relu, target, count)),
     reluBackward: async (reluOut: GpuBufferRef, gradOut: GpuBufferRef, count: number): Promise<GpuBufferRef> => own(await runReluBackwardBuffer(reluOut, gradOut, count)),
     conv2dBackwardInput: async (gradOut: GpuBufferRef, inShape: TensorShape4D, weights: Float32Array, weightShape: TensorShape4D): Promise<GpuBufferRef> => own(await runConv2dBackwardInputBuffer(gradOut, inShape, weights, weightShape)),

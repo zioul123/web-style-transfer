@@ -237,6 +237,16 @@ function App() {
             </label>
           </>
         ) : null}
+        <label className="flex items-center gap-2 md:col-span-2">
+          <input
+            type="checkbox"
+            checked={controls.synchronizePhaseTimings}
+            onChange={(event) =>
+              controls.setSynchronizePhaseTimings(event.target.checked)
+            }
+          />
+          Synchronize phase timings (profiling accuracy)
+        </label>
       </section>
 
       <section className="flex items-center gap-4">

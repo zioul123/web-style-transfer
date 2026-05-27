@@ -25,6 +25,8 @@ export type WorkerRunStyleTransferRequest = {
   styleWeight: number;
   learningRate: number;
   steps: number;
+  lossReadbackInterval?: number;
+  synchronizePhaseTimings?: boolean;
 };
 
 export type WorkerClearStyleTransferSessionRequest = {
