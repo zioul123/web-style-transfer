@@ -7,15 +7,16 @@ export type Vgg19WeightsRecord = Record<
 
 type ManifestTensorEntry = {
   shape: number[];
-  dtype: "float32" | "float16" | "int8";
+  dtype: "float32" | "float16" | "int8" | "int4-packed";
   shard: string;
   offset: number;
   length: number;
   quantization?: {
-    scheme: "per-channel-symmetric";
+    scheme: "per-channel-symmetric" | "per-channel-symmetric-log";
     axis: 0;
     scale: number[];
     zeroPoint: number[];
+    packing?: "int4x2-lsn-first";
   };
 };
 
@@ -27,11 +28,20 @@ type ManifestLayerEntry = {
 export type Vgg19WeightsManifest = {
   modelId: string;
   version: string;
-  format: "fp32-le" | "fp16-le" | "int8-per-channel-le";
+  format:
+    | "fp32-le"
+    | "fp16-le"
+    | "int8-per-channel-le"
+    | "int8log-per-channel-le"
+    | "int4-experimental-le"
+    | "int4log-experimental-le";
   layers: Record<string, ManifestLayerEntry>;
   shards: Array<{ name: string; byteLength: number }>;
   checksums: { algorithm: "sha256"; files: Record<string, string> };
-  quantization: { scheme: "none" | "per-channel-symmetric"; dtype: string };
+  quantization: {
+    scheme: "none" | "per-channel-symmetric" | "per-channel-symmetric-log";
+    dtype: string;
+  };
 };
 
 export type Vgg19ConvLayerCacheEntry = {
@@ -56,7 +66,8 @@ const isTensorShape4D = (value: unknown): value is TensorShape4D =>
 
 const tensorElemCount = (shape: readonly number[]): number => shape.reduce((a, b) => a * b, 1);
 const expectedByteLength = (shape: readonly number[], dtype: ManifestTensorEntry["dtype"]): number =>
-  tensorElemCount(shape) * (dtype === "float32" ? 4 : dtype === "float16" ? 2 : 1);
+  tensorElemCount(shape) *
+  (dtype === "float32" ? 4 : dtype === "float16" ? 2 : dtype === "int8" ? 1 : 0.5);
 const decodeWeights = (entry: ManifestTensorEntry, shard: ArrayBuffer): Float32Array => {
   const bytes = shard.slice(entry.offset, entry.offset + entry.length);
   if (entry.dtype === "float32") return new Float32Array(bytes);
@@ -72,6 +83,38 @@ const decodeWeights = (entry: ManifestTensorEntry, shard: ArrayBuffer): Float32A
     }
     return out;
   }
+  if (entry.dtype === "int4-packed") {
+    if (entry.quantization === undefined) throw new Error("Missing quantization metadata for int4 tensor.");
+    if (entry.quantization.packing !== "int4x2-lsn-first") {
+      throw new Error(`Unsupported int4 packing scheme: ${String(entry.quantization.packing)}.`);
+    }
+    const expectedValues = tensorElemCount(entry.shape);
+    const unpacked = new Int8Array(expectedValues);
+    const packed = new Uint8Array(bytes);
+    for (let idx = 0; idx < expectedValues; idx += 1) {
+      const byte = packed[idx >> 1];
+      const nibble = (idx & 1) === 0 ? byte & 0x0f : (byte >>> 4) & 0x0f;
+      unpacked[idx] = nibble >= 8 ? nibble - 16 : nibble;
+    }
+    const channelCount = entry.shape[entry.quantization.axis];
+    if (entry.quantization.scale.length !== channelCount) throw new Error("Invalid int4 quantization scale length.");
+    const channelStride = tensorElemCount(entry.shape.slice(1));
+    const out = new Float32Array(unpacked.length);
+    for (let channelIndex = 0; channelIndex < channelCount; channelIndex += 1) {
+      const scale = entry.quantization.scale[channelIndex];
+      const zero = entry.quantization.zeroPoint[channelIndex] ?? 0;
+      const start = channelIndex * channelStride;
+      const end = start + channelStride;
+      for (let i = start; i < end; i += 1) {
+        const linear = (unpacked[i] - zero) * scale;
+        out[i] =
+          entry.quantization.scheme === "per-channel-symmetric-log"
+            ? Math.sign(linear) * Math.expm1(Math.abs(linear))
+            : linear;
+      }
+    }
+    return out;
+  }
   const q = new Int8Array(bytes);
   if (entry.quantization === undefined) throw new Error("Missing quantization metadata for int8 tensor.");
   const channelCount = entry.shape[entry.quantization.axis];
@@ -83,7 +126,13 @@ const decodeWeights = (entry: ManifestTensorEntry, shard: ArrayBuffer): Float32A
     const zero = entry.quantization.zeroPoint[channelIndex] ?? 0;
     const start = channelIndex * channelStride;
     const end = start + channelStride;
-    for (let i = start; i < end; i += 1) out[i] = (q[i] - zero) * scale;
+    for (let i = start; i < end; i += 1) {
+      const linear = (q[i] - zero) * scale;
+      out[i] =
+        entry.quantization.scheme === "per-channel-symmetric-log"
+          ? Math.sign(linear) * Math.expm1(Math.abs(linear))
+          : linear;
+    }
   }
   return out;
 };
@@ -118,7 +167,18 @@ export const parseVgg19ManifestBackedLayerCache = async (
   manifest: Vgg19WeightsManifest,
   shardBuffers: Record<string, ArrayBuffer>,
 ): Promise<Vgg19ConvLayerCache> => {
-  if (!["fp32-le", "fp16-le", "int8-per-channel-le"].includes(manifest.format)) throw new Error(`Unsupported weights format: ${manifest.format}`);
+  if (
+    ![
+      "fp32-le",
+      "fp16-le",
+      "int8-per-channel-le",
+      "int8log-per-channel-le",
+      "int4-experimental-le",
+      "int4log-experimental-le",
+    ].includes(manifest.format)
+  ) {
+    throw new Error(`Unsupported weights format: ${manifest.format}`);
+  }
   if (manifest.checksums.algorithm !== "sha256") throw new Error("Unsupported checksum algorithm.");
 
   for (const shardMeta of manifest.shards) {
