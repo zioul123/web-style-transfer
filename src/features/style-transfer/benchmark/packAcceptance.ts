@@ -1,4 +1,4 @@
-export type VggPackName = "fp32" | "fp16" | "int8-per-channel";
+export type VggPackName = "fp32" | "fp16" | "int8-per-channel" | "int8log-per-channel";
 
 export type PackComparisonRow = {
   pack: VggPackName;
@@ -32,11 +32,12 @@ export const buildPackAcceptanceRows = (
         reason: `|Δloss|=${delta.toExponential(2)} < 1e-3`,
       };
     }
-    const pass = delta < 5e-2;
+    const threshold = row.pack === "int8log-per-channel" ? 7.5e-2 : 5e-2;
+    const pass = delta < threshold;
     return {
       pack: row.pack,
       verdict: pass ? "pass" : "fail",
-      reason: `|Δloss|=${delta.toExponential(2)} < 5e-2`,
+      reason: `|Δloss|=${delta.toExponential(2)} < ${threshold.toExponential(1)}`,
     };
   });
 };

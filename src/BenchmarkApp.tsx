@@ -282,7 +282,7 @@ export const BenchmarkApp = (): ReactElement => {
     const fixture = await loadJson<Phase3FullPassFixture>(
       "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
     );
-    const packs: VggPackName[] = ["fp32", "fp16", "int8-per-channel"];
+    const packs: VggPackName[] = ["fp32", "fp16", "int8-per-channel", "int8log-per-channel"];
     const comparisonRows: PackComparisonRow[] = [];
     let finalWeightsResult: { weights: Record<string, number[] | [number, number, number, number]>; stats: WeightLoadStats } | null = null;
     for (const pack of packs) {
