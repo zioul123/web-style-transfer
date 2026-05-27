@@ -37,6 +37,7 @@ test("phase 6 UI defaults match python reference controls", async ({
   page,
 }) => {
   await gotoStableApp(page);
+  await expect(page.getByLabel("Model pack")).toHaveValue("int8log-per-channel");
   await expect(page.getByLabel("Optimizer")).toHaveValue("lbfgs");
   await expect(page.getByLabel("Content resolution")).toHaveValue("128x128");
   await expect(page.getByLabel("Style resolution")).toHaveValue("128x192");
@@ -45,6 +46,51 @@ test("phase 6 UI defaults match python reference controls", async ({
   await expect(page.getByLabel("Learning rate")).toHaveValue("1");
   await expect(page.getByLabel("L-BFGS history")).toHaveValue("100");
   await expect(page.getByLabel("L-BFGS tolerance change")).toHaveValue("1e-9");
+});
+
+test("phase 6 model pack selector reloads manifest-backed weights and supports fp32", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    const requests: string[] = [];
+    (window as Window & { __packFetches?: string[] }).__packFetches = requests;
+    window.fetch = async (...args: Parameters<typeof fetch>) => {
+      const input = args[0];
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof Request
+            ? input.url
+            : String(input);
+      if (url.includes("/vgg19-models/")) requests.push(url);
+      return originalFetch(...args);
+    };
+  });
+  await gotoStableApp(page);
+
+  await expect(page.getByLabel("Model pack")).toHaveValue("int8log-per-channel");
+  await expect
+    .poll(async () => {
+      const urls = await page.evaluate(() => {
+        const state = window as Window & { __packFetches?: string[] };
+        return state.__packFetches ?? [];
+      });
+      return urls.some((url) => url.includes("/vgg19-models/int8log-per-channel/manifest.json"));
+    })
+    .toBeTruthy();
+
+  await page.getByLabel("Model pack").selectOption("fp32");
+  await expect(page.getByLabel("Model pack")).toHaveValue("fp32");
+  await expect
+    .poll(async () => {
+      const urls = await page.evaluate(() => {
+        const state = window as Window & { __packFetches?: string[] };
+        return state.__packFetches ?? [];
+      });
+      return urls.some((url) => url.includes("/vgg19-models/fp32/manifest.json"));
+    })
+    .toBeTruthy();
 });
 
 test("phase 5 full style transfer endpoint returns losses", async ({

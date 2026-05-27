@@ -6,6 +6,7 @@ import type {
   OptimizerMode,
   ResolutionPreset,
 } from "./features/style-transfer/types/controller";
+import { VGG_PACK_OPTIONS, type VggPackName } from "./features/style-transfer/modelPacks";
 
 const resolutionOptions: readonly ResolutionPreset[] = [
   "128x128",
@@ -14,6 +15,11 @@ const resolutionOptions: readonly ResolutionPreset[] = [
   "256x256",
   "256x384",
 ];
+const optimizerOptions: readonly OptimizerMode[] = ["sgd", "adam", "lbfgs"];
+const isOptimizerMode = (value: string): value is OptimizerMode =>
+  optimizerOptions.includes(value as OptimizerMode);
+const isVggPackName = (value: string): value is VggPackName =>
+  VGG_PACK_OPTIONS.some((option) => option.name === value);
 
 type TextureImageSize = {
   readonly width: number;
@@ -118,6 +124,25 @@ function App() {
           </select>
         </label>
         <label className="flex flex-col gap-1">
+          Model pack
+          <select
+            aria-label="Model pack"
+            value={controls.selectedPack}
+            onChange={(event) => {
+              const nextPack = event.target.value;
+              if (isVggPackName(nextPack)) {
+                controls.setSelectedPack(nextPack);
+              }
+            }}
+          >
+            {VGG_PACK_OPTIONS.map((option) => (
+              <option key={option.name} value={option.name}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
           Chunk steps
           <input
             type="number"
@@ -164,9 +189,12 @@ function App() {
           Optimizer
           <select
             value={controls.optimizer}
-            onChange={(event) =>
-              controls.setOptimizer(event.target.value as OptimizerMode)
-            }
+            onChange={(event) => {
+              const nextOptimizer = event.target.value;
+              if (isOptimizerMode(nextOptimizer)) {
+                controls.setOptimizer(nextOptimizer);
+              }
+            }}
           >
             <option value="sgd">SGD</option>
             <option value="adam">Adam</option>

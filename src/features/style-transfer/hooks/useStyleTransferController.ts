@@ -13,9 +13,11 @@ import type {
   UseStyleTransferControllerResult,
 } from "../types/controller";
 import {
-  parseVgg19ManifestBackedLayerCache,
-  type Vgg19WeightsManifest,
-} from "../../../ml/worker/models/vgg19/weights";
+  DEFAULT_VGG_PACK,
+  loadVgg19ManifestWeightsForPack,
+  VGG_PACK_STORAGE_KEY,
+  type VggPackName,
+} from "../modelPacks";
 
 const RESOLUTION_PRESETS: Record<ResolutionPreset, ImageResolution> = {
   "128x128": { width: 128, height: 128 },
@@ -128,6 +130,19 @@ const tensorValuesToDataUrl = (
   return canvas.toDataURL("image/png");
 };
 
+const getInitialPackPreference = (): VggPackName => {
+  const storedPack = localStorage.getItem(VGG_PACK_STORAGE_KEY);
+  if (
+    storedPack === "fp32" ||
+    storedPack === "fp16" ||
+    storedPack === "int8-per-channel" ||
+    storedPack === "int8log-per-channel"
+  ) {
+    return storedPack;
+  }
+  return DEFAULT_VGG_PACK;
+};
+
 export const useStyleTransferController =
   (): UseStyleTransferControllerResult => {
     const [workerStatus, setWorkerStatus] =
@@ -144,12 +159,14 @@ export const useStyleTransferController =
     const [contentWeight, setContentWeight] = useState<number>(1);
     const [styleWeight, setStyleWeight] = useState<number>(500000);
     const [learningRate, setLearningRate] = useState<number>(1);
+    const [selectedPack, setSelectedPackState] =
+      useState<VggPackName>(getInitialPackPreference);
     const [optimizer, setOptimizer] =
       useState<"sgd" | "adam" | "lbfgs">("lbfgs");
     const [adamBeta1, setAdamBeta1] = useState<number>(0.9);
     const [adamBeta2, setAdamBeta2] = useState<number>(0.999);
     const [adamEpsilon, setAdamEpsilon] = useState<number>(1e-8);
-    const [lbfgsMemory, setLbfgsMemory] = useState<number>(100);
+    const [lbfgsMemory, setLbfgsMemory] = useState<number>(10);
     const [lbfgsEpsilon, setLbfgsEpsilon] = useState<number>(1e-9);
     const [synchronizePhaseTimings, setSynchronizePhaseTimings] =
       useState<boolean>(false);
@@ -198,42 +215,27 @@ export const useStyleTransferController =
     };
 
     useEffect(() => {
+      let isCurrent = true;
       const loadWeights = async (): Promise<void> => {
+        setWorkerStatus(`Loading VGG19 weights pack: ${selectedPack}...`);
         try {
-          const manifestResponse = await fetch("/vgg19-models/fp32/manifest.json");
-          if (!manifestResponse.ok) throw new Error("manifest fetch failed");
-          const manifest = (await manifestResponse.json()) as Vgg19WeightsManifest;
-          const shardEntries = await Promise.all(
-            manifest.shards.map(async (shard) => {
-              const response = await fetch(`/vgg19-models/fp32/${shard.name}`);
-              if (!response.ok) throw new Error(`shard fetch failed: ${shard.name}`);
-              return [shard.name, await response.arrayBuffer()] as const;
-            }),
+          const nextWeights = await loadVgg19ManifestWeightsForPack(selectedPack);
+          if (!isCurrent) return;
+          setWeights(nextWeights);
+          setWorkerStatus(`Loaded VGG19 weights pack: ${selectedPack}.`);
+        } catch (error) {
+          if (!isCurrent) return;
+          const message = error instanceof Error ? error.message : String(error);
+          setWorkerStatus(
+            `Failed to load VGG19 weights pack '${selectedPack}': ${message}`,
           );
-          const shardBuffers: Record<string, ArrayBuffer> = Object.fromEntries(shardEntries);
-          const cache = await parseVgg19ManifestBackedLayerCache(manifest, shardBuffers);
-          const legacyWeights: FullWeights = {};
-          for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
-            const layer = cache[layerIndex];
-            if (layer === undefined) continue;
-            legacyWeights[`conv${layerIndex}.weightShape`] = [...layer.shape];
-            legacyWeights[`conv${layerIndex}.weightValues`] = Array.from(layer.values);
-            legacyWeights[`conv${layerIndex}.biasValues`] = Array.from(layer.bias);
-          }
-          setWeights(legacyWeights);
-          return;
-        } catch (_error) {
-          const legacyResponse = await fetch("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
-          if (!legacyResponse.ok) {
-            setWorkerStatus("Failed to load VGG19 weights artifacts (manifest and legacy). ");
-            return;
-          }
-          const legacyJson = (await legacyResponse.json()) as FullWeights;
-          setWeights(legacyJson);
         }
       };
       void loadWeights();
-    }, []);
+      return () => {
+        isCurrent = false;
+      };
+    }, [selectedPack]);
 
     useEffect(() => {
       const worker = new Worker(
@@ -481,6 +483,18 @@ export const useStyleTransferController =
       setIsRunning(false);
     };
 
+    const setSelectedPack: Dispatch<SetStateAction<VggPackName>> = (update) => {
+      const nextPack = toResolvedState(update, selectedPack);
+      if (nextPack === selectedPack) return;
+      localStorage.setItem(VGG_PACK_STORAGE_KEY, nextPack);
+      rotateOptimizationSession(true);
+      setIterations(0);
+      setLastLoss(null);
+      setRunStats(null);
+      setIsRunning(false);
+      setSelectedPackState(nextPack);
+    };
+
     return {
       controls: {
         contentResolution,
@@ -500,6 +514,8 @@ export const useStyleTransferController =
             learningRate,
             setLearningRate,
           ),
+        selectedPack,
+        setSelectedPack,
         optimizer,
         setOptimizer: (update) =>
           updateOptimizerConfigWhenPaused(update, optimizer, setOptimizer),
