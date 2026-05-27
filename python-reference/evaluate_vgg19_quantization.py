@@ -13,6 +13,14 @@ STYLE_LAYER_INDICES = [1, 6, 11, 20, 29]
 CONTENT_LAYER_INDEX = 22
 LAST_LAYER_INDEX = 29
 
+PACK_ACCEPTANCE_RULES: dict[str, tuple[str, float]] = {
+    'fp16': ('fp16NearBaseline', 1e-3),
+    'int8-per-channel': ('int8Acceptable', 5e-2),
+    'int8log-per-channel': ('int8LogAcceptable', 7.5e-2),
+    'int4-experimental': ('int4ExperimentalAcceptable', 1e-1),
+    'int4log-experimental': ('int4LogExperimentalAcceptable', 1.5e-1),
+}
+
 
 def _unpack_int4_to_int8(data: bytes, expected_values: int) -> torch.Tensor:
     unpacked = torch.empty(expected_values, dtype=torch.int8)
@@ -106,16 +114,17 @@ def main() -> None:
         style_loss_base = sum(torch.nn.functional.mse_loss(gram_matrix(baseline_layers[idx]), gram_matrix(_forward_layers(baseline, style_image)[idx])).item() for idx in STYLE_LAYER_INDICES)
         content_loss = torch.nn.functional.mse_loss(layers[CONTENT_LAYER_INDEX], _forward_layers(model, content_image)[CONTENT_LAYER_INDEX]).item()
         content_loss_base = torch.nn.functional.mse_loss(baseline_layers[CONTENT_LAYER_INDEX], _forward_layers(baseline, content_image)[CONTENT_LAYER_INDEX]).item()
+        acceptance_name, acceptance_threshold = PACK_ACCEPTANCE_RULES[pack]
+        style_delta = style_loss - style_loss_base
         report['packs'][pack] = {
             'perLayerMae': layer_error,
-            'styleLossDelta': style_loss - style_loss_base,
+            'styleLossDelta': style_delta,
             'contentLossDelta': content_loss - content_loss_base,
             'acceptance': {
-                'fp16NearBaseline': pack != 'fp16' or abs(style_loss - style_loss_base) < 1e-3,
-                'int8Acceptable': pack != 'int8-per-channel' or abs(style_loss - style_loss_base) < 5e-2,
-                'int8LogAcceptable': pack != 'int8log-per-channel' or abs(style_loss - style_loss_base) < 7.5e-2,
-                'int4ExperimentalAcceptable': pack != 'int4-experimental' or abs(style_loss - style_loss_base) < 1e-1,
-                'int4LogExperimentalAcceptable': pack != 'int4log-experimental' or abs(style_loss - style_loss_base) < 1.5e-1,
+                'name': acceptance_name,
+                'passed': abs(style_delta) < acceptance_threshold,
+                'threshold': acceptance_threshold,
+                'metric': 'abs(styleLossDelta)',
             },
         }
 

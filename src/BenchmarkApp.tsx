@@ -1,5 +1,6 @@
 import { useState, type ReactElement } from "react";
 import { buildPackAcceptanceRows, type PackComparisonRow, type VggPackName } from "./features/style-transfer/benchmark/packAcceptance";
+import { parseVgg19ManifestBackedLayerCache, type Vgg19WeightsManifest } from "./ml/worker/models/vgg19/weights";
 import type {
   WorkerFirstPoolBenchmarkStats,
   WorkerRequest,
@@ -90,16 +91,7 @@ const loadJson = async <T,>(url: string): Promise<T> => {
 
 const loadManifestWeights = async (pack: VggPackName): Promise<{ weights: Record<string, number[] | [number, number, number, number]>; stats: WeightLoadStats }> => {
   const decodeStart = performance.now();
-  const manifest = await loadJson<{
-    layers: Record<
-      string,
-      {
-        weight: { shape: number[]; shard: string; offset: number; length: number };
-        bias: { shard: string; offset: number; length: number };
-      }
-    >;
-    shards: Array<{ name: string }>;
-  }>(`/vgg19-models/${pack}/manifest.json`);
+  const manifest = await loadJson<Vgg19WeightsManifest>(`/vgg19-models/${pack}/manifest.json`);
   const shardEntries = await Promise.all(
     manifest.shards.map(async (shard) => {
       const response = await fetch(`/vgg19-models/${pack}/${shard.name}`);
@@ -108,32 +100,14 @@ const loadManifestWeights = async (pack: VggPackName): Promise<{ weights: Record
     }),
   );
   const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(shardEntries);
+  const layerCache = await parseVgg19ManifestBackedLayerCache(manifest, shardMap);
   const weights: Record<string, number[] | [number, number, number, number]> = {};
   for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
-    const layer = manifest.layers[`conv${layerIndex}`];
+    const layer = layerCache[layerIndex];
     if (layer === undefined) continue;
-    weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [
-      number,
-      number,
-      number,
-      number,
-    ];
-    weights[`conv${layerIndex}.weightValues`] = Array.from(
-      new Float32Array(
-        shardMap[layer.weight.shard].slice(
-          layer.weight.offset,
-          layer.weight.offset + layer.weight.length,
-        ),
-      ),
-    );
-    weights[`conv${layerIndex}.biasValues`] = Array.from(
-      new Float32Array(
-        shardMap[layer.bias.shard].slice(
-          layer.bias.offset,
-          layer.bias.offset + layer.bias.length,
-        ),
-      ),
-    );
+    weights[`conv${layerIndex}.weightShape`] = [...layer.shape] as [number, number, number, number];
+    weights[`conv${layerIndex}.weightValues`] = Array.from(layer.values);
+    weights[`conv${layerIndex}.biasValues`] = Array.from(layer.bias);
   }
   const downloadSizeBytes = shardEntries.reduce((acc, [, buffer]) => acc + buffer.byteLength, 0);
   return { weights, stats: { downloadSizeBytes, decodeLoadMs: performance.now() - decodeStart } };
