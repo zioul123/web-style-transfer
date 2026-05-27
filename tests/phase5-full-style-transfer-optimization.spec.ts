@@ -2,6 +2,21 @@ import { expect, test } from "@playwright/test";
 import type { WorkerRequest, WorkerResponse } from "../src/types";
 import { gotoStableApp } from "./helpers/appPage";
 
+
+
+type ManifestTensorEntry = {
+  shape: number[];
+  dtype: "float32";
+  shard: string;
+  offset: number;
+  length: number;
+};
+
+type Vgg19Manifest = {
+  layers: Record<string, { weight: ManifestTensorEntry; bias: ManifestTensorEntry }>;
+  shards: Array<{ name: string; byteLength: number }>;
+};
+
 type Phase3FullPassFixture = {
   inputShape: [number, number, number, number];
   inputImageValues: number[];
@@ -48,9 +63,36 @@ test("phase 5 full style transfer endpoint returns losses", async ({
         return null;
       }
     };
-    const weights = await loadJson<
-      Record<string, number[] | [number, number, number, number]>
-    >("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
+    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/manifest.json");
+    if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
+    const shardPayload = await Promise.all(
+      manifest.shards.map(async (shard) => {
+        const response = await fetch(`/vgg19-models/${shard.name}`);
+        if (!response.ok) return null;
+        return [shard.name, await response.arrayBuffer()] as const;
+      }),
+    );
+    if (shardPayload.some((entry) => entry === null))
+      return { ok: false as const, reason: "missing-fixtures" as const };
+    const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(
+      shardPayload as Array<readonly [string, ArrayBuffer]>,
+    );
+    const weights: Record<string, number[] | [number, number, number, number]> = {};
+    for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
+      const layer = manifest.layers[`conv${layerIndex}`];
+      if (layer === undefined) continue;
+      const weightBytes = shardMap[layer.weight.shard].slice(
+        layer.weight.offset,
+        layer.weight.offset + layer.weight.length,
+      );
+      const biasBytes = shardMap[layer.bias.shard].slice(
+        layer.bias.offset,
+        layer.bias.offset + layer.bias.length,
+      );
+      weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [number, number, number, number];
+      weights[`conv${layerIndex}.weightValues`] = Array.from(new Float32Array(weightBytes));
+      weights[`conv${layerIndex}.biasValues`] = Array.from(new Float32Array(biasBytes));
+    }
     const fixture = await loadJson<Phase3FullPassFixture>(
       "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
     );
@@ -130,9 +172,36 @@ test("phase 5 full style transfer supports rectangular style shape", async ({
         return null;
       }
     };
-    const weights = await loadJson<
-      Record<string, number[] | [number, number, number, number]>
-    >("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
+    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/manifest.json");
+    if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
+    const shardPayload = await Promise.all(
+      manifest.shards.map(async (shard) => {
+        const response = await fetch(`/vgg19-models/${shard.name}`);
+        if (!response.ok) return null;
+        return [shard.name, await response.arrayBuffer()] as const;
+      }),
+    );
+    if (shardPayload.some((entry) => entry === null))
+      return { ok: false as const, reason: "missing-fixtures" as const };
+    const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(
+      shardPayload as Array<readonly [string, ArrayBuffer]>,
+    );
+    const weights: Record<string, number[] | [number, number, number, number]> = {};
+    for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
+      const layer = manifest.layers[`conv${layerIndex}`];
+      if (layer === undefined) continue;
+      const weightBytes = shardMap[layer.weight.shard].slice(
+        layer.weight.offset,
+        layer.weight.offset + layer.weight.length,
+      );
+      const biasBytes = shardMap[layer.bias.shard].slice(
+        layer.bias.offset,
+        layer.bias.offset + layer.bias.length,
+      );
+      weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [number, number, number, number];
+      weights[`conv${layerIndex}.weightValues`] = Array.from(new Float32Array(weightBytes));
+      weights[`conv${layerIndex}.biasValues`] = Array.from(new Float32Array(biasBytes));
+    }
     if (weights === null)
       return { ok: false as const, reason: "missing-fixtures" as const };
 
@@ -229,9 +298,36 @@ test("phase 5 run-style-transfer first-step gradient matches pytorch oracle", as
         return null;
       }
     };
-    const weights = await loadJson<
-      Record<string, number[] | [number, number, number, number]>
-    >("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
+    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/manifest.json");
+    if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
+    const shardPayload = await Promise.all(
+      manifest.shards.map(async (shard) => {
+        const response = await fetch(`/vgg19-models/${shard.name}`);
+        if (!response.ok) return null;
+        return [shard.name, await response.arrayBuffer()] as const;
+      }),
+    );
+    if (shardPayload.some((entry) => entry === null))
+      return { ok: false as const, reason: "missing-fixtures" as const };
+    const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(
+      shardPayload as Array<readonly [string, ArrayBuffer]>,
+    );
+    const weights: Record<string, number[] | [number, number, number, number]> = {};
+    for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
+      const layer = manifest.layers[`conv${layerIndex}`];
+      if (layer === undefined) continue;
+      const weightBytes = shardMap[layer.weight.shard].slice(
+        layer.weight.offset,
+        layer.weight.offset + layer.weight.length,
+      );
+      const biasBytes = shardMap[layer.bias.shard].slice(
+        layer.bias.offset,
+        layer.bias.offset + layer.bias.length,
+      );
+      weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [number, number, number, number];
+      weights[`conv${layerIndex}.weightValues`] = Array.from(new Float32Array(weightBytes));
+      weights[`conv${layerIndex}.biasValues`] = Array.from(new Float32Array(biasBytes));
+    }
     const fixture = await loadJson<Phase3FullPassFixture>(
       "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
     );
@@ -338,9 +434,36 @@ test("phase 5 weighted first-step gradient composes content and style gradients"
         return null;
       }
     };
-    const weights = await loadJson<
-      Record<string, number[] | [number, number, number, number]>
-    >("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
+    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/manifest.json");
+    if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
+    const shardPayload = await Promise.all(
+      manifest.shards.map(async (shard) => {
+        const response = await fetch(`/vgg19-models/${shard.name}`);
+        if (!response.ok) return null;
+        return [shard.name, await response.arrayBuffer()] as const;
+      }),
+    );
+    if (shardPayload.some((entry) => entry === null))
+      return { ok: false as const, reason: "missing-fixtures" as const };
+    const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(
+      shardPayload as Array<readonly [string, ArrayBuffer]>,
+    );
+    const weights: Record<string, number[] | [number, number, number, number]> = {};
+    for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
+      const layer = manifest.layers[`conv${layerIndex}`];
+      if (layer === undefined) continue;
+      const weightBytes = shardMap[layer.weight.shard].slice(
+        layer.weight.offset,
+        layer.weight.offset + layer.weight.length,
+      );
+      const biasBytes = shardMap[layer.bias.shard].slice(
+        layer.bias.offset,
+        layer.bias.offset + layer.bias.length,
+      );
+      weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [number, number, number, number];
+      weights[`conv${layerIndex}.weightValues`] = Array.from(new Float32Array(weightBytes));
+      weights[`conv${layerIndex}.biasValues`] = Array.from(new Float32Array(biasBytes));
+    }
     const fixture = await loadJson<Phase3FullPassFixture>(
       "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
     );
@@ -457,9 +580,36 @@ test("phase 5 style transfer supports adam and lbfgs", async ({
         return null;
       }
     };
-    const weights = await loadJson<
-      Record<string, number[] | [number, number, number, number]>
-    >("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
+    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/manifest.json");
+    if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
+    const shardPayload = await Promise.all(
+      manifest.shards.map(async (shard) => {
+        const response = await fetch(`/vgg19-models/${shard.name}`);
+        if (!response.ok) return null;
+        return [shard.name, await response.arrayBuffer()] as const;
+      }),
+    );
+    if (shardPayload.some((entry) => entry === null))
+      return { ok: false as const, reason: "missing-fixtures" as const };
+    const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(
+      shardPayload as Array<readonly [string, ArrayBuffer]>,
+    );
+    const weights: Record<string, number[] | [number, number, number, number]> = {};
+    for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
+      const layer = manifest.layers[`conv${layerIndex}`];
+      if (layer === undefined) continue;
+      const weightBytes = shardMap[layer.weight.shard].slice(
+        layer.weight.offset,
+        layer.weight.offset + layer.weight.length,
+      );
+      const biasBytes = shardMap[layer.bias.shard].slice(
+        layer.bias.offset,
+        layer.bias.offset + layer.bias.length,
+      );
+      weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [number, number, number, number];
+      weights[`conv${layerIndex}.weightValues`] = Array.from(new Float32Array(weightBytes));
+      weights[`conv${layerIndex}.biasValues`] = Array.from(new Float32Array(biasBytes));
+    }
     const fixture = await loadJson<Phase3FullPassFixture>(
       "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
     );

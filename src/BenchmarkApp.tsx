@@ -81,6 +81,57 @@ const loadJson = async <T,>(url: string): Promise<T> => {
   return (await response.json()) as T;
 };
 
+const loadManifestWeights = async (): Promise<
+  Record<string, number[] | [number, number, number, number]>
+> => {
+  const manifest = await loadJson<{
+    layers: Record<
+      string,
+      {
+        weight: { shape: number[]; shard: string; offset: number; length: number };
+        bias: { shard: string; offset: number; length: number };
+      }
+    >;
+    shards: Array<{ name: string }>;
+  }>("/vgg19-models/manifest.json");
+  const shardEntries = await Promise.all(
+    manifest.shards.map(async (shard) => {
+      const response = await fetch(`/vgg19-models/${shard.name}`);
+      if (!response.ok) throw new Error(`Missing weight shard: ${shard.name}`);
+      return [shard.name, await response.arrayBuffer()] as const;
+    }),
+  );
+  const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(shardEntries);
+  const weights: Record<string, number[] | [number, number, number, number]> = {};
+  for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
+    const layer = manifest.layers[`conv${layerIndex}`];
+    if (layer === undefined) continue;
+    weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [
+      number,
+      number,
+      number,
+      number,
+    ];
+    weights[`conv${layerIndex}.weightValues`] = Array.from(
+      new Float32Array(
+        shardMap[layer.weight.shard].slice(
+          layer.weight.offset,
+          layer.weight.offset + layer.weight.length,
+        ),
+      ),
+    );
+    weights[`conv${layerIndex}.biasValues`] = Array.from(
+      new Float32Array(
+        shardMap[layer.bias.shard].slice(
+          layer.bias.offset,
+          layer.bias.offset + layer.bias.length,
+        ),
+      ),
+    );
+  }
+  return weights;
+};
+
 const askWorker = (
   worker: Worker,
   payload: WorkerRequest,
@@ -244,9 +295,7 @@ export const BenchmarkApp = (): ReactElement => {
   const runFullStyleBenchmark = async (worker: Worker): Promise<void> => {
     setStatus("Loading full style-transfer fixtures...");
     const [weights, fixture] = await Promise.all([
-      loadJson<Record<string, number[] | [number, number, number, number]>>(
-        "/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json",
-      ),
+      loadManifestWeights(),
       loadJson<Phase3FullPassFixture>(
         "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
       ),

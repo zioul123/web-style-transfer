@@ -12,6 +12,10 @@ import type {
   ResolutionPreset,
   UseStyleTransferControllerResult,
 } from "../types/controller";
+import {
+  parseVgg19ManifestBackedLayerCache,
+  type Vgg19WeightsManifest,
+} from "../../../ml/worker/models/vgg19/weights";
 
 const RESOLUTION_PRESETS: Record<ResolutionPreset, ImageResolution> = {
   "128x128": { width: 128, height: 128 },
@@ -194,12 +198,41 @@ export const useStyleTransferController =
     };
 
     useEffect(() => {
-      void fetch("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json")
-        .then(async (response) => await response.json())
-        .then((json: FullWeights) => setWeights(json))
-        .catch(() =>
-          setWorkerStatus("Failed to load full VGG19 weights artifact."),
-        );
+      const loadWeights = async (): Promise<void> => {
+        try {
+          const manifestResponse = await fetch("/vgg19-models/manifest.json");
+          if (!manifestResponse.ok) throw new Error("manifest fetch failed");
+          const manifest = (await manifestResponse.json()) as Vgg19WeightsManifest;
+          const shardEntries = await Promise.all(
+            manifest.shards.map(async (shard) => {
+              const response = await fetch(`/vgg19-models/${shard.name}`);
+              if (!response.ok) throw new Error(`shard fetch failed: ${shard.name}`);
+              return [shard.name, await response.arrayBuffer()] as const;
+            }),
+          );
+          const shardBuffers: Record<string, ArrayBuffer> = Object.fromEntries(shardEntries);
+          const cache = await parseVgg19ManifestBackedLayerCache(manifest, shardBuffers);
+          const legacyWeights: FullWeights = {};
+          for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
+            const layer = cache[layerIndex];
+            if (layer === undefined) continue;
+            legacyWeights[`conv${layerIndex}.weightShape`] = [...layer.shape];
+            legacyWeights[`conv${layerIndex}.weightValues`] = Array.from(layer.values);
+            legacyWeights[`conv${layerIndex}.biasValues`] = Array.from(layer.bias);
+          }
+          setWeights(legacyWeights);
+          return;
+        } catch (_error) {
+          const legacyResponse = await fetch("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
+          if (!legacyResponse.ok) {
+            setWorkerStatus("Failed to load VGG19 weights artifacts (manifest and legacy). ");
+            return;
+          }
+          const legacyJson = (await legacyResponse.json()) as FullWeights;
+          setWeights(legacyJson);
+        }
+      };
+      void loadWeights();
     }, []);
 
     useEffect(() => {
