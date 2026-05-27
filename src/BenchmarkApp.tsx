@@ -312,29 +312,41 @@ export const BenchmarkApp = (): ReactElement => {
     const comparisonRows: PackComparisonRow[] = [];
     let finalWeightsResult: { weights: Record<string, number[] | [number, number, number, number]>; stats: WeightLoadStats } | null = null;
     for (const pack of packs) {
-      const weightsResult = await loadManifestWeights(pack);
-      if (pack === "fp32") finalWeightsResult = weightsResult;
-      await initializeWorker(worker);
-      const singleRun = await askWorker(worker, {
-        type: "run-style-transfer",
-        id: `benchmark-full-style-compare-${pack}`,
-        optimizer: "sgd",
-        inputShape: fixture.inputShape,
-        inputImageValues: fixture.inputImageValues,
-        contentImageValues: fixture.contentImageValues,
-        styleImageValues: fixture.styleImageValues,
-        mean: fixture.mean,
-        std: fixture.std,
-        styleLayerIndices: fixture.styleLayerIndices,
-        contentLayerIndex: fixture.contentLayerIndex,
-        weights: weightsResult.weights,
-        contentWeight: fullContentWeight,
-        styleWeight: fullStyleWeight,
-        learningRate: fullLearningRate,
-        steps: fullSteps,
-      });
-      if (singleRun.type !== "run-style-transfer-result" || !singleRun.ok) throw new Error("Pack comparison run failed.");
-      comparisonRows.push({ pack, elapsedMs: singleRun.stats.elapsedMs, avgStepMs: singleRun.stats.avgStepMs, finalLoss: singleRun.losses.at(-1) ?? 0, downloadSizeBytes: weightsResult.stats.downloadSizeBytes });
+      try {
+        setStatus(`Loading ${pack} weights for pack comparison...`);
+        const weightsResult = await loadManifestWeights(pack);
+        if (pack === "fp32") finalWeightsResult = weightsResult;
+        await initializeWorker(worker);
+        setStatus(`Running pack comparison for ${pack}...`);
+        const singleRun = await askWorker(worker, {
+          type: "run-style-transfer",
+          id: `benchmark-full-style-compare-${pack}`,
+          optimizer: "sgd",
+          inputShape: fixture.inputShape,
+          inputImageValues: fixture.inputImageValues,
+          contentImageValues: fixture.contentImageValues,
+          styleImageValues: fixture.styleImageValues,
+          mean: fixture.mean,
+          std: fixture.std,
+          styleLayerIndices: fixture.styleLayerIndices,
+          contentLayerIndex: fixture.contentLayerIndex,
+          weights: weightsResult.weights,
+          contentWeight: fullContentWeight,
+          styleWeight: fullStyleWeight,
+          learningRate: fullLearningRate,
+          steps: fullSteps,
+        });
+        if (singleRun.type !== "run-style-transfer-result") {
+          throw new Error(`Unexpected worker response type: ${singleRun.type}`);
+        }
+        if (!singleRun.ok) {
+          throw new Error(singleRun.message);
+        }
+        comparisonRows.push({ pack, elapsedMs: singleRun.stats.elapsedMs, avgStepMs: singleRun.stats.avgStepMs, finalLoss: singleRun.losses.at(-1) ?? 0, downloadSizeBytes: weightsResult.stats.downloadSizeBytes });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        throw new Error(`Pack comparison failed for ${pack}: ${errorMessage}`);
+      }
     }
     setPackComparison(comparisonRows);
     setPackAcceptance(buildPackAcceptanceRows(comparisonRows));
