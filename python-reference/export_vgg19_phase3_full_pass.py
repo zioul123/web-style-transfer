@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -13,9 +14,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ASSET_CONTENT_PATH = REPO_ROOT / 'assets' / 'madeira_128x128.jpg'
 ASSET_STYLE_PATH = REPO_ROOT / 'assets' / 'starry_night_768x970.jpg'
 OUTPUT_DIR = REPO_ROOT / 'public' / 'vgg19-phase3-full-pass'
+MODEL_OUTPUT_DIR = REPO_ROOT / 'public' / 'vgg19-models'
 
-STYLE_LAYER_INDICES = [1, 6, 11, 20, 29]  # relu1_1, relu2_1, relu3_1, relu4_1, relu5_1
-CONTENT_LAYER_INDEX = 22  # relu4_2
+STYLE_LAYER_INDICES = [1, 6, 11, 20, 29]
+CONTENT_LAYER_INDEX = 22
 LAST_LAYER_INDEX = 29
 
 
@@ -35,10 +37,96 @@ def load_image(path: Path, size: int) -> torch.Tensor:
     return TF.to_tensor(image).unsqueeze(0)
 
 
-def export() -> None:
+def sha256_hex(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool) -> None:
+    MODEL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    shard_name = 'shard-000.bin'
+    shard_path = MODEL_OUTPUT_DIR / shard_name
+
+    layers: dict[str, dict[str, object]] = {}
+    legacy_payload: dict[str, object] = {}
+    cursor = 0
+
+    with shard_path.open('wb') as shard_file:
+        for layer_index in range(0, LAST_LAYER_INDEX + 1):
+            layer = model[layer_index]
+            if not isinstance(layer, nn.Conv2d):
+                continue
+            if layer.bias is None:
+                raise RuntimeError(f'Expected bias for conv layer {layer_index}')
+
+            weight = layer.weight.detach().cpu().contiguous().to(torch.float32)
+            bias = layer.bias.detach().cpu().contiguous().to(torch.float32)
+            weight_bytes = weight.numpy().tobytes(order='C')
+            bias_bytes = bias.numpy().tobytes(order='C')
+            weight_offset = cursor
+            shard_file.write(weight_bytes)
+            cursor += len(weight_bytes)
+            bias_offset = cursor
+            shard_file.write(bias_bytes)
+            cursor += len(bias_bytes)
+
+            layers[f'conv{layer_index}'] = {
+                'weight': {
+                    'shape': list(weight.shape),
+                    'dtype': 'float32',
+                    'shard': shard_name,
+                    'offset': weight_offset,
+                    'length': len(weight_bytes),
+                },
+                'bias': {
+                    'shape': [bias.numel()],
+                    'dtype': 'float32',
+                    'shard': shard_name,
+                    'offset': bias_offset,
+                    'length': len(bias_bytes),
+                },
+            }
+            legacy_payload[f'conv{layer_index}.weightShape'] = list(weight.shape)
+            legacy_payload[f'conv{layer_index}.weightValues'] = tensor_to_list(weight)
+            legacy_payload[f'conv{layer_index}.biasValues'] = tensor_to_list(bias)
+
+    manifest = {
+        'modelId': 'vgg19-features-conv0-28',
+        'version': '1.0.0',
+        'format': 'float32-le',
+        'layers': layers,
+        'shards': [{
+            'name': shard_name,
+            'byteLength': cursor,
+        }],
+        'checksums': {
+            'algorithm': 'sha256',
+            'files': {
+                shard_name: sha256_hex(shard_path),
+            },
+        },
+        'quantization': {
+            'scheme': 'none',
+            'dtype': 'float32',
+            'scale': None,
+            'zeroPoint': None,
+        },
+    }
+
+    manifest_path = MODEL_OUTPUT_DIR / 'manifest.json'
+    manifest_path.write_text(json.dumps(manifest))
+    manifest = json.loads(manifest_path.read_text())
+    manifest['checksums']['files']['manifest.json'] = sha256_hex(manifest_path)
+    manifest_path.write_text(json.dumps(manifest))
+
+    if emit_legacy_json:
+        (MODEL_OUTPUT_DIR / 'vgg19_conv0_to_conv28_weights.json').write_text(json.dumps(legacy_payload))
+
+
+def export(emit_legacy_json: bool = True) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     model = vgg19(weights=VGG19_Weights.DEFAULT).features.eval()
+    export_weights_manifest(model, emit_legacy_json)
     truncated_layers = nn.Sequential(*list(model.children())[: LAST_LAYER_INDEX + 1])
 
     torch.manual_seed(13)
@@ -55,14 +143,6 @@ def export() -> None:
     content_norm = (content - mean) / std
     style_norm = (style - mean) / std
     input_norm = (input_image - mean) / std
-
-    weights_payload: dict[str, object] = {}
-    for layer_index in range(0, LAST_LAYER_INDEX + 1):
-      layer = model[layer_index]
-      if isinstance(layer, nn.Conv2d):
-        weights_payload[f'conv{layer_index}.weightShape'] = list(layer.weight.shape)
-        weights_payload[f'conv{layer_index}.weightValues'] = tensor_to_list(layer.weight)
-        weights_payload[f'conv{layer_index}.biasValues'] = tensor_to_list(layer.bias)
 
     content_features = content_norm
     style_features = style_norm
@@ -126,9 +206,12 @@ def export() -> None:
       },
     }
 
-    (OUTPUT_DIR / 'vgg19_conv0_to_conv28_weights.json').write_text(json.dumps(weights_payload))
     (OUTPUT_DIR / 'vgg19_phase3_full_pass_fixture.json').write_text(json.dumps(fixture_payload))
-    print(f'Wrote artifacts to: {OUTPUT_DIR}')
+    if emit_legacy_json:
+      (OUTPUT_DIR / 'vgg19_conv0_to_conv28_weights.json').write_text(
+          (MODEL_OUTPUT_DIR / 'vgg19_conv0_to_conv28_weights.json').read_text()
+      )
+    print(f'Wrote artifacts to: {OUTPUT_DIR} and {MODEL_OUTPUT_DIR}')
 
 
 if __name__ == '__main__':
