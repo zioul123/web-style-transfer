@@ -247,7 +247,7 @@ def export(emit_legacy_json: bool = True, packs: tuple[str, ...] = PACKS) -> Non
     (OUTPUT_DIR / 'vgg19_phase3_full_pass_fixture.json').write_text(json.dumps(fixture_payload))
     if emit_legacy_json:
       (OUTPUT_DIR / 'vgg19_conv0_to_conv28_weights.json').write_text(
-          (MODEL_OUTPUT_DIR / 'vgg19_conv0_to_conv28_weights.json').read_text()
+          (MODEL_OUTPUT_DIR / 'fp32' / 'vgg19_conv0_to_conv28_weights.json').read_text()
       )
     print(f'Wrote artifacts to: {OUTPUT_DIR} and {MODEL_OUTPUT_DIR}')
 
