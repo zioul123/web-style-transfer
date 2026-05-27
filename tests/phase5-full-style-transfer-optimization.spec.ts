@@ -63,11 +63,11 @@ test("phase 5 full style transfer endpoint returns losses", async ({
         return null;
       }
     };
-    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/manifest.json");
+    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/fp32/manifest.json");
     if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
     const shardPayload = await Promise.all(
       manifest.shards.map(async (shard) => {
-        const response = await fetch(`/vgg19-models/${shard.name}`);
+        const response = await fetch(`/vgg19-models/fp32/${shard.name}`);
         if (!response.ok) return null;
         return [shard.name, await response.arrayBuffer()] as const;
       }),
@@ -172,11 +172,11 @@ test("phase 5 full style transfer supports rectangular style shape", async ({
         return null;
       }
     };
-    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/manifest.json");
+    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/fp32/manifest.json");
     if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
     const shardPayload = await Promise.all(
       manifest.shards.map(async (shard) => {
-        const response = await fetch(`/vgg19-models/${shard.name}`);
+        const response = await fetch(`/vgg19-models/fp32/${shard.name}`);
         if (!response.ok) return null;
         return [shard.name, await response.arrayBuffer()] as const;
       }),
@@ -298,11 +298,11 @@ test("phase 5 run-style-transfer first-step gradient matches pytorch oracle", as
         return null;
       }
     };
-    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/manifest.json");
+    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/fp32/manifest.json");
     if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
     const shardPayload = await Promise.all(
       manifest.shards.map(async (shard) => {
-        const response = await fetch(`/vgg19-models/${shard.name}`);
+        const response = await fetch(`/vgg19-models/fp32/${shard.name}`);
         if (!response.ok) return null;
         return [shard.name, await response.arrayBuffer()] as const;
       }),
@@ -434,11 +434,11 @@ test("phase 5 weighted first-step gradient composes content and style gradients"
         return null;
       }
     };
-    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/manifest.json");
+    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/fp32/manifest.json");
     if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
     const shardPayload = await Promise.all(
       manifest.shards.map(async (shard) => {
-        const response = await fetch(`/vgg19-models/${shard.name}`);
+        const response = await fetch(`/vgg19-models/fp32/${shard.name}`);
         if (!response.ok) return null;
         return [shard.name, await response.arrayBuffer()] as const;
       }),
@@ -580,11 +580,11 @@ test("phase 5 style transfer supports adam and lbfgs", async ({
         return null;
       }
     };
-    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/manifest.json");
+    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/fp32/manifest.json");
     if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
     const shardPayload = await Promise.all(
       manifest.shards.map(async (shard) => {
-        const response = await fetch(`/vgg19-models/${shard.name}`);
+        const response = await fetch(`/vgg19-models/fp32/${shard.name}`);
         if (!response.ok) return null;
         return [shard.name, await response.arrayBuffer()] as const;
       }),
