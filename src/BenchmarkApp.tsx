@@ -1,4 +1,6 @@
 import { useState, type ReactElement } from "react";
+import { buildPackAcceptanceRows, type PackComparisonRow, type VggPackName } from "./features/style-transfer/benchmark/packAcceptance";
+import { parseVgg19ManifestBackedLayerCache, type Vgg19WeightsManifest } from "./ml/worker/models/vgg19/weights";
 import type {
   WorkerFirstPoolBenchmarkStats,
   WorkerRequest,
@@ -43,6 +45,7 @@ type BenchmarkStats = WorkerFirstPoolBenchmarkStats | WorkerRunStats;
 type BenchmarkResult = {
   losses: number[];
   stats?: BenchmarkStats;
+  pack?: VggPackName;
 };
 
 type MetricSummary = { mean: number; p50: number; p95: number };
@@ -57,7 +60,12 @@ type BenchmarkRunSummary = {
   readbackMs?: MetricSummary;
   mandatoryReadbackMs?: MetricSummary;
   diagnosticsReadbackMs?: MetricSummary;
+  downloadSizeBytes?: number;
+  decodeLoadMs?: number;
+  firstIterationMs?: number;
+  peakMemoryBytes?: number;
 };
+type WeightLoadStats = { downloadSizeBytes: number; decodeLoadMs: number };
 
 const percentile = (sortedValues: readonly number[], p: number): number => {
   if (sortedValues.length === 0) return 0;
@@ -81,55 +89,28 @@ const loadJson = async <T,>(url: string): Promise<T> => {
   return (await response.json()) as T;
 };
 
-const loadManifestWeights = async (): Promise<
-  Record<string, number[] | [number, number, number, number]>
-> => {
-  const manifest = await loadJson<{
-    layers: Record<
-      string,
-      {
-        weight: { shape: number[]; shard: string; offset: number; length: number };
-        bias: { shard: string; offset: number; length: number };
-      }
-    >;
-    shards: Array<{ name: string }>;
-  }>("/vgg19-models/manifest.json");
+const loadManifestWeights = async (pack: VggPackName): Promise<{ weights: Record<string, number[] | [number, number, number, number]>; stats: WeightLoadStats }> => {
+  const decodeStart = performance.now();
+  const manifest = await loadJson<Vgg19WeightsManifest>(`/vgg19-models/${pack}/manifest.json`);
   const shardEntries = await Promise.all(
     manifest.shards.map(async (shard) => {
-      const response = await fetch(`/vgg19-models/${shard.name}`);
+      const response = await fetch(`/vgg19-models/${pack}/${shard.name}`);
       if (!response.ok) throw new Error(`Missing weight shard: ${shard.name}`);
       return [shard.name, await response.arrayBuffer()] as const;
     }),
   );
   const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(shardEntries);
+  const layerCache = await parseVgg19ManifestBackedLayerCache(manifest, shardMap);
   const weights: Record<string, number[] | [number, number, number, number]> = {};
   for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
-    const layer = manifest.layers[`conv${layerIndex}`];
+    const layer = layerCache[layerIndex];
     if (layer === undefined) continue;
-    weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [
-      number,
-      number,
-      number,
-      number,
-    ];
-    weights[`conv${layerIndex}.weightValues`] = Array.from(
-      new Float32Array(
-        shardMap[layer.weight.shard].slice(
-          layer.weight.offset,
-          layer.weight.offset + layer.weight.length,
-        ),
-      ),
-    );
-    weights[`conv${layerIndex}.biasValues`] = Array.from(
-      new Float32Array(
-        shardMap[layer.bias.shard].slice(
-          layer.bias.offset,
-          layer.bias.offset + layer.bias.length,
-        ),
-      ),
-    );
+    weights[`conv${layerIndex}.weightShape`] = [...layer.shape] as [number, number, number, number];
+    weights[`conv${layerIndex}.weightValues`] = Array.from(layer.values);
+    weights[`conv${layerIndex}.biasValues`] = Array.from(layer.bias);
   }
-  return weights;
+  const downloadSizeBytes = shardEntries.reduce((acc, [, buffer]) => acc + buffer.byteLength, 0);
+  return { weights, stats: { downloadSizeBytes, decodeLoadMs: performance.now() - decodeStart } };
 };
 
 const askWorker = (
@@ -185,6 +166,8 @@ export const BenchmarkApp = (): ReactElement => {
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [result, setResult] = useState<BenchmarkResult | null>(null);
   const [summary, setSummary] = useState<BenchmarkRunSummary | null>(null);
+  const [packComparison, setPackComparison] = useState<PackComparisonRow[] | null>(null);
+  const [packAcceptance, setPackAcceptance] = useState<Array<{ pack: VggPackName; verdict: "pass" | "fail"; reason: string }> | null>(null);
 
   const [firstPoolSteps, setFirstPoolSteps] = useState<number>(6);
   const [firstPoolRuns, setFirstPoolRuns] = useState<number>(5);
@@ -211,6 +194,8 @@ export const BenchmarkApp = (): ReactElement => {
   const clearResults = (): void => {
     setResult(null);
     setSummary(null);
+    setPackComparison(null);
+    setPackAcceptance(null);
   };
 
   const initializeWorker = async (worker: Worker): Promise<void> => {
@@ -294,12 +279,53 @@ export const BenchmarkApp = (): ReactElement => {
 
   const runFullStyleBenchmark = async (worker: Worker): Promise<void> => {
     setStatus("Loading full style-transfer fixtures...");
-    const [weights, fixture] = await Promise.all([
-      loadManifestWeights(),
-      loadJson<Phase3FullPassFixture>(
-        "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
-      ),
-    ]);
+    const fixture = await loadJson<Phase3FullPassFixture>(
+      "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
+    );
+    const packs: VggPackName[] = ["fp32", "fp16", "int8-per-channel", "int8log-per-channel"];
+    const comparisonRows: PackComparisonRow[] = [];
+    let finalWeightsResult: { weights: Record<string, number[] | [number, number, number, number]>; stats: WeightLoadStats } | null = null;
+    for (const pack of packs) {
+      try {
+        setStatus(`Loading ${pack} weights for pack comparison...`);
+        const weightsResult = await loadManifestWeights(pack);
+        if (pack === "fp32") finalWeightsResult = weightsResult;
+        await initializeWorker(worker);
+        setStatus(`Running pack comparison for ${pack}...`);
+        const singleRun = await askWorker(worker, {
+          type: "run-style-transfer",
+          id: `benchmark-full-style-compare-${pack}`,
+          optimizer: "sgd",
+          inputShape: fixture.inputShape,
+          inputImageValues: fixture.inputImageValues,
+          contentImageValues: fixture.contentImageValues,
+          styleImageValues: fixture.styleImageValues,
+          mean: fixture.mean,
+          std: fixture.std,
+          styleLayerIndices: fixture.styleLayerIndices,
+          contentLayerIndex: fixture.contentLayerIndex,
+          weights: weightsResult.weights,
+          contentWeight: fullContentWeight,
+          styleWeight: fullStyleWeight,
+          learningRate: fullLearningRate,
+          steps: fullSteps,
+        });
+        if (singleRun.type !== "run-style-transfer-result") {
+          throw new Error(`Unexpected worker response type: ${singleRun.type}`);
+        }
+        if (!singleRun.ok) {
+          throw new Error(singleRun.message);
+        }
+        comparisonRows.push({ pack, elapsedMs: singleRun.stats.elapsedMs, avgStepMs: singleRun.stats.avgStepMs, finalLoss: singleRun.losses.at(-1) ?? 0, downloadSizeBytes: weightsResult.stats.downloadSizeBytes });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        throw new Error(`Pack comparison failed for ${pack}: ${errorMessage}`);
+      }
+    }
+    setPackComparison(comparisonRows);
+    setPackAcceptance(buildPackAcceptanceRows(comparisonRows));
+    const weightsResult = finalWeightsResult ?? (await loadManifestWeights("fp32"));
+    const resolvedWeights = weightsResult.weights;
     await initializeWorker(worker);
     const cappedRuns = Math.max(1, Math.floor(fullRuns));
     const runStats: WorkerRunStats[] = [];
@@ -319,7 +345,7 @@ export const BenchmarkApp = (): ReactElement => {
         std: fixture.std,
         styleLayerIndices: fixture.styleLayerIndices,
         contentLayerIndex: fixture.contentLayerIndex,
-        weights,
+        weights: resolvedWeights,
         contentWeight: fullContentWeight,
         styleWeight: fullStyleWeight,
         learningRate: fullLearningRate,
@@ -329,12 +355,21 @@ export const BenchmarkApp = (): ReactElement => {
         throw new Error("Unexpected full style-transfer run response");
       }
       if (!optimized.ok) throw new Error(optimized.message);
-      lastResult = { losses: optimized.losses, stats: optimized.stats };
+      lastResult = { losses: optimized.losses, stats: optimized.stats, pack: "fp32" };
       runStats.push(optimized.stats);
     }
 
     if (lastResult !== null) setResult(lastResult);
-    if (runStats.length > 0) setSummary(summarizeRuns(runStats));
+    if (runStats.length > 0) {
+      const perf = performance as Performance & { memory?: { usedJSHeapSize: number } };
+      setSummary({
+        ...summarizeRuns(runStats),
+        downloadSizeBytes: weightsResult.stats.downloadSizeBytes,
+        decodeLoadMs: weightsResult.stats.decodeLoadMs,
+        firstIterationMs: runStats[0].avgStepMs,
+        peakMemoryBytes: perf.memory?.usedJSHeapSize,
+      });
+    }
   };
 
   const runBenchmark = async (): Promise<void> => {
@@ -620,11 +655,58 @@ export const BenchmarkApp = (): ReactElement => {
                     {formatMetric(summary.diagnosticsReadbackMs)}
                   </td>
                 </tr>
+                <tr><td className="py-2 pr-4">Download size (bytes)</td><td className="py-2 pr-4">{summary.downloadSizeBytes ?? "-"}</td></tr>
+                <tr><td className="py-2 pr-4">Decode/load time (ms)</td><td className="py-2 pr-4">{summary.decodeLoadMs?.toFixed(2) ?? "-"}</td></tr>
+                <tr><td className="py-2 pr-4">First-iteration latency (ms)</td><td className="py-2 pr-4">{summary.firstIterationMs?.toFixed(2) ?? "-"}</td></tr>
+                <tr><td className="py-2 pr-4">Peak memory (JS heap bytes)</td><td className="py-2 pr-4">{summary.peakMemoryBytes ?? "-"}</td></tr>
               </tbody>
             </table>
             <p className="mt-3 text-sm text-slate-400">
               Summary over {summary.runs} run{summary.runs === 1 ? "" : "s"}.
             </p>
+          </div>
+        )}
+        {packComparison === null ? null : (
+          <div className="mt-6 overflow-x-auto">
+            <h3 className="mb-2 text-sm font-semibold text-slate-200">Pack comparison (single run each)</h3>
+            <table className="w-full min-w-[620px] border-collapse text-left text-sm">
+              <thead className="text-slate-300">
+                <tr>
+                  <th className="border-b border-slate-700 py-2 pr-4">Pack</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">Download bytes</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">Elapsed ms</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">Avg step ms</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">Final loss</th>
+                </tr>
+              </thead>
+              <tbody>
+                {packComparison.map((row) => (
+                  <tr key={row.pack}>
+                    <td className="border-b border-slate-800 py-2 pr-4">{row.pack}</td>
+                    <td className="border-b border-slate-800 py-2 pr-4">{row.downloadSizeBytes}</td>
+                    <td className="border-b border-slate-800 py-2 pr-4">{row.elapsedMs.toFixed(2)}</td>
+                    <td className="border-b border-slate-800 py-2 pr-4">{row.avgStepMs.toFixed(2)}</td>
+                    <td className="border-b border-slate-800 py-2 pr-4">{row.finalLoss.toFixed(6)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {packAcceptance === null ? null : (
+          <div className="mt-4 overflow-x-auto">
+            <h3 className="mb-2 text-sm font-semibold text-slate-200">Acceptance verdicts</h3>
+            <ul className="space-y-1 text-sm">
+              {packAcceptance.map((row) => (
+                <li key={row.pack}>
+                  <span className={row.verdict === "pass" ? "text-emerald-300" : "text-rose-300"}>
+                    {row.verdict.toUpperCase()}
+                  </span>{" "}
+                  <span className="text-slate-200">{row.pack}</span>{" "}
+                  <span className="text-slate-400">({row.reason})</span>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
       </section>
