@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -41,10 +42,91 @@ def sha256_hex(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool) -> None:
+PACKS = ('fp32', 'fp16', 'int8-per-channel', 'int8log-per-channel', 'int4-experimental', 'int4log-experimental')
+
+
+def quantize_int8_per_channel(weight: torch.Tensor) -> tuple[torch.Tensor, list[float], list[int]]:
+    out_channels = weight.shape[0]
+    quantized = torch.empty_like(weight, dtype=torch.int8)
+    scales: list[float] = []
+    zero_points: list[int] = []
+    for channel_index in range(out_channels):
+        channel = weight[channel_index]
+        max_abs = channel.abs().max().item()
+        scale = max(max_abs / 127.0, 1e-8)
+        q = torch.clamp(torch.round(channel / scale), -127, 127).to(torch.int8)
+        quantized[channel_index] = q
+        scales.append(float(scale))
+        zero_points.append(0)
+    return quantized, scales, zero_points
+
+
+def quantize_int8_log_per_channel(weight: torch.Tensor) -> tuple[torch.Tensor, list[float], list[int]]:
+    out_channels = weight.shape[0]
+    quantized = torch.empty_like(weight, dtype=torch.int8)
+    scales: list[float] = []
+    zero_points: list[int] = []
+    for channel_index in range(out_channels):
+        channel = weight[channel_index]
+        max_abs = channel.abs().max().item()
+        log_scale = max(torch.log1p(torch.tensor(max_abs, dtype=torch.float32)).item() / 127.0, 1e-8)
+        transformed = torch.sign(channel) * torch.log1p(channel.abs())
+        q = torch.clamp(torch.round(transformed / log_scale), -127, 127).to(torch.int8)
+        quantized[channel_index] = q
+        scales.append(float(log_scale))
+        zero_points.append(0)
+    return quantized, scales, zero_points
+
+
+def _pack_signed_int4(values: torch.Tensor) -> bytes:
+    flat = values.contiguous().view(-1).to(torch.int16)
+    packed = bytearray((flat.numel() + 1) // 2)
+    for i in range(0, flat.numel(), 2):
+        low = int(flat[i].item()) & 0x0F
+        high = int(flat[i + 1].item()) & 0x0F if i + 1 < flat.numel() else 0
+        packed[i // 2] = low | (high << 4)
+    return bytes(packed)
+
+
+def quantize_int4_per_channel(weight: torch.Tensor) -> tuple[bytes, list[float], list[int]]:
+    out_channels = weight.shape[0]
+    quantized = torch.empty_like(weight, dtype=torch.int8)
+    scales: list[float] = []
+    zero_points: list[int] = []
+    for channel_index in range(out_channels):
+        channel = weight[channel_index]
+        max_abs = channel.abs().max().item()
+        scale = max(max_abs / 7.0, 1e-8)
+        q = torch.clamp(torch.round(channel / scale), -7, 7).to(torch.int8)
+        quantized[channel_index] = q
+        scales.append(float(scale))
+        zero_points.append(0)
+    return _pack_signed_int4(quantized), scales, zero_points
+
+
+def quantize_int4_log_per_channel(weight: torch.Tensor) -> tuple[bytes, list[float], list[int]]:
+    out_channels = weight.shape[0]
+    quantized = torch.empty_like(weight, dtype=torch.int8)
+    scales: list[float] = []
+    zero_points: list[int] = []
+    for channel_index in range(out_channels):
+        channel = weight[channel_index]
+        max_abs = channel.abs().max().item()
+        log_scale = max(torch.log1p(torch.tensor(max_abs, dtype=torch.float32)).item() / 7.0, 1e-8)
+        transformed = torch.sign(channel) * torch.log1p(channel.abs())
+        q = torch.clamp(torch.round(transformed / log_scale), -7, 7).to(torch.int8)
+        quantized[channel_index] = q
+        scales.append(float(log_scale))
+        zero_points.append(0)
+    return _pack_signed_int4(quantized), scales, zero_points
+
+
+def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool, pack: str) -> None:
     MODEL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    pack_dir = MODEL_OUTPUT_DIR / pack
+    pack_dir.mkdir(parents=True, exist_ok=True)
     shard_name = 'shard-000.bin'
-    shard_path = MODEL_OUTPUT_DIR / shard_name
+    shard_path = pack_dir / shard_name
 
     layers: dict[str, dict[str, object]] = {}
     legacy_payload: dict[str, object] = {}
@@ -60,7 +142,55 @@ def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool) -> Non
 
             weight = layer.weight.detach().cpu().contiguous().to(torch.float32)
             bias = layer.bias.detach().cpu().contiguous().to(torch.float32)
-            weight_bytes = weight.numpy().tobytes(order='C')
+            layer_quantization: dict[str, object] | None = None
+            if pack == 'fp32':
+                weight_dtype = 'float32'
+                weight_bytes = weight.numpy().tobytes(order='C')
+            elif pack == 'fp16':
+                weight_dtype = 'float16'
+                weight_bytes = weight.to(torch.float16).numpy().tobytes(order='C')
+            elif pack == 'int8-per-channel':
+                weight_dtype = 'int8'
+                quantized, scales, zero_points = quantize_int8_per_channel(weight)
+                weight_bytes = quantized.numpy().tobytes(order='C')
+                layer_quantization = {
+                    'scheme': 'per-channel-symmetric',
+                    'axis': 0,
+                    'scale': scales,
+                    'zeroPoint': zero_points,
+                }
+            elif pack == 'int8log-per-channel':
+                weight_dtype = 'int8'
+                quantized, scales, zero_points = quantize_int8_log_per_channel(weight)
+                weight_bytes = quantized.numpy().tobytes(order='C')
+                layer_quantization = {
+                    'scheme': 'per-channel-symmetric-log',
+                    'axis': 0,
+                    'scale': scales,
+                    'zeroPoint': zero_points,
+                }
+            elif pack == 'int4-experimental':
+                weight_dtype = 'int4-packed'
+                weight_bytes, scales, zero_points = quantize_int4_per_channel(weight)
+                layer_quantization = {
+                    'scheme': 'per-channel-symmetric',
+                    'axis': 0,
+                    'scale': scales,
+                    'zeroPoint': zero_points,
+                    'packing': 'int4x2-lsn-first',
+                }
+            elif pack == 'int4log-experimental':
+                weight_dtype = 'int4-packed'
+                weight_bytes, scales, zero_points = quantize_int4_log_per_channel(weight)
+                layer_quantization = {
+                    'scheme': 'per-channel-symmetric-log',
+                    'axis': 0,
+                    'scale': scales,
+                    'zeroPoint': zero_points,
+                    'packing': 'int4x2-lsn-first',
+                }
+            else:
+                raise RuntimeError(f'Unsupported pack: {pack}')
             bias_bytes = bias.numpy().tobytes(order='C')
             weight_offset = cursor
             shard_file.write(weight_bytes)
@@ -72,7 +202,7 @@ def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool) -> Non
             layers[f'conv{layer_index}'] = {
                 'weight': {
                     'shape': list(weight.shape),
-                    'dtype': 'float32',
+                    'dtype': weight_dtype,
                     'shard': shard_name,
                     'offset': weight_offset,
                     'length': len(weight_bytes),
@@ -85,6 +215,8 @@ def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool) -> Non
                     'length': len(bias_bytes),
                 },
             }
+            if layer_quantization is not None:
+                layers[f'conv{layer_index}']['weight']['quantization'] = layer_quantization
             legacy_payload[f'conv{layer_index}.weightShape'] = list(weight.shape)
             legacy_payload[f'conv{layer_index}.weightValues'] = tensor_to_list(weight)
             legacy_payload[f'conv{layer_index}.biasValues'] = tensor_to_list(bias)
@@ -92,7 +224,7 @@ def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool) -> Non
     manifest = {
         'modelId': 'vgg19-features-conv0-28',
         'version': '1.0.0',
-        'format': 'float32-le',
+        'format': f'{pack}-le',
         'layers': layers,
         'shards': [{
             'name': shard_name,
@@ -105,28 +237,27 @@ def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool) -> Non
             },
         },
         'quantization': {
-            'scheme': 'none',
-            'dtype': 'float32',
-            'scale': None,
-            'zeroPoint': None,
+            'scheme': 'none' if pack in ('fp32', 'fp16') else ('per-channel-symmetric-log' if 'log' in pack else 'per-channel-symmetric'),
+            'dtype': pack,
         },
     }
 
-    manifest_path = MODEL_OUTPUT_DIR / 'manifest.json'
+    manifest_path = pack_dir / 'manifest.json'
     manifest_path.write_text(json.dumps(manifest))
     manifest = json.loads(manifest_path.read_text())
     manifest['checksums']['files']['manifest.json'] = sha256_hex(manifest_path)
     manifest_path.write_text(json.dumps(manifest))
 
     if emit_legacy_json:
-        (MODEL_OUTPUT_DIR / 'vgg19_conv0_to_conv28_weights.json').write_text(json.dumps(legacy_payload))
+        (pack_dir / 'vgg19_conv0_to_conv28_weights.json').write_text(json.dumps(legacy_payload))
 
 
-def export(emit_legacy_json: bool = True) -> None:
+def export(emit_legacy_json: bool = True, packs: tuple[str, ...] = PACKS) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     model = vgg19(weights=VGG19_Weights.DEFAULT).features.eval()
-    export_weights_manifest(model, emit_legacy_json)
+    for pack in packs:
+        export_weights_manifest(model, emit_legacy_json, pack)
     truncated_layers = nn.Sequential(*list(model.children())[: LAST_LAYER_INDEX + 1])
 
     torch.manual_seed(13)
@@ -209,10 +340,15 @@ def export(emit_legacy_json: bool = True) -> None:
     (OUTPUT_DIR / 'vgg19_phase3_full_pass_fixture.json').write_text(json.dumps(fixture_payload))
     if emit_legacy_json:
       (OUTPUT_DIR / 'vgg19_conv0_to_conv28_weights.json').write_text(
-          (MODEL_OUTPUT_DIR / 'vgg19_conv0_to_conv28_weights.json').read_text()
+          (MODEL_OUTPUT_DIR / 'fp32' / 'vgg19_conv0_to_conv28_weights.json').read_text()
       )
     print(f'Wrote artifacts to: {OUTPUT_DIR} and {MODEL_OUTPUT_DIR}')
 
 
 if __name__ == '__main__':
-    export()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--packs', type=str, default=','.join(PACKS))
+    parser.add_argument('--no-legacy-json', action='store_true')
+    args = parser.parse_args()
+    selected_packs = tuple(item.strip() for item in args.packs.split(',') if item.strip() != '')
+    export(emit_legacy_json=not args.no_legacy_json, packs=selected_packs)
