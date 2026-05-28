@@ -10,6 +10,7 @@ import {
 import { createOptimizationRuntimeContext } from "../../../runtime/optimizationContext";
 import {
   createOptimizationTrackedOps,
+  type OptimizationPersistentKernelResources,
 } from "../trackedOps";
 import { createInputOptimizer } from "../input-optimizer/createInputOptimizer";
 import { createGpuVectorOps } from "../input-optimizer/gpuVectorOps";
@@ -22,6 +23,7 @@ import {
   runStyleTransferStep,
 } from "./step";
 import type { WorkerKernelOptimizationFlags, WorkerKernelStats } from "../../../../../types";
+import { BUFFER_USAGE_STORAGE_COPY_DST } from "../../../runtime/gpuFlags";
 import type {
   StyleTransferPayload,
   StyleTransferRunResult,
@@ -215,6 +217,53 @@ export const runStyleTransferPipeline = async (
   const collectKernelStats = payload.collectKernelStats ?? false;
   const aggregatedKernelStats: WorkerKernelStats = {};
   let weightUploadMs = 0;
+  const persistentWeightBuffers: GPUBuffer[] = [];
+  const persistentConvWeightBuffers = new Map<Float32Array, GPUBuffer>();
+  const persistentConvBiasBuffers = new Map<Float32Array, GPUBuffer>();
+  const persistentKernelResources: OptimizationPersistentKernelResources = {
+    getConvForwardStaticBuffers: (weight: Float32Array, bias: Float32Array) => {
+      let weightBuffer = persistentConvWeightBuffers.get(weight);
+      if (weightBuffer === undefined) {
+        const uploadStart = performance.now();
+        weightBuffer = device.createBuffer({
+          size: weight.byteLength,
+          usage: BUFFER_USAGE_STORAGE_COPY_DST,
+        });
+        device.queue.writeBuffer(weightBuffer, 0, weight);
+        persistentConvWeightBuffers.set(weight, weightBuffer);
+        persistentWeightBuffers.push(weightBuffer);
+        weightUploadMs += performance.now() - uploadStart;
+      }
+      let biasBuffer = persistentConvBiasBuffers.get(bias);
+      if (biasBuffer === undefined) {
+        const uploadStart = performance.now();
+        biasBuffer = device.createBuffer({
+          size: bias.byteLength,
+          usage: BUFFER_USAGE_STORAGE_COPY_DST,
+        });
+        device.queue.writeBuffer(biasBuffer, 0, bias);
+        persistentConvBiasBuffers.set(bias, biasBuffer);
+        persistentWeightBuffers.push(biasBuffer);
+        weightUploadMs += performance.now() - uploadStart;
+      }
+      return { weightBuffer, biasBuffer };
+    },
+    getConvBackwardStaticBuffers: (weight: Float32Array) => {
+      let weightBuffer = persistentConvWeightBuffers.get(weight);
+      if (weightBuffer === undefined) {
+        const uploadStart = performance.now();
+        weightBuffer = device.createBuffer({
+          size: weight.byteLength,
+          usage: BUFFER_USAGE_STORAGE_COPY_DST,
+        });
+        device.queue.writeBuffer(weightBuffer, 0, weight);
+        persistentConvWeightBuffers.set(weight, weightBuffer);
+        persistentWeightBuffers.push(weightBuffer);
+        weightUploadMs += performance.now() - uploadStart;
+      }
+      return { weightBuffer };
+    },
+  };
 
   const uploadStart = performance.now();
   let inputBuffer: GpuBufferRef | null = uploadToOwnedBuffer(
@@ -242,6 +291,9 @@ export const runStyleTransferPipeline = async (
       targetContext,
       payload.kernelFlags,
       collectKernelStats,
+      payload.kernelFlags?.usePersistentWeightBuffers === true
+        ? persistentKernelResources
+        : undefined,
     );
     const contentNorm = await targetTracked.normalizeForward(
       contentImageBuffer,
@@ -299,6 +351,9 @@ export const runStyleTransferPipeline = async (
         runtimeContext,
         payload.kernelFlags,
         collectKernelStats,
+        payload.kernelFlags?.usePersistentWeightBuffers === true
+          ? persistentKernelResources
+          : undefined,
       );
       try {
         const stepResult = await runStyleTransferStep(
@@ -365,5 +420,6 @@ export const runStyleTransferPipeline = async (
       }
     }
     runtimeContext.disposeAll();
+    for (const buffer of persistentWeightBuffers) buffer.destroy();
   }
 };
