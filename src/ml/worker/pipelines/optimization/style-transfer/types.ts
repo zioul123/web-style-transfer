@@ -1,4 +1,5 @@
 import type { WorkerRequest } from "../../../../../types";
+import type { WorkerKernelStats } from "../../../../../types";
 import type { Vgg19ConvLayerCacheEntry } from "../../../models/vgg19/weights";
 import type { GpuBufferRef } from "../../../runtime/bufferKernels";
 import type { TensorShape4D } from "../../../runtime/tensorShapes";
@@ -44,5 +45,6 @@ export type StyleTransferRunResult = {
     lossMs: number;
     updateMs: number;
     steps: number;
+    kernelStats?: WorkerKernelStats;
   };
 };

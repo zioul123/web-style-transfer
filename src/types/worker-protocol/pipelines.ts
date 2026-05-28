@@ -1,5 +1,38 @@
 import type { TensorShape, WorkerTensor } from "./core";
 
+export type WorkerKernelFamily =
+  | "convForward"
+  | "convBackwardInput"
+  | "gramStyle"
+  | "poolBackward"
+  | "pointwiseUpdate"
+  | "weightUpload";
+
+export type WorkerKernelFamilyStat = {
+  calls: number;
+  elapsedMs: number;
+};
+
+export type WorkerKernelStats = Partial<
+  Record<WorkerKernelFamily, WorkerKernelFamilyStat>
+>;
+
+export type WorkerKernelOptimizationFlags = {
+  useCachedPipelines?: boolean;
+  usePersistentWeightBuffers?: boolean;
+  useStepBufferPool?: boolean;
+  useVec4Pointwise?: boolean;
+  usePoolBackwardScatter?: boolean;
+  gramKernel?: "scalar" | "parallel-dot" | "symmetric-parallel-dot";
+  styleBackward?: "two-pass" | "fused-from-gram-diff";
+  convForwardKernel?: "scalar" | "spatial-vec4" | "tiled-spatial";
+  convBackwardInputKernel?:
+    | "scalar"
+    | "spatial-vec4"
+    | "transposed-weight-spatial-vec4";
+  weightStorage?: "fp32" | "fp16-storage" | "int8-dequant-experimental";
+};
+
 export type WorkerRunStyleTransferRequest = {
   type: "run-style-transfer";
   id: string;
@@ -27,6 +60,8 @@ export type WorkerRunStyleTransferRequest = {
   steps: number;
   lossReadbackInterval?: number;
   synchronizePhaseTimings?: boolean;
+  kernelFlags?: WorkerKernelOptimizationFlags;
+  collectKernelStats?: boolean;
 };
 
 export type WorkerClearStyleTransferSessionRequest = {
@@ -83,4 +118,5 @@ export type WorkerRunStats = {
   lossMs: number;
   updateMs: number;
   steps: number;
+  kernelStats?: WorkerKernelStats;
 };
