@@ -32,7 +32,13 @@ export const buildPackAcceptanceRows = (
         reason: `|Δloss|=${delta.toExponential(2)} < 1e-3`,
       };
     }
-    const threshold = row.pack === "int8log-per-channel" ? 7.5e-2 : 5e-2;
+    const thresholdByPack: Record<Exclude<VggPackName, "fp32" | "fp16">, number> = {
+      "int8-per-channel": 5e-2,
+      "int8log-per-channel": 7.5e-2,
+      "int4-experimental": 1e-1,
+      "int4log-experimental": 1.5e-1,
+    };
+    const threshold = thresholdByPack[row.pack];
     const pass = delta < threshold;
     return {
       pack: row.pack,
