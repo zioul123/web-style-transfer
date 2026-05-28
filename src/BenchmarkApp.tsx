@@ -90,6 +90,8 @@ type BenchmarkRunSummary = {
 };
 type WeightLoadStats = { downloadSizeBytes: number; decodeLoadMs: number };
 
+const KERNEL_LAB_BASELINE_NAME = "baseline (default pooled fp32)";
+
 const percentile = (sortedValues: readonly number[], p: number): number => {
   if (sortedValues.length === 0) return 0;
   const idx = Math.min(
@@ -245,11 +247,19 @@ export const BenchmarkApp = (): ReactElement => {
     const weights = (await loadManifestWeights("fp32")).weights;
     await initializeWorker(worker);
     const variants: Array<{ name: string; kernelFlags?: WorkerKernelOptimizationFlags }> = [
-      { name: "baseline (default pooled fp32)" },
+      { name: KERNEL_LAB_BASELINE_NAME },
       { name: "cached-pipelines", kernelFlags: { useCachedPipelines: true } },
       {
         name: "cached+persistent-weights",
         kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true },
+      },
+      {
+        name: "cached+persistent+fp16-storage",
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+          weightStorage: "fp16-storage",
+        },
       },
       {
         name: "cached+persistent+pool-scatter",
@@ -306,11 +316,29 @@ export const BenchmarkApp = (): ReactElement => {
           convBackwardInputKernel: "transposed-weight-spatial-vec4",
         },
       },
+      {
+        name: "cached+persistent+fp16-storage+pool-scatter+vec4+gram-symmetric+style-fused+conv-forward-batched-scalar+conv-backward-transposed",
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+          weightStorage: "fp16-storage",
+          usePoolBackwardScatter: true,
+          useVec4Pointwise: true,
+          gramKernel: "symmetric-parallel-dot",
+          styleBackward: "fused-from-gram-diff",
+          convForwardKernel: "spatial-vec4",
+          convBackwardInputKernel: "transposed-weight-spatial-vec4",
+        },
+      },
     ];
+    const smokeMode = new URLSearchParams(window.location.search).get("kernelLabSmoke") === "1";
+    const selectedVariants = smokeMode
+      ? [variants[0], variants[3]]
+      : variants;
     const rows: KernelLabRow[] = [];
     let baselineLoss = 0;
     let baselineElapsed = 0;
-    for (const variant of variants) {
+    for (const variant of selectedVariants) {
       setStatus(`Running kernel lab variant: ${variant.name}...`);
       const response = await askWorker(worker, {
         type: "run-style-transfer",
@@ -365,7 +393,7 @@ export const BenchmarkApp = (): ReactElement => {
         continue;
       }
       const finalLoss = response.losses.at(-1) ?? 0;
-      if (variant.name === "baseline (default pooled fp32)") {
+      if (variant.name === KERNEL_LAB_BASELINE_NAME) {
         baselineLoss = finalLoss;
         baselineElapsed = response.stats.elapsedMs;
       }

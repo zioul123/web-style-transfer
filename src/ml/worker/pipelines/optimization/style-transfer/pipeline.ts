@@ -24,6 +24,7 @@ import {
 } from "./step";
 import type { WorkerKernelOptimizationFlags, WorkerKernelStats } from "../../../../../types";
 import { BUFFER_USAGE_STORAGE_COPY_DST } from "../../../runtime/gpuFlags";
+import type { ConvWeightStorage } from "../../../ops/convolution/conv2d.shader";
 import type {
   StyleTransferPayload,
   StyleTransferRunResult,
@@ -127,6 +128,46 @@ const assertValuesMatchShape = (
   }
 };
 
+const float32Scratch = new Float32Array(1);
+const uint32Scratch = new Uint32Array(float32Scratch.buffer);
+
+const float32ToFloat16Bits = (value: number): number => {
+  float32Scratch[0] = value;
+  const bits = uint32Scratch[0];
+  const sign = (bits >>> 16) & 0x8000;
+  const exponent = ((bits >>> 23) & 0xff) - 127 + 15;
+  const mantissa = bits & 0x7fffff;
+
+  if (exponent <= 0) {
+    if (exponent < -10) return sign;
+    const subnormalMantissa = (mantissa | 0x800000) >> (1 - exponent);
+    return sign | ((subnormalMantissa + 0x1000) >> 13);
+  }
+
+  if (exponent >= 0x1f) {
+    return sign | (mantissa === 0 ? 0x7c00 : 0x7e00);
+  }
+
+  let roundedMantissa = (mantissa + 0x1000) >> 13;
+  let roundedExponent = exponent;
+  if (roundedMantissa === 0x400) {
+    roundedMantissa = 0;
+    roundedExponent += 1;
+  }
+  if (roundedExponent >= 0x1f) return sign | 0x7c00;
+  return sign | (roundedExponent << 10) | roundedMantissa;
+};
+
+const packFloat32ToFloat16Pairs = (values: Float32Array): Uint32Array => {
+  const packed = new Uint32Array(Math.ceil(values.length / 2));
+  for (let i = 0; i < values.length; i += 2) {
+    const lo = float32ToFloat16Bits(values[i]);
+    const hi = i + 1 < values.length ? float32ToFloat16Bits(values[i + 1]) : 0;
+    packed[i / 2] = lo | (hi << 16);
+  }
+  return packed;
+};
+
 const assertSupportedKernelFlags = (
   kernelFlags: WorkerKernelOptimizationFlags | undefined,
 ): void => {
@@ -143,13 +184,14 @@ const assertSupportedKernelFlags = (
   if (kernelFlags.convBackwardInputKernel === "spatial-vec4") {
     throw new Error("kernelFlags.convBackwardInputKernel=spatial-vec4 is not implemented yet.");
   }
-  const unsupported: Array<[string, unknown]> = [
-    ["weightStorage", kernelFlags.weightStorage],
-  ];
-  for (const [name, value] of unsupported) {
-    if (value !== undefined) {
-      throw new Error(`kernelFlags.${name}=${String(value)} is not implemented yet.`);
-    }
+  if (
+    kernelFlags.weightStorage === "fp16-storage" &&
+    kernelFlags.usePersistentWeightBuffers !== true
+  ) {
+    throw new Error("kernelFlags.weightStorage=fp16-storage requires usePersistentWeightBuffers=true.");
+  }
+  if (kernelFlags.weightStorage === "int8-dequant-experimental") {
+    throw new Error("kernelFlags.weightStorage=int8-dequant-experimental is not implemented yet.");
   }
 };
 
@@ -219,6 +261,14 @@ export const runStyleTransferPipeline = async (
   const collectKernelStats = payload.collectKernelStats ?? false;
   const aggregatedKernelStats: WorkerKernelStats = {};
   let weightUploadMs = 0;
+  const persistentWeightStorage: ConvWeightStorage =
+    payload.kernelFlags?.weightStorage === "fp16-storage" ? "fp16-packed" : "fp32";
+  const encodePersistentWeightValues = (
+    values: Float32Array,
+  ): Float32Array | Uint32Array =>
+    persistentWeightStorage === "fp16-packed"
+      ? packFloat32ToFloat16Pairs(values)
+      : values;
   const persistentWeightBuffers: GPUBuffer[] = [];
   const persistentConvWeightBuffers = new Map<Float32Array, GPUBuffer>();
   const persistentConvBackwardTransposedWeightBuffers = new Map<Float32Array, GPUBuffer>();
@@ -228,11 +278,12 @@ export const runStyleTransferPipeline = async (
       let weightBuffer = persistentConvWeightBuffers.get(weight);
       if (weightBuffer === undefined) {
         const uploadStart = performance.now();
+        const weightValues = encodePersistentWeightValues(weight);
         weightBuffer = device.createBuffer({
-          size: weight.byteLength,
+          size: weightValues.byteLength,
           usage: BUFFER_USAGE_STORAGE_COPY_DST,
         });
-        device.queue.writeBuffer(weightBuffer, 0, weight);
+        device.queue.writeBuffer(weightBuffer, 0, weightValues);
         persistentConvWeightBuffers.set(weight, weightBuffer);
         persistentWeightBuffers.push(weightBuffer);
         weightUploadMs += performance.now() - uploadStart;
@@ -249,7 +300,7 @@ export const runStyleTransferPipeline = async (
         persistentWeightBuffers.push(biasBuffer);
         weightUploadMs += performance.now() - uploadStart;
       }
-      return { weightBuffer, biasBuffer };
+      return { weightBuffer, weightStorage: persistentWeightStorage, biasBuffer };
     },
     getConvBackwardStaticBuffers: (
       weight: Float32Array,
@@ -258,11 +309,12 @@ export const runStyleTransferPipeline = async (
       let weightBuffer = persistentConvWeightBuffers.get(weight);
       if (weightBuffer === undefined) {
         const uploadStart = performance.now();
+        const weightValues = encodePersistentWeightValues(weight);
         weightBuffer = device.createBuffer({
-          size: weight.byteLength,
+          size: weightValues.byteLength,
           usage: BUFFER_USAGE_STORAGE_COPY_DST,
         });
-        device.queue.writeBuffer(weightBuffer, 0, weight);
+        device.queue.writeBuffer(weightBuffer, 0, weightValues);
         persistentConvWeightBuffers.set(weight, weightBuffer);
         persistentWeightBuffers.push(weightBuffer);
         weightUploadMs += performance.now() - uploadStart;
@@ -284,16 +336,22 @@ export const runStyleTransferPipeline = async (
           }
         }
         const uploadStart = performance.now();
+        const transposedValues = encodePersistentWeightValues(transposed);
         transposedWeightBuffer = device.createBuffer({
-          size: transposed.byteLength,
+          size: transposedValues.byteLength,
           usage: BUFFER_USAGE_STORAGE_COPY_DST,
         });
-        device.queue.writeBuffer(transposedWeightBuffer, 0, transposed);
+        device.queue.writeBuffer(transposedWeightBuffer, 0, transposedValues);
         persistentConvBackwardTransposedWeightBuffers.set(weight, transposedWeightBuffer);
         persistentWeightBuffers.push(transposedWeightBuffer);
         weightUploadMs += performance.now() - uploadStart;
       }
-      return { weightBuffer, transposedWeightBuffer };
+      return {
+        weightBuffer,
+        weightStorage: persistentWeightStorage,
+        transposedWeightBuffer,
+        transposedWeightStorage: persistentWeightStorage,
+      };
     },
   };
 
