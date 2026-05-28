@@ -108,8 +108,8 @@ export const createOptimizationTrackedOps = (
 
   const loss = {
     mseScalarBuffer: async (a: GpuBufferRef, b: GpuBufferRef, count: number): Promise<GpuBufferRef> => withKernelStat("gramStyle", async () => own(await runMseBufferToScalarBuffer(device, acquireMseBuffer, a, b, count, BUFFER_USAGE_STORAGE_COPY_SRC))),
-    scalarMul: (input: GpuBufferRef, count: number, scalar: number): GpuBufferRef => withKernelStatSync("pointwiseUpdate", () => own(runScalarMulBuffer(device, input, count, scalar))),
-    add: (a: GpuBufferRef, b: GpuBufferRef, count: number): GpuBufferRef => withKernelStatSync("pointwiseUpdate", () => own({ buffer: runBinaryOpToBuffer(device, "add", a.buffer, b.buffer, count, "tensorTensor"), owned: true })),
+    scalarMul: (input: GpuBufferRef, count: number, scalar: number): GpuBufferRef => withKernelStatSync("pointwiseUpdate", () => own(runScalarMulBuffer(device, input, count, scalar, kernelFlags?.useVec4Pointwise === true))),
+    add: (a: GpuBufferRef, b: GpuBufferRef, count: number): GpuBufferRef => withKernelStatSync("pointwiseUpdate", () => own({ buffer: runBinaryOpToBuffer(device, "add", a.buffer, b.buffer, count, "tensorTensor", kernelFlags?.useVec4Pointwise === true), owned: true })),
     weightedScalarSum: (scalars: readonly GpuBufferRef[], weights: readonly number[]): GpuBufferRef => own(runWeightedScalarSumBuffer(scalars, weights)),
     styleLossTerms: async (relu: GpuBufferRef, shape: TensorShape4D, targetGram: GpuBufferRef): Promise<{ inputGram: GpuBufferRef; styleSse: GpuBufferRef }> => {
       const terms = await withKernelStat("gramStyle", async () => runStyleLossTermsFromTargetGramBuffer(acquireMseBuffer, relu, shape, targetGram));
@@ -133,7 +133,7 @@ export const createOptimizationTrackedOps = (
         if (useFused) {
           return runFusedUpdateClampBuffer(device, input, grad, count, learningRate, kernelFlags?.useVec4Pointwise === true);
         }
-        const unfused = runUnfusedUpdateClampBuffer(device, input, grad, count, learningRate);
+        const unfused = runUnfusedUpdateClampBuffer(device, input, grad, count, learningRate, kernelFlags?.useVec4Pointwise === true);
         own(...unfused.intermediates);
         return unfused.clamped;
       });

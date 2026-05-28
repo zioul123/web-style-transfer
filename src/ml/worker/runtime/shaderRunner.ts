@@ -48,6 +48,28 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   ${BINARY_SHADER_SNIPPETS[op][mode]}
 }`;
 
+export const makeBinaryOpVec4Shader = (
+  op: "add" | "sub" | "mul" | "div",
+  vecCount: number,
+  mode: "tensorTensor" | "tensorScalar" | "scalarTensor",
+): string => {
+  const expr = mode === "tensorTensor"
+    ? `out[i] = a[i] ${op === "add" ? "+" : op === "sub" ? "-" : op === "mul" ? "*" : "/"} b[i];`
+    : mode === "tensorScalar"
+      ? `out[i] = a[i] ${op === "add" ? "+" : op === "sub" ? "-" : op === "mul" ? "*" : "/"} b[0];`
+      : `out[i] = b[0] ${op === "add" ? "+" : op === "sub" ? "-" : op === "mul" ? "*" : "/"} a[i];`;
+  return `
+@group(0) @binding(0) var<storage, read> a: array<vec4f>;
+@group(0) @binding(1) var<storage, read> b: array<vec4f>;
+@group(0) @binding(2) var<storage, read_write> out: array<vec4f>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${vecCount}u) { return; }
+  ${expr}
+}`;
+};
+
 export const makeClampShader = (
   count: number,
   min: number,
@@ -70,16 +92,24 @@ export const runBinaryOpToBuffer = (
   bBuffer: GPUBuffer,
   count: number,
   mode: "tensorTensor" | "tensorScalar" | "scalarTensor",
+  useVec4: boolean = false,
 ): GPUBuffer => {
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
+  const shouldUseVec4 = useVec4 && count % 4 === 0;
+  const dispatchCount = shouldUseVec4 ? count / 4 : count;
   const outBuffer = gpuDevice.createBuffer({
     size: count * 4,
     usage: BUFFER_USAGE_STORAGE_COPY_SRC,
   });
+  const shaderCode = shouldUseVec4
+    ? makeBinaryOpVec4Shader(op, dispatchCount, mode)
+    : makeBinaryOpShader(op, count, mode);
   const pipeline = getOrCreateComputePipeline(
     gpuDevice,
-    `binary:${op}:${count}:${mode}`,
-    makeBinaryOpShader(op, count, mode),
+    shouldUseVec4
+      ? `binary-vec4:${op}:${dispatchCount}:${mode}`
+      : `binary:${op}:${count}:${mode}`,
+    shaderCode,
   );
   const bindGroup = gpuDevice.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
@@ -93,7 +123,7 @@ export const runBinaryOpToBuffer = (
   const pass = encoder.beginComputePass();
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bindGroup);
-  pass.dispatchWorkgroups(Math.ceil(count / 64));
+  pass.dispatchWorkgroups(Math.ceil(dispatchCount / 64));
   pass.end();
   gpuDevice.queue.submit([encoder.finish()]);
   return outBuffer;

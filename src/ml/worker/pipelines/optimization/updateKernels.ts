@@ -13,9 +13,13 @@ export const runScalarMulBuffer = (
   input: GpuBufferRef,
   count: number,
   scalar: number,
+  useVec4: boolean = false,
 ): OwnedGpuBuffer => {
-  const scalarBuffer = uploadToOwnedBuffer(device, new Float32Array([scalar]));
-  const out = runBinaryOpToBuffer(device, "mul", input.buffer, scalarBuffer.buffer, count, "tensorScalar");
+  const scalarValues = useVec4 && count % 4 === 0
+    ? new Float32Array([scalar, scalar, scalar, scalar])
+    : new Float32Array([scalar]);
+  const scalarBuffer = uploadToOwnedBuffer(device, scalarValues);
+  const out = runBinaryOpToBuffer(device, "mul", input.buffer, scalarBuffer.buffer, count, "tensorScalar", useVec4);
   releaseOwnedBuffer(scalarBuffer);
   return { buffer: out, owned: true };
 };
@@ -73,10 +77,11 @@ export const runUnfusedUpdateClampBuffer = (
   grad: GpuBufferRef,
   count: number,
   learningRate: number,
+  useVec4: boolean = false,
 ): { clamped: OwnedGpuBuffer; intermediates: OwnedGpuBuffer[] } => {
-  const scaledGrad = runScalarMulBuffer(device, grad, count, learningRate);
+  const scaledGrad = runScalarMulBuffer(device, grad, count, learningRate, useVec4);
   const updated: OwnedGpuBuffer = {
-    buffer: runBinaryOpToBuffer(device, "sub", input.buffer, scaledGrad.buffer, count, "tensorTensor"),
+    buffer: runBinaryOpToBuffer(device, "sub", input.buffer, scaledGrad.buffer, count, "tensorTensor", useVec4),
     owned: true,
   };
   const clamped: OwnedGpuBuffer = {
