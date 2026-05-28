@@ -24,6 +24,7 @@ import {
 } from "./step";
 import type { WorkerKernelOptimizationFlags, WorkerKernelStats } from "../../../../../types";
 import { BUFFER_USAGE_STORAGE_COPY_DST } from "../../../runtime/gpuFlags";
+import type { ConvWeightStorage } from "../../../ops/convolution/conv2d.shader";
 import type {
   StyleTransferPayload,
   StyleTransferRunResult,
@@ -127,6 +128,46 @@ const assertValuesMatchShape = (
   }
 };
 
+const float32Scratch = new Float32Array(1);
+const uint32Scratch = new Uint32Array(float32Scratch.buffer);
+
+const float32ToFloat16Bits = (value: number): number => {
+  float32Scratch[0] = value;
+  const bits = uint32Scratch[0];
+  const sign = (bits >>> 16) & 0x8000;
+  const exponent = ((bits >>> 23) & 0xff) - 127 + 15;
+  const mantissa = bits & 0x7fffff;
+
+  if (exponent <= 0) {
+    if (exponent < -10) return sign;
+    const subnormalMantissa = (mantissa | 0x800000) >> (1 - exponent);
+    return sign | ((subnormalMantissa + 0x1000) >> 13);
+  }
+
+  if (exponent >= 0x1f) {
+    return sign | (mantissa === 0 ? 0x7c00 : 0x7e00);
+  }
+
+  let roundedMantissa = (mantissa + 0x1000) >> 13;
+  let roundedExponent = exponent;
+  if (roundedMantissa === 0x400) {
+    roundedMantissa = 0;
+    roundedExponent += 1;
+  }
+  if (roundedExponent >= 0x1f) return sign | 0x7c00;
+  return sign | (roundedExponent << 10) | roundedMantissa;
+};
+
+const packFloat32ToFloat16Pairs = (values: Float32Array): Uint32Array => {
+  const packed = new Uint32Array(Math.ceil(values.length / 2));
+  for (let i = 0; i < values.length; i += 2) {
+    const lo = float32ToFloat16Bits(values[i]);
+    const hi = i + 1 < values.length ? float32ToFloat16Bits(values[i + 1]) : 0;
+    packed[i / 2] = lo | (hi << 16);
+  }
+  return packed;
+};
+
 const assertSupportedKernelFlags = (
   kernelFlags: WorkerKernelOptimizationFlags | undefined,
 ): void => {
@@ -137,17 +178,20 @@ const assertSupportedKernelFlags = (
   if (kernelFlags.useStepBufferPool === false) {
     throw new Error("kernelFlags.useStepBufferPool=false is not supported.");
   }
-  const unsupported: Array<[string, unknown]> = [
-    ["gramKernel", kernelFlags.gramKernel],
-    ["styleBackward", kernelFlags.styleBackward],
-    ["convForwardKernel", kernelFlags.convForwardKernel],
-    ["convBackwardInputKernel", kernelFlags.convBackwardInputKernel],
-    ["weightStorage", kernelFlags.weightStorage],
-  ];
-  for (const [name, value] of unsupported) {
-    if (value !== undefined) {
-      throw new Error(`kernelFlags.${name}=${String(value)} is not implemented yet.`);
-    }
+  if (kernelFlags.convForwardKernel === "tiled-spatial") {
+    throw new Error("kernelFlags.convForwardKernel=tiled-spatial is not implemented yet.");
+  }
+  if (kernelFlags.convBackwardInputKernel === "spatial-vec4") {
+    throw new Error("kernelFlags.convBackwardInputKernel=spatial-vec4 is not implemented yet.");
+  }
+  if (
+    kernelFlags.weightStorage === "fp16-storage" &&
+    kernelFlags.usePersistentWeightBuffers !== true
+  ) {
+    throw new Error("kernelFlags.weightStorage=fp16-storage requires usePersistentWeightBuffers=true.");
+  }
+  if (kernelFlags.weightStorage === "int8-dequant-experimental") {
+    throw new Error("kernelFlags.weightStorage=int8-dequant-experimental is not implemented yet.");
   }
 };
 
@@ -170,6 +214,8 @@ export const runStyleTransferPipeline = async (
   const device = getGpuDevice();
   if (device === null) throw new Error("WebGPU device is not initialized.");
   assertSupportedKernelFlags(payload.kernelFlags);
+  const synchronizePhaseTimings = payload.synchronizePhaseTimings ?? false;
+  if (synchronizePhaseTimings) await device.queue.onSubmittedWorkDone();
 
   const contentShape: TensorShape4D = payload.contentShape ?? payload.inputShape;
   const styleShape: TensorShape4D = payload.styleShape ?? payload.inputShape;
@@ -182,7 +228,9 @@ export const runStyleTransferPipeline = async (
   assertValuesMatchShape("contentImageValues", payload.contentImageValues, contentShape);
   assertValuesMatchShape("styleImageValues", payload.styleImageValues, styleShape);
 
-  const runtimeContext = createOptimizationRuntimeContext(device);
+  const runtimeContext = createOptimizationRuntimeContext(device, {
+    reuseTempBuffers: payload.kernelFlags?.useStepBufferPool ?? true,
+  });
   const convLayerCache = parseVgg19ConvLayerCache(payload.weights);
   const losses: number[] = [];
   let forwardMs = 0;
@@ -211,23 +259,32 @@ export const runStyleTransferPipeline = async (
   const lossReadbackInterval = normalizeLossReadbackInterval(
     payload.lossReadbackInterval,
   );
-  const synchronizePhaseTimings = payload.synchronizePhaseTimings ?? false;
   const collectKernelStats = payload.collectKernelStats ?? false;
   const aggregatedKernelStats: WorkerKernelStats = {};
   let weightUploadMs = 0;
+  const persistentWeightStorage: ConvWeightStorage =
+    payload.kernelFlags?.weightStorage === "fp16-storage" ? "fp16-packed" : "fp32";
+  const encodePersistentWeightValues = (
+    values: Float32Array,
+  ): Float32Array | Uint32Array =>
+    persistentWeightStorage === "fp16-packed"
+      ? packFloat32ToFloat16Pairs(values)
+      : values;
   const persistentWeightBuffers: GPUBuffer[] = [];
   const persistentConvWeightBuffers = new Map<Float32Array, GPUBuffer>();
+  const persistentConvBackwardTransposedWeightBuffers = new Map<Float32Array, GPUBuffer>();
   const persistentConvBiasBuffers = new Map<Float32Array, GPUBuffer>();
   const persistentKernelResources: OptimizationPersistentKernelResources = {
     getConvForwardStaticBuffers: (weight: Float32Array, bias: Float32Array) => {
       let weightBuffer = persistentConvWeightBuffers.get(weight);
       if (weightBuffer === undefined) {
         const uploadStart = performance.now();
+        const weightValues = encodePersistentWeightValues(weight);
         weightBuffer = device.createBuffer({
-          size: weight.byteLength,
+          size: weightValues.byteLength,
           usage: BUFFER_USAGE_STORAGE_COPY_DST,
         });
-        device.queue.writeBuffer(weightBuffer, 0, weight);
+        device.queue.writeBuffer(weightBuffer, 0, weightValues);
         persistentConvWeightBuffers.set(weight, weightBuffer);
         persistentWeightBuffers.push(weightBuffer);
         weightUploadMs += performance.now() - uploadStart;
@@ -244,22 +301,58 @@ export const runStyleTransferPipeline = async (
         persistentWeightBuffers.push(biasBuffer);
         weightUploadMs += performance.now() - uploadStart;
       }
-      return { weightBuffer, biasBuffer };
+      return { weightBuffer, weightStorage: persistentWeightStorage, biasBuffer };
     },
-    getConvBackwardStaticBuffers: (weight: Float32Array) => {
+    getConvBackwardStaticBuffers: (
+      weight: Float32Array,
+      weightShape: TensorShape4D,
+    ) => {
       let weightBuffer = persistentConvWeightBuffers.get(weight);
       if (weightBuffer === undefined) {
         const uploadStart = performance.now();
+        const weightValues = encodePersistentWeightValues(weight);
         weightBuffer = device.createBuffer({
-          size: weight.byteLength,
+          size: weightValues.byteLength,
           usage: BUFFER_USAGE_STORAGE_COPY_DST,
         });
-        device.queue.writeBuffer(weightBuffer, 0, weight);
+        device.queue.writeBuffer(weightBuffer, 0, weightValues);
         persistentConvWeightBuffers.set(weight, weightBuffer);
         persistentWeightBuffers.push(weightBuffer);
         weightUploadMs += performance.now() - uploadStart;
       }
-      return { weightBuffer };
+      let transposedWeightBuffer =
+        persistentConvBackwardTransposedWeightBuffers.get(weight);
+      if (transposedWeightBuffer === undefined) {
+        const [outChannels, inChannels] = weightShape;
+        const transposed = new Float32Array(weight.length);
+        for (let oc = 0; oc < outChannels; oc += 1) {
+          for (let ic = 0; ic < inChannels; ic += 1) {
+            for (let kh = 0; kh < 3; kh += 1) {
+              for (let kw = 0; kw < 3; kw += 1) {
+                const sourceIndex = ((oc * inChannels + ic) * 9) + kh * 3 + kw;
+                const targetIndex = (((ic * 3 + kh) * 3 + kw) * outChannels) + oc;
+                transposed[targetIndex] = weight[sourceIndex];
+              }
+            }
+          }
+        }
+        const uploadStart = performance.now();
+        const transposedValues = encodePersistentWeightValues(transposed);
+        transposedWeightBuffer = device.createBuffer({
+          size: transposedValues.byteLength,
+          usage: BUFFER_USAGE_STORAGE_COPY_DST,
+        });
+        device.queue.writeBuffer(transposedWeightBuffer, 0, transposedValues);
+        persistentConvBackwardTransposedWeightBuffers.set(weight, transposedWeightBuffer);
+        persistentWeightBuffers.push(transposedWeightBuffer);
+        weightUploadMs += performance.now() - uploadStart;
+      }
+      return {
+        weightBuffer,
+        weightStorage: persistentWeightStorage,
+        transposedWeightBuffer,
+        transposedWeightStorage: persistentWeightStorage,
+      };
     },
   };
 
@@ -278,10 +371,7 @@ export const runStyleTransferPipeline = async (
   const persistentBuffers: GpuBufferRef[] = [contentImageBuffer, styleImageBuffer];
 
   try {
-    const targetContext = createPersistentTargetContext(
-      runtimeContext,
-      persistentBuffers,
-    );
+    const targetContext = createPersistentTargetContext(runtimeContext, persistentBuffers);
     const targetTracked = createOptimizationTrackedOps(
       device,
       targetContext,
@@ -339,6 +429,7 @@ export const runStyleTransferPipeline = async (
     if (collectKernelStats) {
       mergeKernelStats(aggregatedKernelStats, targetTracked.getKernelStats());
     }
+    if (synchronizePhaseTimings) await device.queue.onSubmittedWorkDone();
 
     for (let step = 0; step < payload.steps; step += 1) {
       if (inputBuffer === null) throw new Error("Input buffer was released unexpectedly.");
@@ -378,6 +469,7 @@ export const runStyleTransferPipeline = async (
       } finally {
         runtimeContext.releaseStepOwned();
       }
+      if (synchronizePhaseTimings) await device.queue.onSubmittedWorkDone();
     }
 
     if (inputBuffer === null) throw new Error("Input buffer was released unexpectedly.");

@@ -14,14 +14,21 @@ export type ImageResolution = {
   readonly height: number;
 };
 export type OptimizerMode = "sgd" | "adam" | "lbfgs";
-export type KernelVariantMode =
-  | "baseline"
-  | "cached-pipelines"
-  | "cached-persistent-weights"
-  | "cached-persistent-weights-step-pool"
-  | "cached-persistent-weights-pool-scatter"
-  | "cached-persistent-weights-step-pool-pool-scatter"
-  | "cached-persistent-weights-step-pool-pool-scatter-vec4-pointwise";
+export type KernelGramKernel = NonNullable<
+  WorkerKernelOptimizationFlags["gramKernel"]
+>;
+export type KernelStyleBackward = NonNullable<
+  WorkerKernelOptimizationFlags["styleBackward"]
+>;
+export type KernelConvForward = NonNullable<
+  WorkerKernelOptimizationFlags["convForwardKernel"]
+>;
+export type KernelConvBackwardInput = NonNullable<
+  WorkerKernelOptimizationFlags["convBackwardInputKernel"]
+>;
+export type KernelWeightStorage = NonNullable<
+  WorkerKernelOptimizationFlags["weightStorage"]
+>;
 export type FullWeights = Record<
   string,
   number[] | [number, number, number, number]
@@ -56,8 +63,29 @@ export interface StyleTransferControls {
   setLbfgsEpsilon: Dispatch<SetStateAction<number>>;
   synchronizePhaseTimings: boolean;
   setSynchronizePhaseTimings: Dispatch<SetStateAction<boolean>>;
-  kernelVariant: KernelVariantMode;
-  setKernelVariant: Dispatch<SetStateAction<KernelVariantMode>>;
+  useCachedPipelines: boolean;
+  setUseCachedPipelines: Dispatch<SetStateAction<boolean>>;
+  usePersistentWeightBuffers: boolean;
+  setUsePersistentWeightBuffers: Dispatch<SetStateAction<boolean>>;
+  useStepBufferPool: boolean;
+  setUseStepBufferPool: Dispatch<SetStateAction<boolean>>;
+  useVec4Pointwise: boolean;
+  setUseVec4Pointwise: Dispatch<SetStateAction<boolean>>;
+  usePoolBackwardScatter: boolean;
+  setUsePoolBackwardScatter: Dispatch<SetStateAction<boolean>>;
+  gramKernel: KernelGramKernel;
+  setGramKernel: Dispatch<SetStateAction<KernelGramKernel>>;
+  styleBackward: KernelStyleBackward;
+  setStyleBackward: Dispatch<SetStateAction<KernelStyleBackward>>;
+  convForwardKernel: KernelConvForward;
+  setConvForwardKernel: Dispatch<SetStateAction<KernelConvForward>>;
+  convBackwardInputKernel: KernelConvBackwardInput;
+  setConvBackwardInputKernel: Dispatch<
+    SetStateAction<KernelConvBackwardInput>
+  >;
+  weightStorage: KernelWeightStorage;
+  setWeightStorage: Dispatch<SetStateAction<KernelWeightStorage>>;
+  kernelConfigSummary: string;
   kernelFlags: WorkerKernelOptimizationFlags | undefined;
   resetOptimizerState: () => void;
   resetOutputImage: () => void;

@@ -90,6 +90,8 @@ type BenchmarkRunSummary = {
 };
 type WeightLoadStats = { downloadSizeBytes: number; decodeLoadMs: number };
 
+const KERNEL_LAB_BASELINE_NAME = "baseline (default pooled fp32)";
+
 const percentile = (sortedValues: readonly number[], p: number): number => {
   if (sortedValues.length === 0) return 0;
   const idx = Math.min(
@@ -245,33 +247,137 @@ export const BenchmarkApp = (): ReactElement => {
     const weights = (await loadManifestWeights("fp32")).weights;
     await initializeWorker(worker);
     const variants: Array<{ name: string; kernelFlags?: WorkerKernelOptimizationFlags }> = [
-      { name: "baseline" },
+      { name: KERNEL_LAB_BASELINE_NAME },
       { name: "cached-pipelines", kernelFlags: { useCachedPipelines: true } },
       {
         name: "cached+persistent-weights",
         kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true },
       },
       {
-        name: "cached+persistent+step-pool",
-        kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, useStepBufferPool: true },
+        name: "cached+persistent+fp16-storage",
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+          weightStorage: "fp16-storage",
+        },
       },
       {
         name: "cached+persistent+pool-scatter",
         kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, usePoolBackwardScatter: true },
       },
       {
-        name: "cached+persistent+step-pool+pool-scatter",
-        kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, useStepBufferPool: true, usePoolBackwardScatter: true },
+        name: "cached+persistent+pool-scatter+vec4",
+        kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, usePoolBackwardScatter: true, useVec4Pointwise: true },
       },
       {
-        name: "cached+persistent+step-pool+pool-scatter+vec4",
-        kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, useStepBufferPool: true, usePoolBackwardScatter: true, useVec4Pointwise: true },
+        name: "cached+persistent+pool-scatter+vec4+gram-parallel+style-two-pass",
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+          usePoolBackwardScatter: true,
+          useVec4Pointwise: true,
+          gramKernel: "parallel-dot",
+          styleBackward: "two-pass",
+        },
+      },
+      {
+        name: "cached+persistent+pool-scatter+vec4+gram-symmetric+style-fused",
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+          usePoolBackwardScatter: true,
+          useVec4Pointwise: true,
+          gramKernel: "symmetric-parallel-dot",
+          styleBackward: "fused-from-gram-diff",
+        },
+      },
+      {
+        name: "cached+persistent+pool-scatter+vec4+gram-symmetric+style-fused+conv-forward-batched-scalar",
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+          usePoolBackwardScatter: true,
+          useVec4Pointwise: true,
+          gramKernel: "symmetric-parallel-dot",
+          styleBackward: "fused-from-gram-diff",
+          convForwardKernel: "spatial-vec4",
+        },
+      },
+      {
+        name: "cached+persistent+pool-scatter+vec4+gram-symmetric+style-fused+conv-forward-batched-scalar+conv-backward-transposed",
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+          usePoolBackwardScatter: true,
+          useVec4Pointwise: true,
+          gramKernel: "symmetric-parallel-dot",
+          styleBackward: "fused-from-gram-diff",
+          convForwardKernel: "spatial-vec4",
+          convBackwardInputKernel: "transposed-weight-spatial-vec4",
+        },
+      },
+      {
+        name: "cached+persistent+fp16-storage+pool-scatter+vec4+gram-symmetric+style-fused+conv-forward-batched-scalar+conv-backward-transposed",
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+          weightStorage: "fp16-storage",
+          usePoolBackwardScatter: true,
+          useVec4Pointwise: true,
+          gramKernel: "symmetric-parallel-dot",
+          styleBackward: "fused-from-gram-diff",
+          convForwardKernel: "spatial-vec4",
+          convBackwardInputKernel: "transposed-weight-spatial-vec4",
+        },
       },
     ];
+    const smokeMode = new URLSearchParams(window.location.search).get("kernelLabSmoke") === "1";
+    const selectedVariants = smokeMode
+      ? [variants[0], variants[3]]
+      : variants;
     const rows: KernelLabRow[] = [];
     let baselineLoss = 0;
     let baselineElapsed = 0;
-    for (const variant of variants) {
+    for (const variant of selectedVariants) {
+      const warmupResponse = await askWorker(worker, {
+        type: "run-style-transfer",
+        id: `benchmark-kernel-lab-warmup-${variant.name}`,
+        optimizer: "sgd",
+        inputShape: fixture.inputShape,
+        inputImageValues: fixture.inputImageValues,
+        contentImageValues: fixture.contentImageValues,
+        styleImageValues: fixture.styleImageValues,
+        mean: fixture.mean,
+        std: fixture.std,
+        styleLayerIndices: fixture.styleLayerIndices,
+        contentLayerIndex: fixture.contentLayerIndex,
+        weights,
+        contentWeight: fullContentWeight,
+        styleWeight: fullStyleWeight,
+        learningRate: fullLearningRate,
+        steps: 1,
+        kernelFlags: variant.kernelFlags,
+        synchronizePhaseTimings: true,
+      });
+      if (
+        warmupResponse.type === "run-style-transfer-result" &&
+        !warmupResponse.ok
+      ) {
+        rows.push({
+          name: variant.name,
+          elapsedMs: 0,
+          forwardMs: 0,
+          lossMs: 0,
+          backwardMs: 0,
+          updateMs: 0,
+          finalLoss: 0,
+          lossDeltaFromBaseline: 0,
+          speedupVsBaseline: 0,
+          ok: false,
+          error: warmupResponse.message,
+        });
+        continue;
+      }
       setStatus(`Running kernel lab variant: ${variant.name}...`);
       const response = await askWorker(worker, {
         type: "run-style-transfer",
@@ -292,6 +398,7 @@ export const BenchmarkApp = (): ReactElement => {
         steps: kernelLabSteps,
         kernelFlags: variant.kernelFlags,
         collectKernelStats: true,
+        synchronizePhaseTimings: true,
       });
       if (response.type !== "run-style-transfer-result") {
         rows.push({
@@ -326,7 +433,7 @@ export const BenchmarkApp = (): ReactElement => {
         continue;
       }
       const finalLoss = response.losses.at(-1) ?? 0;
-      if (variant.name === "baseline") {
+      if (variant.name === KERNEL_LAB_BASELINE_NAME) {
         baselineLoss = finalLoss;
         baselineElapsed = response.stats.elapsedMs;
       }
@@ -899,7 +1006,7 @@ export const BenchmarkApp = (): ReactElement => {
         )}
         {kernelLabRows === null ? null : (
           <div className="mt-6 overflow-x-auto">
-            <h3 className="mb-2 text-sm font-semibold text-slate-200">Kernel lab (cumulative variants)</h3>
+            <h3 className="mb-2 text-sm font-semibold text-slate-200">Kernel lab (cumulative variants, default pooled)</h3>
             <table className="w-full min-w-[900px] border-collapse text-left text-sm">
               <thead className="text-slate-300">
                 <tr>

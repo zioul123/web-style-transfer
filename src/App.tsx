@@ -3,7 +3,11 @@ import type { ReactElement } from "react";
 import { TextureLoader } from "three";
 import { useStyleTransferController } from "./features/style-transfer/hooks/useStyleTransferController";
 import type {
-  KernelVariantMode,
+  KernelConvBackwardInput,
+  KernelConvForward,
+  KernelGramKernel,
+  KernelStyleBackward,
+  KernelWeightStorage,
   OptimizerMode,
   ResolutionPreset,
 } from "./features/style-transfer/types/controller";
@@ -17,21 +21,68 @@ const resolutionOptions: readonly ResolutionPreset[] = [
   "256x384",
 ];
 const optimizerOptions: readonly OptimizerMode[] = ["sgd", "adam", "lbfgs"];
-const kernelVariantOptions: readonly KernelVariantMode[] = [
-  "baseline",
-  "cached-pipelines",
-  "cached-persistent-weights",
-  "cached-persistent-weights-step-pool",
-  "cached-persistent-weights-pool-scatter",
-  "cached-persistent-weights-step-pool-pool-scatter",
-  "cached-persistent-weights-step-pool-pool-scatter-vec4-pointwise",
+const kernelGramKernelOptions: readonly KernelGramKernel[] = [
+  "scalar",
+  "parallel-dot",
+  "symmetric-parallel-dot",
 ];
+const kernelStyleBackwardOptions: readonly KernelStyleBackward[] = [
+  "two-pass",
+  "fused-from-gram-diff",
+];
+const kernelConvForwardOptions: readonly KernelConvForward[] = [
+  "scalar",
+  "spatial-vec4",
+  "tiled-spatial",
+];
+const kernelConvBackwardInputOptions: readonly KernelConvBackwardInput[] = [
+  "scalar",
+  "spatial-vec4",
+  "transposed-weight-spatial-vec4",
+];
+const kernelWeightStorageOptions: readonly KernelWeightStorage[] = [
+  "fp32",
+  "fp16-storage",
+  "int8-dequant-experimental",
+];
+const isResolutionPreset = (value: string): value is ResolutionPreset =>
+  resolutionOptions.some((option) => option === value);
 const isOptimizerMode = (value: string): value is OptimizerMode =>
-  optimizerOptions.includes(value as OptimizerMode);
-const isKernelVariantMode = (value: string): value is KernelVariantMode =>
-  kernelVariantOptions.includes(value as KernelVariantMode);
+  optimizerOptions.some((option) => option === value);
 const isVggPackName = (value: string): value is VggPackName =>
   VGG_PACK_OPTIONS.some((option) => option.name === value);
+const isKernelGramKernel = (value: string): value is KernelGramKernel =>
+  kernelGramKernelOptions.some((option) => option === value);
+const isKernelStyleBackward = (value: string): value is KernelStyleBackward =>
+  kernelStyleBackwardOptions.some((option) => option === value);
+const isKernelConvForward = (value: string): value is KernelConvForward =>
+  kernelConvForwardOptions.some((option) => option === value);
+const isKernelConvBackwardInput = (
+  value: string,
+): value is KernelConvBackwardInput =>
+  kernelConvBackwardInputOptions.some((option) => option === value);
+const isKernelWeightStorage = (value: string): value is KernelWeightStorage =>
+  kernelWeightStorageOptions.some((option) => option === value);
+
+const kernelConvForwardLabel = (option: KernelConvForward): string => {
+  if (option === "spatial-vec4") return "spatial-vec4 (batched scalar)";
+  if (option === "tiled-spatial") return "tiled-spatial (unsupported)";
+  return option;
+};
+
+const kernelConvBackwardInputLabel = (
+  option: KernelConvBackwardInput,
+): string => {
+  if (option === "spatial-vec4") return "spatial-vec4 (unsupported)";
+  return option;
+};
+
+const kernelWeightStorageLabel = (option: KernelWeightStorage): string => {
+  if (option === "fp16-storage") return "fp16-storage (requires persistent)";
+  if (option === "int8-dequant-experimental")
+    return "int8-dequant-experimental (unsupported)";
+  return option;
+};
 
 type TextureImageSize = {
   readonly width: number;
@@ -114,11 +165,12 @@ function App() {
           Content resolution
           <select
             value={controls.contentResolution}
-            onChange={(event) =>
-              controls.setContentResolution(
-                event.target.value as ResolutionPreset,
-              )
-            }
+            onChange={(event) => {
+              const nextResolution = event.target.value;
+              if (isResolutionPreset(nextResolution)) {
+                controls.setContentResolution(nextResolution);
+              }
+            }}
           >
             {resolutionOptions.map((option) => (
               <option key={option} value={option}>
@@ -131,11 +183,12 @@ function App() {
           Style resolution
           <select
             value={controls.styleResolution}
-            onChange={(event) =>
-              controls.setStyleResolution(
-                event.target.value as ResolutionPreset,
-              )
-            }
+            onChange={(event) => {
+              const nextResolution = event.target.value;
+              if (isResolutionPreset(nextResolution)) {
+                controls.setStyleResolution(nextResolution);
+              }
+            }}
           >
             {resolutionOptions.map((option) => (
               <option key={option} value={option}>
@@ -222,36 +275,153 @@ function App() {
             <option value="lbfgs">L-BFGS</option>
           </select>
         </label>
-        <label className="flex flex-col gap-1">
-          Kernel variant
-          <select
-            value={controls.kernelVariant}
-            onChange={(event) => {
-              const nextVariant = event.target.value;
-              if (isKernelVariantMode(nextVariant)) {
-                controls.setKernelVariant(nextVariant);
-              }
-            }}
-          >
-            <option value="baseline">Baseline</option>
-            <option value="cached-pipelines">Cached pipelines</option>
-            <option value="cached-persistent-weights">
-              Cached + persistent weights
-            </option>
-            <option value="cached-persistent-weights-step-pool">
-              Cached + persistent weights + step pool
-            </option>
-            <option value="cached-persistent-weights-pool-scatter">
-              Cached + persistent weights + pool scatter
-            </option>
-            <option value="cached-persistent-weights-step-pool-pool-scatter">
-              Cached + persistent weights + step pool + pool scatter
-            </option>
-            <option value="cached-persistent-weights-step-pool-pool-scatter-vec4-pointwise">
-              Cached + persistent weights + step pool + pool scatter + vec4
-            </option>
-          </select>
-        </label>
+        <div className="flex flex-col gap-3 rounded-lg border border-slate-700/80 bg-slate-950/30 p-3 md:col-span-3">
+          <p className="text-sm font-semibold text-slate-200">Kernel Options</p>
+          <div className="grid gap-2 text-sm md:grid-cols-3">
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={controls.useCachedPipelines}
+                onChange={(event) =>
+                  controls.setUseCachedPipelines(event.target.checked)
+                }
+              />
+              Cached pipelines
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={controls.usePersistentWeightBuffers}
+                onChange={(event) =>
+                  controls.setUsePersistentWeightBuffers(event.target.checked)
+                }
+              />
+              Persistent weight buffers
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={controls.useStepBufferPool}
+                onChange={(event) =>
+                  controls.setUseStepBufferPool(event.target.checked)
+                }
+              />
+              Step buffer pool
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={controls.usePoolBackwardScatter}
+                onChange={(event) =>
+                  controls.setUsePoolBackwardScatter(event.target.checked)
+                }
+              />
+              Pool backward scatter
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={controls.useVec4Pointwise}
+                onChange={(event) =>
+                  controls.setUseVec4Pointwise(event.target.checked)
+                }
+              />
+              Vec4 pointwise
+            </label>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              Gram kernel
+              <select
+                value={controls.gramKernel}
+                onChange={(event) => {
+                  const nextKernel = event.target.value;
+                  if (isKernelGramKernel(nextKernel)) {
+                    controls.setGramKernel(nextKernel);
+                  }
+                }}
+              >
+                {kernelGramKernelOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              Style backward
+              <select
+                value={controls.styleBackward}
+                onChange={(event) => {
+                  const nextStyleBackward = event.target.value;
+                  if (isKernelStyleBackward(nextStyleBackward)) {
+                    controls.setStyleBackward(nextStyleBackward);
+                  }
+                }}
+              >
+                {kernelStyleBackwardOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              Conv forward
+              <select
+                value={controls.convForwardKernel}
+                onChange={(event) => {
+                  const nextConvForward = event.target.value;
+                  if (isKernelConvForward(nextConvForward)) {
+                    controls.setConvForwardKernel(nextConvForward);
+                  }
+                }}
+              >
+                {kernelConvForwardOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {kernelConvForwardLabel(option)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              Conv backward-input
+              <select
+                value={controls.convBackwardInputKernel}
+                onChange={(event) => {
+                  const nextConvBackwardInput = event.target.value;
+                  if (isKernelConvBackwardInput(nextConvBackwardInput)) {
+                    controls.setConvBackwardInputKernel(nextConvBackwardInput);
+                  }
+                }}
+              >
+                {kernelConvBackwardInputOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {kernelConvBackwardInputLabel(option)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              Weight storage
+              <select
+                value={controls.weightStorage}
+                onChange={(event) => {
+                  const nextWeightStorage = event.target.value;
+                  if (isKernelWeightStorage(nextWeightStorage)) {
+                    controls.setWeightStorage(nextWeightStorage);
+                  }
+                }}
+              >
+                {kernelWeightStorageOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {kernelWeightStorageLabel(option)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
         {controls.optimizer === "adam" ? (
           <>
             <label className="flex flex-col gap-1">
@@ -379,7 +549,7 @@ function App() {
         ) : (
           <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
             <p>Chunk steps: {status.runStats.steps}</p>
-            <p>Kernel variant: {controls.kernelVariant}</p>
+            <p>Kernel config: {controls.kernelConfigSummary}</p>
             <p>Total: {status.runStats.elapsedMs.toFixed(1)} ms</p>
             <p>Avg step: {status.runStats.avgStepMs.toFixed(1)} ms</p>
             <p>Forward: {status.runStats.forwardMs.toFixed(1)} ms</p>

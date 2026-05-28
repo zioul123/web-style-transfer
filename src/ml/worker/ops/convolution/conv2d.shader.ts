@@ -1,9 +1,32 @@
-export const makeConv2dBackwardInputShader = (count: number): string => `
+export type ConvWeightStorage = "fp32" | "fp16-packed";
+
+const weightStorageArrayType = (weightStorage: ConvWeightStorage): "f32" | "u32" =>
+  weightStorage === "fp16-packed" ? "u32" : "f32";
+
+const makeWeightReadHelper = (
+  storageName: string,
+  weightStorage: ConvWeightStorage,
+): string => {
+  if (weightStorage === "fp32") {
+    return `fn readWeight(index: u32) -> f32 { return ${storageName}[index]; }`;
+  }
+  return `fn readWeight(index: u32) -> f32 {
+  let packed = ${storageName}[index / 2u];
+  let pair = unpack2x16float(packed);
+  return select(pair.x, pair.y, (index & 1u) == 1u);
+}`;
+};
+
+export const makeConv2dBackwardInputShader = (
+  count: number,
+  weightStorage: ConvWeightStorage = "fp32",
+): string => `
 struct Conv2dBackwardInputUniforms { inChannels: u32, outChannels: u32, height: u32, width: u32 }
 @group(0) @binding(0) var<storage, read> gradOutValues: array<f32>;
-@group(0) @binding(1) var<storage, read> weightValues: array<f32>;
+@group(0) @binding(1) var<storage, read> weightValues: array<${weightStorageArrayType(weightStorage)}>;
 @group(0) @binding(2) var<uniform> uniforms: Conv2dBackwardInputUniforms;
 @group(0) @binding(3) var<storage, read_write> out: array<f32>;
+${makeWeightReadHelper("weightValues", weightStorage)}
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
@@ -24,20 +47,61 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let ow = u32(owSigned);
         let gradOutIndex = oc * hw + oh * uniforms.width + ow;
         let weightIndex = ((oc * uniforms.inChannels + ic) * 9u) + kh * 3u + kw;
-        sum = sum + gradOutValues[gradOutIndex] * weightValues[weightIndex];
+        sum = sum + gradOutValues[gradOutIndex] * readWeight(weightIndex);
       }
     }
   }
   out[i] = sum;
 }`;
 
-export const makeConv2dReluShader = (count: number): string => `
+export const makeConv2dBackwardInputTransposedWeightShader = (
+  count: number,
+  weightStorage: ConvWeightStorage = "fp32",
+): string => `
+struct Conv2dBackwardInputUniforms { inChannels: u32, outChannels: u32, height: u32, width: u32 }
+@group(0) @binding(0) var<storage, read> gradOutValues: array<f32>;
+@group(0) @binding(1) var<storage, read> transposedWeightValues: array<${weightStorageArrayType(weightStorage)}>;
+@group(0) @binding(2) var<uniform> uniforms: Conv2dBackwardInputUniforms;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+${makeWeightReadHelper("transposedWeightValues", weightStorage)}
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let hw = uniforms.height * uniforms.width;
+  let ic = (i / hw) % uniforms.inChannels;
+  let inOffset = i % hw;
+  let ih = inOffset / uniforms.width;
+  let iw = inOffset % uniforms.width;
+  var sum = 0.0;
+  for (var kh: u32 = 0u; kh < 3u; kh = kh + 1u) {
+    for (var kw: u32 = 0u; kw < 3u; kw = kw + 1u) {
+      let ohSigned = i32(ih) - i32(kh) + 1;
+      let owSigned = i32(iw) - i32(kw) + 1;
+      if (ohSigned < 0 || ohSigned >= i32(uniforms.height) || owSigned < 0 || owSigned >= i32(uniforms.width)) { continue; }
+      let oh = u32(ohSigned);
+      let ow = u32(owSigned);
+      for (var oc: u32 = 0u; oc < uniforms.outChannels; oc = oc + 1u) {
+        let gradOutIndex = oc * hw + oh * uniforms.width + ow;
+        let weightIndex = (((ic * 3u + kh) * 3u + kw) * uniforms.outChannels) + oc;
+        sum = sum + gradOutValues[gradOutIndex] * readWeight(weightIndex);
+      }
+    }
+  }
+  out[i] = sum;
+}`;
+
+export const makeConv2dReluShader = (
+  count: number,
+  weightStorage: ConvWeightStorage = "fp32",
+): string => `
 struct Conv2dReluUniforms { inChannels: u32, outChannels: u32, height: u32, width: u32 }
 @group(0) @binding(0) var<storage, read> inputValues: array<f32>;
-@group(0) @binding(1) var<storage, read> weightValues: array<f32>;
+@group(0) @binding(1) var<storage, read> weightValues: array<${weightStorageArrayType(weightStorage)}>;
 @group(0) @binding(2) var<storage, read> biasValues: array<f32>;
 @group(0) @binding(3) var<uniform> uniforms: Conv2dReluUniforms;
 @group(0) @binding(4) var<storage, read_write> out: array<f32>;
+${makeWeightReadHelper("weightValues", weightStorage)}
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
@@ -61,20 +125,24 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (iwSigned < 0 || iwSigned >= i32(uniforms.width)) { continue; }
         let inputIndex = inputBase + u32(ihSigned) * uniforms.width + u32(iwSigned);
         let weightIndex = weightBase + kh * 3u + kw;
-        sum = sum + inputValues[inputIndex] * weightValues[weightIndex];
+        sum = sum + inputValues[inputIndex] * readWeight(weightIndex);
       }
     }
   }
   out[i] = max(0.0, sum);
 }`;
 
-export const makeConv2dShader = (count: number): string => `
+export const makeConv2dShader = (
+  count: number,
+  weightStorage: ConvWeightStorage = "fp32",
+): string => `
 struct Conv2dUniforms { inChannels: u32, outChannels: u32, height: u32, width: u32 }
 @group(0) @binding(0) var<storage, read> inputValues: array<f32>;
-@group(0) @binding(1) var<storage, read> weightValues: array<f32>;
+@group(0) @binding(1) var<storage, read> weightValues: array<${weightStorageArrayType(weightStorage)}>;
 @group(0) @binding(2) var<storage, read> biasValues: array<f32>;
 @group(0) @binding(3) var<uniform> uniforms: Conv2dUniforms;
 @group(0) @binding(4) var<storage, read_write> out: array<f32>;
+${makeWeightReadHelper("weightValues", weightStorage)}
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
@@ -100,9 +168,72 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let iw = u32(iwSigned);
         let inputIndex = inputBase + ih * uniforms.width + iw;
         let weightIndex = weightBase + kh * 3u + kw;
-        sum = sum + inputValues[inputIndex] * weightValues[weightIndex];
+        sum = sum + inputValues[inputIndex] * readWeight(weightIndex);
       }
     }
   }
   out[i] = sum;
 }`;
+
+const makeConv2dSpatialVec4Body = (
+  count: number,
+  relu: boolean,
+  weightStorage: ConvWeightStorage,
+): string => `
+struct Conv2dUniforms { inChannels: u32, outChannels: u32, height: u32, width: u32 }
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<storage, read> weightValues: array<${weightStorageArrayType(weightStorage)}>;
+@group(0) @binding(2) var<storage, read> biasValues: array<f32>;
+@group(0) @binding(3) var<uniform> uniforms: Conv2dUniforms;
+@group(0) @binding(4) var<storage, read_write> out: array<f32>;
+${makeWeightReadHelper("weightValues", weightStorage)}
+
+fn evalAt(index: u32) -> f32 {
+  let hw = uniforms.height * uniforms.width;
+  let oc = (index / hw) % uniforms.outChannels;
+  let outOffset = index % hw;
+  let oh = outOffset / uniforms.width;
+  let ow = outOffset % uniforms.width;
+  var sum = biasValues[oc];
+  for (var ic: u32 = 0u; ic < uniforms.inChannels; ic = ic + 1u) {
+    let inputBase = ic * hw;
+    let weightBase = (oc * uniforms.inChannels + ic) * 9u;
+    for (var kh: u32 = 0u; kh < 3u; kh = kh + 1u) {
+      let khSigned = i32(kh) - 1;
+      let ihSigned = i32(oh) + khSigned;
+      if (ihSigned < 0 || ihSigned >= i32(uniforms.height)) { continue; }
+      for (var kw: u32 = 0u; kw < 3u; kw = kw + 1u) {
+        let kwSigned = i32(kw) - 1;
+        let iwSigned = i32(ow) + kwSigned;
+        if (iwSigned < 0 || iwSigned >= i32(uniforms.width)) { continue; }
+        let inputIndex = inputBase + u32(ihSigned) * uniforms.width + u32(iwSigned);
+        let weightIndex = weightBase + kh * 3u + kw;
+        sum = sum + inputValues[inputIndex] * readWeight(weightIndex);
+      }
+    }
+  }
+  ${relu ? "return max(0.0, sum);" : "return sum;"}
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let laneBase = gid.x * 4u;
+  let i0 = laneBase;
+  let i1 = laneBase + 1u;
+  let i2 = laneBase + 2u;
+  let i3 = laneBase + 3u;
+  if (i0 < ${count}u) { out[i0] = evalAt(i0); }
+  if (i1 < ${count}u) { out[i1] = evalAt(i1); }
+  if (i2 < ${count}u) { out[i2] = evalAt(i2); }
+  if (i3 < ${count}u) { out[i3] = evalAt(i3); }
+}`;
+
+export const makeConv2dSpatialVec4Shader = (
+  count: number,
+  weightStorage: ConvWeightStorage = "fp32",
+): string => makeConv2dSpatialVec4Body(count, false, weightStorage);
+
+export const makeConv2dReluSpatialVec4Shader = (
+  count: number,
+  weightStorage: ConvWeightStorage = "fp32",
+): string => makeConv2dSpatialVec4Body(count, true, weightStorage);
