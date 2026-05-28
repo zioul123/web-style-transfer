@@ -1,9 +1,15 @@
-import { makeReluBackwardShader, makeReluShader } from "./relu.shader";
+import {
+  makeReluBackwardShader,
+  makeReluBackwardVec4Shader,
+  makeReluShader,
+  makeReluVec4Shader,
+} from "./relu.shader";
 import {
   ownedBuffer,
   readGpuBufferToArray,
   releaseOwnedBuffer,
   runUnaryShaderToBuffer,
+  runUnaryShaderToBufferWithDispatch,
   uploadToOwnedBuffer,
   type GpuBufferRef,
 } from "../../runtime/bufferKernels";
@@ -12,13 +18,22 @@ import { getGpuDevice } from "../../runtime/deviceState";
 export const runReluForwardBuffer = async (
   input: GpuBufferRef,
   count: number,
+  useVec4: boolean = false,
 ): Promise<GpuBufferRef> => {
-  const outputBuffer = runUnaryShaderToBuffer(
-    getGpuDevice(),
-    makeReluShader(count),
-    input.buffer,
-    count,
-  );
+  const outputBuffer = useVec4 && count % 4 === 0
+    ? runUnaryShaderToBufferWithDispatch(
+      getGpuDevice(),
+      makeReluVec4Shader(count / 4),
+      input.buffer,
+      count,
+      count / 4,
+    )
+    : runUnaryShaderToBuffer(
+      getGpuDevice(),
+      makeReluShader(count),
+      input.buffer,
+      count,
+    );
   return ownedBuffer(outputBuffer);
 };
 
@@ -47,15 +62,25 @@ export const runReluBackwardBuffer = async (
   input: GpuBufferRef,
   gradOut: GpuBufferRef,
   count: number,
+  useVec4: boolean = false,
 ): Promise<GpuBufferRef> => {
   return ownedBuffer(
-    runUnaryShaderToBuffer(
-      getGpuDevice(),
-      makeReluBackwardShader(count),
-      input.buffer,
-      count,
-      [{ binding: 1, resource: { buffer: gradOut.buffer } }],
-    ),
+    useVec4 && count % 4 === 0
+      ? runUnaryShaderToBufferWithDispatch(
+        getGpuDevice(),
+        makeReluBackwardVec4Shader(count / 4),
+        input.buffer,
+        count,
+        count / 4,
+        [{ binding: 1, resource: { buffer: gradOut.buffer } }],
+      )
+      : runUnaryShaderToBuffer(
+        getGpuDevice(),
+        makeReluBackwardShader(count),
+        input.buffer,
+        count,
+        [{ binding: 1, resource: { buffer: gradOut.buffer } }],
+      ),
   );
 };
 

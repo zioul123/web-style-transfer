@@ -1,5 +1,7 @@
 import {
+  makeNormalizeBackwardVec4Shader,
   makeNormalizeBackwardShader,
+  makeNormalizeVec4Shader,
   makeNormalizeShader,
 } from "./normalize.shader";
 import {
@@ -7,6 +9,7 @@ import {
   readGpuBufferToArray,
   releaseOwnedBuffer,
   runUnaryShaderToBuffer,
+  runUnaryShaderToBufferWithDispatch,
   uploadToOwnedBuffer,
   type GpuBufferRef,
 } from "../../runtime/bufferKernels";
@@ -21,6 +24,7 @@ export const runNormalizeForwardBuffer = async (
   shape: readonly [number, number, number, number],
   mean: readonly number[],
   std: readonly number[],
+  useVec4: boolean = false,
 ): Promise<GpuBufferRef> => {
   const channels: number = shape[1];
   if (mean.length !== channels || std.length !== channels) throw new Error("Mean/std lengths must match input channels.");
@@ -32,11 +36,18 @@ export const runNormalizeForwardBuffer = async (
   gpuDevice.queue.writeBuffer(meanBuffer, 0, new Float32Array(mean));
   gpuDevice.queue.writeBuffer(stdBuffer, 0, new Float32Array(std));
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, shape[2], shape[3]]));
-  return ownedBuffer(runUnaryShaderToBuffer(gpuDevice, makeNormalizeShader(shape[1] * shape[2] * shape[3]), input.buffer, shape[1] * shape[2] * shape[3], [
+  const count = shape[1] * shape[2] * shape[3];
+  return ownedBuffer((useVec4 && count % 4 === 0)
+    ? runUnaryShaderToBufferWithDispatch(gpuDevice, makeNormalizeVec4Shader(count / 4), input.buffer, count, count / 4, [
+      { binding: 1, resource: { buffer: meanBuffer } },
+      { binding: 2, resource: { buffer: stdBuffer } },
+      { binding: 3, resource: { buffer: uniformBuffer } },
+    ])
+    : runUnaryShaderToBuffer(gpuDevice, makeNormalizeShader(count), input.buffer, count, [
     { binding: 1, resource: { buffer: meanBuffer } },
     { binding: 2, resource: { buffer: stdBuffer } },
     { binding: 3, resource: { buffer: uniformBuffer } },
-  ]));
+    ]));
 };
 
 export const runNormalizeForward = async (
@@ -83,6 +94,7 @@ export const runNormalizeBackwardBuffer = async (
   gradOut: GpuBufferRef,
   shape: readonly [number, number, number, number],
   std: readonly number[],
+  useVec4: boolean = false,
 ): Promise<GpuBufferRef> => {
   const channels: number = shape[1];
   if (std.length !== channels) throw new Error("Std length must match input channels.");
@@ -98,16 +110,29 @@ export const runNormalizeBackwardBuffer = async (
   });
   gpuDevice.queue.writeBuffer(stdBuffer, 0, new Float32Array(std));
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, shape[2], shape[3], 0]));
+  const count = shape[1] * shape[2] * shape[3];
   return ownedBuffer(
-    runUnaryShaderToBuffer(
-      gpuDevice,
-      makeNormalizeBackwardShader(shape[1] * shape[2] * shape[3]),
-      gradOut.buffer,
-      shape[1] * shape[2] * shape[3],
-      [
-        { binding: 1, resource: { buffer: stdBuffer } },
-        { binding: 2, resource: { buffer: uniformBuffer } },
-      ],
-    ),
+    useVec4 && count % 4 === 0
+      ? runUnaryShaderToBufferWithDispatch(
+        gpuDevice,
+        makeNormalizeBackwardVec4Shader(count / 4),
+        gradOut.buffer,
+        count,
+        count / 4,
+        [
+          { binding: 1, resource: { buffer: stdBuffer } },
+          { binding: 2, resource: { buffer: uniformBuffer } },
+        ],
+      )
+      : runUnaryShaderToBuffer(
+        gpuDevice,
+        makeNormalizeBackwardShader(count),
+        gradOut.buffer,
+        count,
+        [
+          { binding: 1, resource: { buffer: stdBuffer } },
+          { binding: 2, resource: { buffer: uniformBuffer } },
+        ],
+      ),
   );
 };

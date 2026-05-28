@@ -174,6 +174,13 @@ const KERNEL_VARIANT_TO_FLAGS: Record<
     useStepBufferPool: true,
     usePoolBackwardScatter: true,
   },
+  "cached-persistent-weights-step-pool-pool-scatter-vec4-pointwise": {
+    useCachedPipelines: true,
+    usePersistentWeightBuffers: true,
+    useStepBufferPool: true,
+    usePoolBackwardScatter: true,
+    useVec4Pointwise: true,
+  },
 };
 
 export const useStyleTransferController =

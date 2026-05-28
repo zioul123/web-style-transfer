@@ -24,6 +24,7 @@ const kernelVariantOptions: readonly KernelVariantMode[] = [
   "cached-persistent-weights-step-pool",
   "cached-persistent-weights-pool-scatter",
   "cached-persistent-weights-step-pool-pool-scatter",
+  "cached-persistent-weights-step-pool-pool-scatter-vec4-pointwise",
 ];
 const isOptimizerMode = (value: string): value is OptimizerMode =>
   optimizerOptions.includes(value as OptimizerMode);
@@ -245,6 +246,9 @@ function App() {
             </option>
             <option value="cached-persistent-weights-step-pool-pool-scatter">
               Cached + persistent weights + step pool + pool scatter
+            </option>
+            <option value="cached-persistent-weights-step-pool-pool-scatter-vec4-pointwise">
+              Cached + persistent weights + step pool + pool scatter + vec4
             </option>
           </select>
         </label>

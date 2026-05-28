@@ -1,9 +1,10 @@
-import { makeMseBackwardShader } from "./mse.shader";
+import { makeMseBackwardShader, makeMseBackwardVec4Shader } from "./mse.shader";
 import {
   ownedBuffer,
   readGpuBufferToArray,
   releaseOwnedBuffer,
   runUnaryShaderToBuffer,
+  runUnaryShaderToBufferWithDispatch,
   uploadToOwnedBuffer,
   type GpuBufferRef,
 } from "../../runtime/bufferKernels";
@@ -12,13 +13,23 @@ export const runContentLossBackwardBuffer = async (
   input: GpuBufferRef,
   target: GpuBufferRef,
   count: number,
+  useVec4: boolean = false,
 ): Promise<GpuBufferRef> => {
   const gpuDevice = getGpuDevice();
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
   return ownedBuffer(
-    runUnaryShaderToBuffer(gpuDevice, makeMseBackwardShader(count), input.buffer, count, [
-      { binding: 1, resource: { buffer: target.buffer } },
-    ]),
+    useVec4 && count % 4 === 0
+      ? runUnaryShaderToBufferWithDispatch(
+        gpuDevice,
+        makeMseBackwardVec4Shader(count / 4, count),
+        input.buffer,
+        count,
+        count / 4,
+        [{ binding: 1, resource: { buffer: target.buffer } }],
+      )
+      : runUnaryShaderToBuffer(gpuDevice, makeMseBackwardShader(count), input.buffer, count, [
+        { binding: 1, resource: { buffer: target.buffer } },
+      ]),
   );
 };
 

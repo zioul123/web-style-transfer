@@ -102,6 +102,43 @@ export const runUnaryShaderToBuffer = (
   return outBuffer;
 };
 
+export const runUnaryShaderToBufferWithDispatch = (
+  gpuDevice: GPUDevice | null,
+  code: string,
+  inputBuffer: GPUBuffer,
+  outputFloatCount: number,
+  dispatchElementCount: number,
+  extraEntries: GPUBindGroupEntry[] = [],
+): GPUBuffer => {
+  if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
+  const outBuffer: GPUBuffer = gpuDevice.createBuffer({
+    size: outputFloatCount * Float32Array.BYTES_PER_ELEMENT,
+    usage: BUFFER_USAGE_STORAGE_COPY_SRC,
+  });
+  const pipeline = kernelRuntimeOptions.useCachedPipelines
+    ? getOrCreateComputePipeline(gpuDevice, code, code)
+    : gpuDevice.createComputePipeline({
+      layout: "auto",
+      compute: { module: gpuDevice.createShaderModule({ code }), entryPoint: "main" },
+    });
+  const bindGroup = gpuDevice.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: inputBuffer } },
+      ...extraEntries,
+      { binding: extraEntries.length + 1, resource: { buffer: outBuffer } },
+    ],
+  });
+  const encoder: GPUCommandEncoder = gpuDevice.createCommandEncoder();
+  const pass: GPUComputePassEncoder = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.dispatchWorkgroups(Math.ceil(dispatchElementCount / 64));
+  pass.end();
+  gpuDevice.queue.submit([encoder.finish()]);
+  return outBuffer;
+};
+
 
 export const runScalarMulBuffer = async (
   input: GpuBufferRef,
