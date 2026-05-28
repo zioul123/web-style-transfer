@@ -10,6 +10,7 @@ import { runContentLossBackwardBuffer } from "../../ops/loss/contentLoss.run";
 import { runMseBufferToScalarBuffer } from "../../ops/loss/mse.run";
 import {
   runStyleLossTermsFromTargetGramBuffer,
+  runStyleLossBackwardFusedFromGramDiffBuffer,
   runStyleLossBackwardFromInputGramBuffer,
   runStyleLossBackwardFromTargetGramBuffer,
 } from "../../ops/loss/styleLoss.run";
@@ -103,7 +104,7 @@ export const createOptimizationTrackedOps = (
     conv2dReluForward: async (input: GpuBufferRef, inputShape: TensorShape4D, weights: Float32Array, weightShape: TensorShape4D, bias: ArrayLike<number>): Promise<GpuBufferRef> => withKernelStat("convForward", async () => own(await runConv2dReluForwardBuffer(input, inputShape, weights, weightShape, bias, kernelFlags?.usePersistentWeightBuffers === true && bias instanceof Float32Array ? persistentKernelResources?.getConvForwardStaticBuffers(weights, bias) : undefined))),
     reluForward: async (input: GpuBufferRef, count: number): Promise<GpuBufferRef> => withKernelStat("pointwiseUpdate", async () => own(await runReluForwardBuffer(input, count, kernelFlags?.useVec4Pointwise === true))),
     maxPoolForward: async (input: GpuBufferRef, shape: TensorShape4D): Promise<GpuBufferRef> => own(await runMaxPool2dForwardBuffer(input, shape)),
-    gram: async (input: GpuBufferRef, shape: TensorShape4D): Promise<GpuBufferRef> => withKernelStat("gramStyle", async () => own(await runGramMatrixBuffer(input, shape))),
+    gram: async (input: GpuBufferRef, shape: TensorShape4D): Promise<GpuBufferRef> => withKernelStat("gramStyle", async () => own(await runGramMatrixBuffer(input, shape, kernelFlags?.gramKernel ?? "scalar"))),
   };
 
   const loss = {
@@ -112,14 +113,14 @@ export const createOptimizationTrackedOps = (
     add: (a: GpuBufferRef, b: GpuBufferRef, count: number): GpuBufferRef => withKernelStatSync("pointwiseUpdate", () => own({ buffer: runBinaryOpToBuffer(device, "add", a.buffer, b.buffer, count, "tensorTensor", kernelFlags?.useVec4Pointwise === true), owned: true })),
     weightedScalarSum: (scalars: readonly GpuBufferRef[], weights: readonly number[]): GpuBufferRef => own(runWeightedScalarSumBuffer(scalars, weights)),
     styleLossTerms: async (relu: GpuBufferRef, shape: TensorShape4D, targetGram: GpuBufferRef): Promise<{ inputGram: GpuBufferRef; styleSse: GpuBufferRef }> => {
-      const terms = await withKernelStat("gramStyle", async () => runStyleLossTermsFromTargetGramBuffer(acquireMseBuffer, relu, shape, targetGram));
+      const terms = await withKernelStat("gramStyle", async () => runStyleLossTermsFromTargetGramBuffer(acquireMseBuffer, relu, shape, targetGram, kernelFlags?.gramKernel ?? "scalar"));
       return { inputGram: own(terms.inputGram), styleSse: own(terms.styleSse) };
     },
   };
 
   const backward = {
-    styleLossBackward: async (relu: GpuBufferRef, shape: TensorShape4D, targetGram: GpuBufferRef): Promise<GpuBufferRef> => withKernelStat("gramStyle", async () => own(await runStyleLossBackwardFromTargetGramBuffer(relu, shape, targetGram))),
-    styleLossBackwardFromInputGram: async (relu: GpuBufferRef, shape: TensorShape4D, inputGram: GpuBufferRef, targetGram: GpuBufferRef): Promise<GpuBufferRef> => withKernelStat("gramStyle", async () => own(await runStyleLossBackwardFromInputGramBuffer(relu, shape, inputGram, targetGram))),
+    styleLossBackward: async (relu: GpuBufferRef, shape: TensorShape4D, targetGram: GpuBufferRef): Promise<GpuBufferRef> => withKernelStat("gramStyle", async () => own(await runStyleLossBackwardFromTargetGramBuffer(relu, shape, targetGram, kernelFlags?.gramKernel ?? "scalar"))),
+    styleLossBackwardFromInputGram: async (relu: GpuBufferRef, shape: TensorShape4D, inputGram: GpuBufferRef, targetGram: GpuBufferRef): Promise<GpuBufferRef> => withKernelStat("gramStyle", async () => own(kernelFlags?.styleBackward === "fused-from-gram-diff" ? await runStyleLossBackwardFusedFromGramDiffBuffer(relu, shape, inputGram, targetGram) : await runStyleLossBackwardFromInputGramBuffer(relu, shape, inputGram, targetGram))),
     contentLossBackward: async (relu: GpuBufferRef, target: GpuBufferRef, count: number): Promise<GpuBufferRef> => withKernelStat("pointwiseUpdate", async () => own(await runContentLossBackwardBuffer(relu, target, count, kernelFlags?.useVec4Pointwise === true))),
     reluBackward: async (reluOut: GpuBufferRef, gradOut: GpuBufferRef, count: number): Promise<GpuBufferRef> => withKernelStat("pointwiseUpdate", async () => own(await runReluBackwardBuffer(reluOut, gradOut, count, kernelFlags?.useVec4Pointwise === true))),
     conv2dBackwardInput: async (gradOut: GpuBufferRef, inShape: TensorShape4D, weights: Float32Array, weightShape: TensorShape4D): Promise<GpuBufferRef> => withKernelStat("convBackwardInput", async () => own(await runConv2dBackwardInputBuffer(gradOut, inShape, weights, weightShape, kernelFlags?.usePersistentWeightBuffers === true ? persistentKernelResources?.getConvBackwardStaticBuffers(weights) : undefined))),

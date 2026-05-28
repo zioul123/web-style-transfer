@@ -138,8 +138,6 @@ const assertSupportedKernelFlags = (
     throw new Error("kernelFlags.useStepBufferPool=false is not supported.");
   }
   const unsupported: Array<[string, unknown]> = [
-    ["gramKernel", kernelFlags.gramKernel],
-    ["styleBackward", kernelFlags.styleBackward],
     ["convForwardKernel", kernelFlags.convForwardKernel],
     ["convBackwardInputKernel", kernelFlags.convBackwardInputKernel],
     ["weightStorage", kernelFlags.weightStorage],

@@ -1,18 +1,26 @@
-import { makeGramBackwardShader, makeGramMatrixShader } from "./gram.shader";
+import {
+  makeGramBackwardShader,
+  makeGramMatrixShader,
+  makeSymmetricGramMatrixShader,
+} from "./gram.shader";
 import {
   ownedBuffer,
   readGpuBufferToArray,
   releaseOwnedBuffer,
   runUnaryShaderToBuffer,
+  runUnaryShaderToBufferWithDispatch,
   uploadToOwnedBuffer,
   type GpuBufferRef,
 } from "../../runtime/bufferKernels";
 import { getGpuDevice } from "../../runtime/deviceState";
 import { BUFFER_USAGE_UNIFORM_COPY_DST } from "../../runtime/gpuFlags";
 
+export type GramKernelVariant = "scalar" | "parallel-dot" | "symmetric-parallel-dot";
+
 export const runGramMatrixBuffer = async (
   input: GpuBufferRef,
   shape: readonly [number, number, number, number],
+  kernelVariant: GramKernelVariant = "scalar",
 ): Promise<GpuBufferRef> => {
   if (shape[0] !== 1) throw new Error("gram-matrix expects batch size 1.");
   const gpuDevice: GPUDevice | null = getGpuDevice();
@@ -22,9 +30,28 @@ export const runGramMatrixBuffer = async (
   const outCount = channels * channels;
   const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 2 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST });
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, spatial]));
-  return ownedBuffer(runUnaryShaderToBuffer(gpuDevice, makeGramMatrixShader(outCount), input.buffer, outCount, [
-    { binding: 1, resource: { buffer: uniformBuffer } },
-  ]));
+  const shader =
+    kernelVariant === "symmetric-parallel-dot"
+      ? makeSymmetricGramMatrixShader((channels * (channels + 1)) / 2)
+      : makeGramMatrixShader(outCount);
+  const dispatchCount =
+    kernelVariant === "symmetric-parallel-dot"
+      ? (channels * (channels + 1)) / 2
+      : outCount;
+  return ownedBuffer(
+    kernelVariant === "symmetric-parallel-dot"
+      ? runUnaryShaderToBufferWithDispatch(
+          gpuDevice,
+          shader,
+          input.buffer,
+          outCount,
+          dispatchCount,
+          [{ binding: 1, resource: { buffer: uniformBuffer } }],
+        )
+      : runUnaryShaderToBuffer(gpuDevice, shader, input.buffer, outCount, [
+          { binding: 1, resource: { buffer: uniformBuffer } },
+        ]),
+  );
 };
 
 export const runGramMatrix = async (
