@@ -3,6 +3,15 @@ import {
   type Vgg19WeightsManifest,
 } from "../../ml/worker/models/vgg19/weights";
 import type { FullWeights } from "./types/controller";
+import {
+  clearModelCache,
+  createModelCacheKey,
+  readCachedModelPack,
+  readModelCacheStatus,
+  writeCachedModelPack,
+  type ModelCacheStatus,
+  type ModelCacheTier,
+} from "./modelCache";
 
 export const VGG_PACK_OPTIONS = [
   { name: "fp32", label: "FP32" },
@@ -15,7 +24,18 @@ export const VGG_PACK_OPTIONS = [
 
 export type VggPackName = (typeof VGG_PACK_OPTIONS)[number]["name"];
 
-export const DEFAULT_VGG_PACK: VggPackName = "int8-per-channel";
+export type VggPackLoadState =
+  | "downloading"
+  | "cached"
+  | "ready";
+
+export type VggPackLoadResult = {
+  weights: FullWeights;
+  state: VggPackLoadState;
+  cacheStatus: ModelCacheStatus;
+};
+
+export const DEFAULT_VGG_PACK: VggPackName = "int8log-per-channel";
 export const VGG_PACK_STORAGE_KEY = "style-transfer.vgg-pack";
 
 const loadJson = async <T,>(url: string): Promise<T> => {
@@ -24,22 +44,10 @@ const loadJson = async <T,>(url: string): Promise<T> => {
   return (await response.json()) as T;
 };
 
-export const loadVgg19ManifestWeightsForPack = async (
-  pack: VggPackName,
+const toFullWeights = async (
+  manifest: Vgg19WeightsManifest,
+  shardBuffers: Record<string, ArrayBuffer>,
 ): Promise<FullWeights> => {
-  const manifest = await loadJson<Vgg19WeightsManifest>(
-    `/vgg19-models/${pack}/manifest.json`,
-  );
-  const shardEntries = await Promise.all(
-    manifest.shards.map(async (shard) => {
-      const response = await fetch(`/vgg19-models/${pack}/${shard.name}`);
-      if (!response.ok) {
-        throw new Error(`Missing weight shard: ${shard.name}`);
-      }
-      return [shard.name, await response.arrayBuffer()] as const;
-    }),
-  );
-  const shardBuffers: Record<string, ArrayBuffer> = Object.fromEntries(shardEntries);
   const cache = await parseVgg19ManifestBackedLayerCache(manifest, shardBuffers);
   const weights: FullWeights = {};
   for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
@@ -51,3 +59,77 @@ export const loadVgg19ManifestWeightsForPack = async (
   }
   return weights;
 };
+
+const downloadShards = async (
+  pack: VggPackName,
+  manifest: Vgg19WeightsManifest,
+): Promise<Record<string, ArrayBuffer>> => {
+  const shardEntries = await Promise.all(
+    manifest.shards.map(async (shard) => {
+      const response = await fetch(`/vgg19-models/${pack}/${shard.name}`);
+      if (!response.ok) {
+        throw new Error(`Missing weight shard: ${shard.name}`);
+      }
+      return [shard.name, await response.arrayBuffer()] as const;
+    }),
+  );
+  return Object.fromEntries(shardEntries);
+};
+
+export const loadVgg19ManifestWeightsForPack = async (
+  pack: VggPackName,
+): Promise<VggPackLoadResult> => {
+  const manifest = await loadJson<Vgg19WeightsManifest>(
+    `/vgg19-models/${pack}/manifest.json`,
+  );
+  const cacheKey = createModelCacheKey(
+    manifest.modelId,
+    manifest.version,
+    pack as ModelCacheTier,
+  );
+
+  const cached = await readCachedModelPack(cacheKey);
+  if (cached !== null) {
+    try {
+      const weights = await toFullWeights(cached.manifest, cached.shards);
+      return {
+        weights,
+        state: "cached",
+        cacheStatus: await readModelCacheStatus(),
+      };
+    } catch {
+      // Cached payload failed integrity checks in parser; fall through to re-download.
+    }
+  }
+
+  const shards = await downloadShards(pack, manifest);
+  const weights = await toFullWeights(manifest, shards);
+  const totalBytes = Object.values(shards).reduce(
+    (acc, buffer) => acc + buffer.byteLength,
+    0,
+  );
+  await writeCachedModelPack({
+    cacheKey,
+    modelId: manifest.modelId,
+    version: manifest.version,
+    tier: pack as ModelCacheTier,
+    manifest,
+    shards,
+    totalBytes,
+    updatedAtMs: Date.now(),
+  });
+
+  return {
+    weights,
+    state: "ready",
+    cacheStatus: await readModelCacheStatus(),
+  };
+};
+
+export const clearCachedVggModelPacks = async (): Promise<ModelCacheStatus> => {
+  await clearModelCache();
+  return await readModelCacheStatus();
+};
+
+export const getCachedVggModelPackStatus = async (): Promise<ModelCacheStatus> =>
+  await readModelCacheStatus();

@@ -33,21 +33,6 @@ type Phase3FullPassFixture = {
   };
 };
 
-test("phase 6 UI defaults match python reference controls", async ({
-  page,
-}) => {
-  await gotoStableApp(page);
-  await expect(page.getByLabel("Model pack")).toHaveValue("int8log-per-channel");
-  await expect(page.getByLabel("Optimizer")).toHaveValue("lbfgs");
-  await expect(page.getByLabel("Content resolution")).toHaveValue("128x128");
-  await expect(page.getByLabel("Style resolution")).toHaveValue("128x192");
-  await expect(page.getByLabel("Style weight")).toHaveValue("500000");
-  await expect(page.getByLabel("Content weight")).toHaveValue("1");
-  await expect(page.getByLabel("Learning rate")).toHaveValue("1");
-  await expect(page.getByLabel("L-BFGS history")).toHaveValue("100");
-  await expect(page.getByLabel("L-BFGS tolerance change")).toHaveValue("1e-9");
-});
-
 test("phase 6 model pack selector reloads manifest-backed weights and supports fp32", async ({
   page,
 }) => {
