@@ -339,6 +339,45 @@ export const BenchmarkApp = (): ReactElement => {
     let baselineLoss = 0;
     let baselineElapsed = 0;
     for (const variant of selectedVariants) {
+      const warmupResponse = await askWorker(worker, {
+        type: "run-style-transfer",
+        id: `benchmark-kernel-lab-warmup-${variant.name}`,
+        optimizer: "sgd",
+        inputShape: fixture.inputShape,
+        inputImageValues: fixture.inputImageValues,
+        contentImageValues: fixture.contentImageValues,
+        styleImageValues: fixture.styleImageValues,
+        mean: fixture.mean,
+        std: fixture.std,
+        styleLayerIndices: fixture.styleLayerIndices,
+        contentLayerIndex: fixture.contentLayerIndex,
+        weights,
+        contentWeight: fullContentWeight,
+        styleWeight: fullStyleWeight,
+        learningRate: fullLearningRate,
+        steps: 1,
+        kernelFlags: variant.kernelFlags,
+        synchronizePhaseTimings: true,
+      });
+      if (
+        warmupResponse.type === "run-style-transfer-result" &&
+        !warmupResponse.ok
+      ) {
+        rows.push({
+          name: variant.name,
+          elapsedMs: 0,
+          forwardMs: 0,
+          lossMs: 0,
+          backwardMs: 0,
+          updateMs: 0,
+          finalLoss: 0,
+          lossDeltaFromBaseline: 0,
+          speedupVsBaseline: 0,
+          ok: false,
+          error: warmupResponse.message,
+        });
+        continue;
+      }
       setStatus(`Running kernel lab variant: ${variant.name}...`);
       const response = await askWorker(worker, {
         type: "run-style-transfer",
