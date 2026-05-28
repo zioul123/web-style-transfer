@@ -3,7 +3,7 @@
 ## File layout
 
 - `fp32/manifest.json`, `fp16/manifest.json`, `int8-per-channel/manifest.json`, `int8log-per-channel/manifest.json`, `int4-experimental/manifest.json`, `int4log-experimental/manifest.json`: pack-specific metadata.
-- `*/shard-000.bin`: pack payload shards.
+- `*/shard-*.bin`: pack payload shards.
 - Optional transition artifact per-pack: `*/vgg19_conv0_to_conv28_weights.json` (legacy).
 
 ## Manifest schema

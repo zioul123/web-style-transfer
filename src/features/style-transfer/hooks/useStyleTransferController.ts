@@ -13,7 +13,9 @@ import type {
   UseStyleTransferControllerResult,
 } from "../types/controller";
 import {
+  clearCachedVggModelPacks,
   DEFAULT_VGG_PACK,
+  getCachedVggModelPackStatus,
   loadVgg19ManifestWeightsForPack,
   VGG_PACK_STORAGE_KEY,
   type VggPackName,
@@ -136,7 +138,9 @@ const getInitialPackPreference = (): VggPackName => {
     storedPack === "fp32" ||
     storedPack === "fp16" ||
     storedPack === "int8-per-channel" ||
-    storedPack === "int8log-per-channel"
+    storedPack === "int8log-per-channel" ||
+    storedPack === "int4-experimental" ||
+    storedPack === "int4log-experimental"
   ) {
     return storedPack;
   }
@@ -189,6 +193,10 @@ export const useStyleTransferController =
     const [runStats, setRunStats] = useState<
       import("../../../types").WorkerRunStats | null
     >(null);
+    const [modelCacheState, setModelCacheState] = useState<
+      "downloading" | "cached" | "ready"
+    >("downloading");
+    const [modelCacheBytes, setModelCacheBytes] = useState<number>(0);
 
     const workerRef = useRef<Worker | null>(null);
     const contentImageResolution = RESOLUTION_PRESETS[contentResolution];
@@ -218,10 +226,13 @@ export const useStyleTransferController =
       let isCurrent = true;
       const loadWeights = async (): Promise<void> => {
         setWorkerStatus(`Loading VGG19 weights pack: ${selectedPack}...`);
+        setModelCacheState("downloading");
         try {
           const nextWeights = await loadVgg19ManifestWeightsForPack(selectedPack);
           if (!isCurrent) return;
-          setWeights(nextWeights);
+          setWeights(nextWeights.weights);
+          setModelCacheState(nextWeights.state);
+          setModelCacheBytes(nextWeights.cacheStatus.bytes);
           setWorkerStatus(`Loaded VGG19 weights pack: ${selectedPack}.`);
         } catch (error) {
           if (!isCurrent) return;
@@ -236,6 +247,13 @@ export const useStyleTransferController =
         isCurrent = false;
       };
     }, [selectedPack]);
+
+    useEffect(() => {
+      void (async (): Promise<void> => {
+        const status = await getCachedVggModelPackStatus();
+        setModelCacheBytes(status.bytes);
+      })();
+    }, []);
 
     useEffect(() => {
       const worker = new Worker(
@@ -495,6 +513,13 @@ export const useStyleTransferController =
       setSelectedPackState(nextPack);
     };
 
+    const clearModelCache = async (): Promise<void> => {
+      const nextStatus = await clearCachedVggModelPacks();
+      setModelCacheBytes(nextStatus.bytes);
+      setModelCacheState("ready");
+      setWorkerStatus("Model cache cleared.");
+    };
+
     return {
       controls: {
         contentResolution,
@@ -551,6 +576,7 @@ export const useStyleTransferController =
           ),
         resetOptimizerState,
         resetOutputImage,
+        clearModelCache,
       },
       status: {
         workerStatus,
@@ -560,6 +586,8 @@ export const useStyleTransferController =
         isRunning,
         lastLoss,
         runStats,
+        modelCacheState,
+        modelCacheBytes,
       },
       images: { contentImage, styleImage, outputImage },
       canRun,

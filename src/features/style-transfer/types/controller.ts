@@ -49,6 +49,7 @@ export interface StyleTransferControls {
   setSynchronizePhaseTimings: Dispatch<SetStateAction<boolean>>;
   resetOptimizerState: () => void;
   resetOutputImage: () => void;
+  clearModelCache: () => Promise<void>;
 }
 
 export interface StyleTransferStatus {
@@ -59,6 +60,8 @@ export interface StyleTransferStatus {
   isRunning: boolean;
   lastLoss: number | null;
   runStats: WorkerRunStats | null;
+  modelCacheState: "downloading" | "cached" | "ready";
+  modelCacheBytes: number;
 }
 
 export interface StyleTransferImages {

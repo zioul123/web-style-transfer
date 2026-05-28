@@ -59,6 +59,7 @@ const Plane = ({ url, x }: { url: string; x: number }): ReactElement => {
 function App() {
   const { controls, status, images, canRun, setIsRunning, onUpload } =
     useStyleTransferController();
+  const cacheSizeMb = (status.modelCacheBytes / (1024 * 1024)).toFixed(2);
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-6 py-8 text-slate-100">
@@ -69,6 +70,14 @@ function App() {
       <section className="grid gap-4 rounded-xl border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-2">
         <p>{status.workerStatus}</p>
         <p>{status.gpuStatus}</p>
+        <p>
+          Model cache: {status.modelCacheState} ({cacheSizeMb} MB)
+        </p>
+        <p>
+          {status.modelCacheState === "downloading"
+            ? "Model downloading..."
+            : "Model cached"}
+        </p>
         <p className="md:col-span-2 text-slate-300">{status.gpuInfo}</p>
       </section>
 
@@ -291,6 +300,13 @@ function App() {
           disabled={!status.isRunning}
         >
           ⏸ Pause
+        </button>
+        <button
+          className="rounded bg-zinc-500 px-4 py-2 font-semibold text-black"
+          onClick={() => void controls.clearModelCache()}
+          disabled={status.isRunning}
+        >
+          Clear model cache
         </button>
         <button
           className="rounded bg-sky-500 px-4 py-2 font-semibold text-black"
