@@ -265,7 +265,6 @@ export const runStyleTransferPipeline = async (
     },
   };
 
-  const uploadStart = performance.now();
   let inputBuffer: GpuBufferRef | null = uploadToOwnedBuffer(
     device,
     new Float32Array(payload.inputImageValues),
@@ -278,7 +277,6 @@ export const runStyleTransferPipeline = async (
     device,
     new Float32Array(payload.styleImageValues),
   );
-  weightUploadMs += performance.now() - uploadStart;
   const persistentBuffers: GpuBufferRef[] = [contentImageBuffer, styleImageBuffer];
 
   try {
