@@ -139,7 +139,6 @@ const assertSupportedKernelFlags = (
   }
   const unsupported: Array<[string, unknown]> = [
     ["useVec4Pointwise", kernelFlags.useVec4Pointwise],
-    ["usePoolBackwardScatter", kernelFlags.usePoolBackwardScatter],
     ["gramKernel", kernelFlags.gramKernel],
     ["styleBackward", kernelFlags.styleBackward],
     ["convForwardKernel", kernelFlags.convForwardKernel],

@@ -163,6 +163,17 @@ const KERNEL_VARIANT_TO_FLAGS: Record<
     usePersistentWeightBuffers: true,
     useStepBufferPool: true,
   },
+  "cached-persistent-weights-pool-scatter": {
+    useCachedPipelines: true,
+    usePersistentWeightBuffers: true,
+    usePoolBackwardScatter: true,
+  },
+  "cached-persistent-weights-step-pool-pool-scatter": {
+    useCachedPipelines: true,
+    usePersistentWeightBuffers: true,
+    useStepBufferPool: true,
+    usePoolBackwardScatter: true,
+  },
 };
 
 export const useStyleTransferController =

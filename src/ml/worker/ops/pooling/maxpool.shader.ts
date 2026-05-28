@@ -40,6 +40,53 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   out[i] = select(0.0, gradOutValues[outIdx], ih == maxH && iw == maxW);
 }`;
 
+export const makeMaxPool2dBackwardScatterShader = (count: number): string => `
+struct MaxPoolBackwardUniforms {
+  channels: u32,
+  inHeight: u32,
+  inWidth: u32,
+  outHeight: u32,
+  outWidth: u32,
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,
+}
+@group(0) @binding(0) var<storage, read> inputValues: array<f32>;
+@group(0) @binding(1) var<storage, read> gradOutValues: array<f32>;
+@group(0) @binding(2) var<uniform> uniforms: MaxPoolBackwardUniforms;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let hwOut = uniforms.outHeight * uniforms.outWidth;
+  let c = (i / hwOut) % uniforms.channels;
+  let outOffset = i % hwOut;
+  let oh = outOffset / uniforms.outWidth;
+  let ow = outOffset % uniforms.outWidth;
+  let ih0 = oh * 2u;
+  let iw0 = ow * 2u;
+  let hwIn = uniforms.inHeight * uniforms.inWidth;
+  let base = c * hwIn;
+  let idx00 = base + ih0 * uniforms.inWidth + iw0;
+  let idx01 = idx00 + 1u;
+  let idx10 = idx00 + uniforms.inWidth;
+  let idx11 = idx10 + 1u;
+  var maxIndex = idx00;
+  var maxVal = inputValues[idx00];
+  let v01 = inputValues[idx01];
+  if (v01 > maxVal) { maxVal = v01; maxIndex = idx01; }
+  let v10 = inputValues[idx10];
+  if (v10 > maxVal) { maxVal = v10; maxIndex = idx10; }
+  let v11 = inputValues[idx11];
+  if (v11 > maxVal) { maxIndex = idx11; }
+  out[idx00] = 0.0;
+  out[idx01] = 0.0;
+  out[idx10] = 0.0;
+  out[idx11] = 0.0;
+  out[maxIndex] = gradOutValues[i];
+}`;
+
 export const makeMaxPool2dShader = (count: number): string => `
 struct MaxPoolUniforms {
   channels: u32,

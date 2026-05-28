@@ -18,7 +18,9 @@ export type KernelVariantMode =
   | "baseline"
   | "cached-pipelines"
   | "cached-persistent-weights"
-  | "cached-persistent-weights-step-pool";
+  | "cached-persistent-weights-step-pool"
+  | "cached-persistent-weights-pool-scatter"
+  | "cached-persistent-weights-step-pool-pool-scatter";
 export type FullWeights = Record<
   string,
   number[] | [number, number, number, number]

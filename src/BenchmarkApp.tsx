@@ -255,6 +255,14 @@ export const BenchmarkApp = (): ReactElement => {
         name: "cached+persistent+step-pool",
         kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, useStepBufferPool: true },
       },
+      {
+        name: "cached+persistent+pool-scatter",
+        kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, usePoolBackwardScatter: true },
+      },
+      {
+        name: "cached+persistent+step-pool+pool-scatter",
+        kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, useStepBufferPool: true, usePoolBackwardScatter: true },
+      },
     ];
     const rows: KernelLabRow[] = [];
     let baselineLoss = 0;

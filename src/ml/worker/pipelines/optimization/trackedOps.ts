@@ -123,7 +123,7 @@ export const createOptimizationTrackedOps = (
     contentLossBackward: async (relu: GpuBufferRef, target: GpuBufferRef, count: number): Promise<GpuBufferRef> => withKernelStat("pointwiseUpdate", async () => own(await runContentLossBackwardBuffer(relu, target, count))),
     reluBackward: async (reluOut: GpuBufferRef, gradOut: GpuBufferRef, count: number): Promise<GpuBufferRef> => withKernelStat("pointwiseUpdate", async () => own(await runReluBackwardBuffer(reluOut, gradOut, count))),
     conv2dBackwardInput: async (gradOut: GpuBufferRef, inShape: TensorShape4D, weights: Float32Array, weightShape: TensorShape4D): Promise<GpuBufferRef> => withKernelStat("convBackwardInput", async () => own(await runConv2dBackwardInputBuffer(gradOut, inShape, weights, weightShape, kernelFlags?.usePersistentWeightBuffers === true ? persistentKernelResources?.getConvBackwardStaticBuffers(weights) : undefined))),
-    maxPoolBackward: async (reluOut: GpuBufferRef, reluShape: TensorShape4D, gradPool: GpuBufferRef): Promise<GpuBufferRef> => withKernelStat("poolBackward", async () => own(await runMaxPool2dBackwardBuffer(reluOut, reluShape, gradPool))),
+    maxPoolBackward: async (reluOut: GpuBufferRef, reluShape: TensorShape4D, gradPool: GpuBufferRef): Promise<GpuBufferRef> => withKernelStat("poolBackward", async () => own(await runMaxPool2dBackwardBuffer(reluOut, reluShape, gradPool, kernelFlags?.usePoolBackwardScatter === true))),
     normalizeBackward: async (gradNorm: GpuBufferRef, shape: TensorShape4D, std: readonly number[]): Promise<GpuBufferRef> => withKernelStat("pointwiseUpdate", async () => own(await runNormalizeBackwardBuffer(gradNorm, shape, std))),
   };
 
