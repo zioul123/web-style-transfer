@@ -9,6 +9,8 @@ export const VGG_PACK_OPTIONS = [
   { name: "fp16", label: "FP16" },
   { name: "int8-per-channel", label: "INT8 per-channel" },
   { name: "int8log-per-channel", label: "INT8 log per-channel" },
+  { name: "int4-experimental", label: "INT4 experimental" },
+  { name: "int4log-experimental", label: "INT4 log experimental" },
 ] as const;
 
 export type VggPackName = (typeof VGG_PACK_OPTIONS)[number]["name"];
