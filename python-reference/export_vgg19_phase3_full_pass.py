@@ -43,6 +43,50 @@ def sha256_hex(path: Path) -> str:
 
 
 PACKS = ('fp32', 'fp16', 'int8-per-channel', 'int8log-per-channel', 'int4-experimental', 'int4log-experimental')
+DEFAULT_MAX_SHARD_BYTES = 10 * 1024 * 1024
+
+
+class ShardWriter:
+    def __init__(self, output_dir: Path, max_shard_bytes: int) -> None:
+        self.output_dir = output_dir
+        self.max_shard_bytes = max_shard_bytes
+        self.shard_index = 0
+        self.current_size = 0
+        self.current_path = output_dir / self._shard_name(self.shard_index)
+        self.current_file = self.current_path.open('wb')
+        self.shard_sizes: dict[str, int] = {self.current_path.name: 0}
+
+    @staticmethod
+    def _shard_name(index: int) -> str:
+        return f'shard-{index:03d}.bin'
+
+    def _rotate(self) -> None:
+        self.current_file.close()
+        self.shard_index += 1
+        self.current_size = 0
+        self.current_path = self.output_dir / self._shard_name(self.shard_index)
+        self.current_file = self.current_path.open('wb')
+        self.shard_sizes[self.current_path.name] = 0
+
+    def write(self, payload: bytes) -> tuple[str, int, int]:
+        if self.current_size > 0 and self.current_size + len(payload) > self.max_shard_bytes:
+            self._rotate()
+        offset = self.current_size
+        self.current_file.write(payload)
+        self.current_size += len(payload)
+        self.shard_sizes[self.current_path.name] = self.current_size
+        return self.current_path.name, offset, len(payload)
+
+    def write_layer_pair(self, weight_payload: bytes, bias_payload: bytes) -> tuple[tuple[str, int, int], tuple[str, int, int]]:
+        combined_length = len(weight_payload) + len(bias_payload)
+        if self.current_size > 0 and self.current_size + combined_length > self.max_shard_bytes:
+            self._rotate()
+        weight_meta = self.write(weight_payload)
+        bias_meta = self.write(bias_payload)
+        return weight_meta, bias_meta
+
+    def close(self) -> None:
+        self.current_file.close()
 
 
 def quantize_int8_per_channel(weight: torch.Tensor) -> tuple[torch.Tensor, list[float], list[int]]:
@@ -121,18 +165,17 @@ def quantize_int4_log_per_channel(weight: torch.Tensor) -> tuple[bytes, list[flo
     return _pack_signed_int4(quantized), scales, zero_points
 
 
-def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool, pack: str) -> None:
+def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool, pack: str, max_shard_bytes: int) -> None:
     MODEL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     pack_dir = MODEL_OUTPUT_DIR / pack
     pack_dir.mkdir(parents=True, exist_ok=True)
-    shard_name = 'shard-000.bin'
-    shard_path = pack_dir / shard_name
-
+    for stale_shard in pack_dir.glob('shard-*.bin'):
+        stale_shard.unlink()
     layers: dict[str, dict[str, object]] = {}
     legacy_payload: dict[str, object] = {}
-    cursor = 0
+    shard_writer = ShardWriter(pack_dir, max_shard_bytes=max_shard_bytes)
 
-    with shard_path.open('wb') as shard_file:
+    try:
         for layer_index in range(0, LAST_LAYER_INDEX + 1):
             layer = model[layer_index]
             if not isinstance(layer, nn.Conv2d):
@@ -192,27 +235,25 @@ def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool, pack: 
             else:
                 raise RuntimeError(f'Unsupported pack: {pack}')
             bias_bytes = bias.numpy().tobytes(order='C')
-            weight_offset = cursor
-            shard_file.write(weight_bytes)
-            cursor += len(weight_bytes)
-            bias_offset = cursor
-            shard_file.write(bias_bytes)
-            cursor += len(bias_bytes)
+            (
+                (weight_shard, weight_offset, weight_length),
+                (bias_shard, bias_offset, bias_length),
+            ) = shard_writer.write_layer_pair(weight_bytes, bias_bytes)
 
             layers[f'conv{layer_index}'] = {
                 'weight': {
                     'shape': list(weight.shape),
                     'dtype': weight_dtype,
-                    'shard': shard_name,
+                    'shard': weight_shard,
                     'offset': weight_offset,
-                    'length': len(weight_bytes),
+                    'length': weight_length,
                 },
                 'bias': {
                     'shape': [bias.numel()],
                     'dtype': 'float32',
-                    'shard': shard_name,
+                    'shard': bias_shard,
                     'offset': bias_offset,
-                    'length': len(bias_bytes),
+                    'length': bias_length,
                 },
             }
             if layer_quantization is not None:
@@ -220,21 +261,23 @@ def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool, pack: 
             legacy_payload[f'conv{layer_index}.weightShape'] = list(weight.shape)
             legacy_payload[f'conv{layer_index}.weightValues'] = tensor_to_list(weight)
             legacy_payload[f'conv{layer_index}.biasValues'] = tensor_to_list(bias)
+    finally:
+        shard_writer.close()
+
+    shard_entries = [
+        {'name': name, 'byteLength': byte_length}
+        for name, byte_length in sorted(shard_writer.shard_sizes.items())
+    ]
 
     manifest = {
         'modelId': 'vgg19-features-conv0-28',
         'version': '1.0.0',
         'format': f'{pack}-le',
         'layers': layers,
-        'shards': [{
-            'name': shard_name,
-            'byteLength': cursor,
-        }],
+        'shards': shard_entries,
         'checksums': {
             'algorithm': 'sha256',
-            'files': {
-                shard_name: sha256_hex(shard_path),
-            },
+            'files': {entry['name']: sha256_hex(pack_dir / entry['name']) for entry in shard_entries},
         },
         'quantization': {
             'scheme': 'none' if pack in ('fp32', 'fp16') else ('per-channel-symmetric-log' if 'log' in pack else 'per-channel-symmetric'),
@@ -252,12 +295,21 @@ def export_weights_manifest(model: nn.Sequential, emit_legacy_json: bool, pack: 
         (pack_dir / 'vgg19_conv0_to_conv28_weights.json').write_text(json.dumps(legacy_payload))
 
 
-def export(emit_legacy_json: bool = True, packs: tuple[str, ...] = PACKS) -> None:
+def export(
+    emit_legacy_json: bool = True,
+    packs: tuple[str, ...] = PACKS,
+    max_shard_bytes: int = DEFAULT_MAX_SHARD_BYTES,
+) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     model = vgg19(weights=VGG19_Weights.DEFAULT).features.eval()
     for pack in packs:
-        export_weights_manifest(model, emit_legacy_json, pack)
+        export_weights_manifest(
+            model,
+            emit_legacy_json,
+            pack,
+            max_shard_bytes=max_shard_bytes,
+        )
     truncated_layers = nn.Sequential(*list(model.children())[: LAST_LAYER_INDEX + 1])
 
     torch.manual_seed(13)
@@ -349,6 +401,17 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--packs', type=str, default=','.join(PACKS))
     parser.add_argument('--no-legacy-json', action='store_true')
+    parser.add_argument(
+        '--max-shard-mb',
+        type=float,
+        default=DEFAULT_MAX_SHARD_BYTES / (1024 * 1024),
+        help='Maximum shard size (MiB) before rotating to the next shard.',
+    )
     args = parser.parse_args()
     selected_packs = tuple(item.strip() for item in args.packs.split(',') if item.strip() != '')
-    export(emit_legacy_json=not args.no_legacy_json, packs=selected_packs)
+    max_shard_bytes = max(1, int(args.max_shard_mb * 1024 * 1024))
+    export(
+        emit_legacy_json=not args.no_legacy_json,
+        packs=selected_packs,
+        max_shard_bytes=max_shard_bytes,
+    )
