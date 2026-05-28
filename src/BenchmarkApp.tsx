@@ -359,6 +359,7 @@ export const BenchmarkApp = (): ReactElement => {
         steps: kernelLabSteps,
         kernelFlags: variant.kernelFlags,
         collectKernelStats: true,
+        synchronizePhaseTimings: true,
       });
       if (response.type !== "run-style-transfer-result") {
         rows.push({

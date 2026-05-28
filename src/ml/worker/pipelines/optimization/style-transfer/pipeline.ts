@@ -214,6 +214,8 @@ export const runStyleTransferPipeline = async (
   const device = getGpuDevice();
   if (device === null) throw new Error("WebGPU device is not initialized.");
   assertSupportedKernelFlags(payload.kernelFlags);
+  const synchronizePhaseTimings = payload.synchronizePhaseTimings ?? false;
+  if (synchronizePhaseTimings) await device.queue.onSubmittedWorkDone();
 
   const contentShape: TensorShape4D = payload.contentShape ?? payload.inputShape;
   const styleShape: TensorShape4D = payload.styleShape ?? payload.inputShape;
@@ -257,7 +259,6 @@ export const runStyleTransferPipeline = async (
   const lossReadbackInterval = normalizeLossReadbackInterval(
     payload.lossReadbackInterval,
   );
-  const synchronizePhaseTimings = payload.synchronizePhaseTimings ?? false;
   const collectKernelStats = payload.collectKernelStats ?? false;
   const aggregatedKernelStats: WorkerKernelStats = {};
   let weightUploadMs = 0;
@@ -428,6 +429,7 @@ export const runStyleTransferPipeline = async (
     if (collectKernelStats) {
       mergeKernelStats(aggregatedKernelStats, targetTracked.getKernelStats());
     }
+    if (synchronizePhaseTimings) await device.queue.onSubmittedWorkDone();
 
     for (let step = 0; step < payload.steps; step += 1) {
       if (inputBuffer === null) throw new Error("Input buffer was released unexpectedly.");
@@ -467,6 +469,7 @@ export const runStyleTransferPipeline = async (
       } finally {
         runtimeContext.releaseStepOwned();
       }
+      if (synchronizePhaseTimings) await device.queue.onSubmittedWorkDone();
     }
 
     if (inputBuffer === null) throw new Error("Input buffer was released unexpectedly.");
