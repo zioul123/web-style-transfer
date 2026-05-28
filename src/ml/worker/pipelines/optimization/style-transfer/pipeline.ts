@@ -137,6 +137,12 @@ const assertSupportedKernelFlags = (
   if (kernelFlags.useStepBufferPool === false) {
     throw new Error("kernelFlags.useStepBufferPool=false is not supported.");
   }
+  if (kernelFlags.convForwardKernel === "tiled-spatial") {
+    throw new Error("kernelFlags.convForwardKernel=tiled-spatial is not implemented yet.");
+  }
+  if (kernelFlags.convBackwardInputKernel === "spatial-vec4") {
+    throw new Error("kernelFlags.convBackwardInputKernel=spatial-vec4 is not implemented yet.");
+  }
   const unsupported: Array<[string, unknown]> = [
     ["weightStorage", kernelFlags.weightStorage],
   ];
@@ -179,7 +185,7 @@ export const runStyleTransferPipeline = async (
   assertValuesMatchShape("styleImageValues", payload.styleImageValues, styleShape);
 
   const runtimeContext = createOptimizationRuntimeContext(device, {
-    reuseTempBuffers: payload.kernelFlags?.useStepBufferPool === true,
+    reuseTempBuffers: payload.kernelFlags?.useStepBufferPool ?? true,
   });
   const convLayerCache = parseVgg19ConvLayerCache(payload.weights);
   const losses: number[] = [];

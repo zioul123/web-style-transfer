@@ -313,8 +313,8 @@ function App() {
                 }
               >
                 <option value="scalar">scalar</option>
-                <option value="spatial-vec4">spatial-vec4</option>
-                <option value="tiled-spatial">tiled-spatial</option>
+                <option value="spatial-vec4">spatial-vec4 (batched scalar)</option>
+                <option value="tiled-spatial">tiled-spatial (unsupported)</option>
               </select>
             </label>
             <label className="flex flex-col gap-1">
@@ -331,7 +331,7 @@ function App() {
                 }
               >
                 <option value="scalar">scalar</option>
-                <option value="spatial-vec4">spatial-vec4</option>
+                <option value="spatial-vec4">spatial-vec4 (unsupported)</option>
                 <option value="transposed-weight-spatial-vec4">transposed-weight-spatial-vec4</option>
               </select>
             </label>

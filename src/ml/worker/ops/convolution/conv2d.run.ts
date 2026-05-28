@@ -37,6 +37,22 @@ export type ConvBackwardInputKernelVariant =
   | "spatial-vec4"
   | "transposed-weight-spatial-vec4";
 
+const assertSupportedForwardKernelVariant = (
+  kernelVariant: ConvForwardKernelVariant,
+): void => {
+  if (kernelVariant === "tiled-spatial") {
+    throw new Error("convForwardKernel=tiled-spatial is not implemented yet.");
+  }
+};
+
+const assertSupportedBackwardInputKernelVariant = (
+  kernelVariant: ConvBackwardInputKernelVariant,
+): void => {
+  if (kernelVariant === "spatial-vec4") {
+    throw new Error("convBackwardInputKernel=spatial-vec4 is not implemented yet.");
+  }
+};
+
 const validateConv2dParams = (
   inputShape: readonly [number, number, number, number],
   weightShape: readonly [number, number, number, number],
@@ -49,6 +65,19 @@ const validateConv2dParams = (
   return { inChannels, outChannels, height, width };
 };
 
+const destroyForwardLocalBuffers = (
+  staticBuffers: Conv2dForwardStaticBuffers | undefined,
+  weightBuffer: GPUBuffer,
+  biasBuffer: GPUBuffer,
+  uniformBuffer: GPUBuffer,
+): void => {
+  uniformBuffer.destroy();
+  if (staticBuffers === undefined) {
+    weightBuffer.destroy();
+    biasBuffer.destroy();
+  }
+};
+
 export const runConv2dForwardBuffer = async (
   input: GpuBufferRef,
   inputShape: readonly [number, number, number, number],
@@ -58,45 +87,47 @@ export const runConv2dForwardBuffer = async (
   staticBuffers?: Conv2dForwardStaticBuffers,
   kernelVariant: ConvForwardKernelVariant = "scalar",
 ): Promise<GpuBufferRef> => {
+  assertSupportedForwardKernelVariant(kernelVariant);
   const { inChannels, outChannels, height, width } = validateConv2dParams(inputShape, weightShape);
   if (bias.length !== outChannels) throw new Error("conv2d-forward only supports VGG-compatible params.");
   const gpuDevice: GPUDevice | null = getGpuDevice();
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
   const outCount: number = outChannels * height * width;
   const weightBuffer: GPUBuffer = staticBuffers?.weightBuffer ?? gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST });
-  const biasBuffer: GPUBuffer = staticBuffers?.biasBuffer ?? gpuDevice.createBuffer({ size: outChannels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST });
-  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST });
+  const biasBuffer: GPUBuffer = staticBuffers?.biasBuffer ?? gpuDevice.createBuffer({ size: outChannels * Float32Array.BYTES_PER_ELEMENT, usage: BUFFER_USAGE_STORAGE_COPY_DST });
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * Uint32Array.BYTES_PER_ELEMENT, usage: BUFFER_USAGE_UNIFORM_COPY_DST });
   if (staticBuffers === undefined) {
     gpuDevice.queue.writeBuffer(weightBuffer, 0, weight);
     gpuDevice.queue.writeBuffer(biasBuffer, 0, new Float32Array(bias));
   }
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]));
-  const useSpatialVec4 =
-    (kernelVariant === "spatial-vec4" || kernelVariant === "tiled-spatial") &&
-    outCount >= 4;
-  if (useSpatialVec4) {
-    return ownedBuffer(
-      runUnaryShaderToBufferWithDispatch(
-        gpuDevice,
-        makeConv2dSpatialVec4Shader(outCount),
-        input.buffer,
-        outCount,
-        Math.ceil(outCount / 4),
-        [
-          { binding: 1, resource: { buffer: weightBuffer } },
-          { binding: 2, resource: { buffer: biasBuffer } },
-          { binding: 3, resource: { buffer: uniformBuffer } },
-        ],
-      ),
-    );
-  }
-  return ownedBuffer(
-    runUnaryShaderToBuffer(gpuDevice, makeConv2dShader(outCount), input.buffer, outCount, [
-      { binding: 1, resource: { buffer: weightBuffer } },
-      { binding: 2, resource: { buffer: biasBuffer } },
-      { binding: 3, resource: { buffer: uniformBuffer } },
-    ]),
-  );
+  const useSpatialVec4: boolean = kernelVariant === "spatial-vec4" && outCount >= 4;
+  const outputBuffer: GPUBuffer = (() => {
+    try {
+      if (useSpatialVec4) {
+        return runUnaryShaderToBufferWithDispatch(
+          gpuDevice,
+          makeConv2dSpatialVec4Shader(outCount),
+          input.buffer,
+          outCount,
+          Math.ceil(outCount / 4),
+          [
+            { binding: 1, resource: { buffer: weightBuffer } },
+            { binding: 2, resource: { buffer: biasBuffer } },
+            { binding: 3, resource: { buffer: uniformBuffer } },
+          ],
+        );
+      }
+      return runUnaryShaderToBuffer(gpuDevice, makeConv2dShader(outCount), input.buffer, outCount, [
+        { binding: 1, resource: { buffer: weightBuffer } },
+        { binding: 2, resource: { buffer: biasBuffer } },
+        { binding: 3, resource: { buffer: uniformBuffer } },
+      ]);
+    } finally {
+      destroyForwardLocalBuffers(staticBuffers, weightBuffer, biasBuffer, uniformBuffer);
+    }
+  })();
+  return ownedBuffer(outputBuffer);
 };
 
 export const runConv2dForwardReadback = async (
@@ -109,12 +140,15 @@ export const runConv2dForwardReadback = async (
   bias: ArrayLike<number>,
 ): Promise<Float32Array> => {
   const inputBuffer = uploadToOwnedBuffer(getGpuDevice(), input);
-  const outCount = weightShape[0] * inputShape[2] * inputShape[3];
-  const outputBuffer = await runConv2dForwardBuffer(inputBuffer, inputShape, weight, weightShape, bias);
-  const output = await readGpuBufferToArray(getGpuDevice(), outputBuffer.buffer, outCount);
-  releaseOwnedBuffer(inputBuffer);
-  releaseOwnedBuffer(outputBuffer);
-  return output;
+  let outputBuffer: GpuBufferRef | null = null;
+  try {
+    const outCount: number = weightShape[0] * inputShape[2] * inputShape[3];
+    outputBuffer = await runConv2dForwardBuffer(inputBuffer, inputShape, weight, weightShape, bias);
+    return await readGpuBufferToArray(getGpuDevice(), outputBuffer.buffer, outCount);
+  } finally {
+    releaseOwnedBuffer(inputBuffer);
+    if (outputBuffer !== null) releaseOwnedBuffer(outputBuffer);
+  }
 };
 
 export const runConv2dReluForwardReadback = async (
@@ -128,22 +162,28 @@ export const runConv2dReluForwardReadback = async (
   BUFFER_USAGE_STORAGE_COPY_DST_VALUE: number,
   BUFFER_USAGE_UNIFORM_COPY_DST_VALUE: number,
 ): Promise<Float32Array> => {
-  const outChannels = weightShape[0];
-  const height = inputShape[2];
-  const width = inputShape[3];
-  const outputCount = outChannels * height * width;
+  const outChannels: number = weightShape[0];
+  const height: number = inputShape[2];
+  const width: number = inputShape[3];
+  const outputCount: number = outChannels * height * width;
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
   const weightBuffer: GPUBuffer = gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST_VALUE });
   const biasBuffer: GPUBuffer = gpuDevice.createBuffer({ size: new Float32Array(bias).byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST_VALUE });
-  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST_VALUE });
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * Uint32Array.BYTES_PER_ELEMENT, usage: BUFFER_USAGE_UNIFORM_COPY_DST_VALUE });
   gpuDevice.queue.writeBuffer(weightBuffer, 0, weight);
   gpuDevice.queue.writeBuffer(biasBuffer, 0, new Float32Array(bias));
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inputShape[1], outChannels, height, width]));
-  return runUnaryShader(makeConv2dReluShader(outputCount), input, outputCount, [
-    { binding: 1, resource: { buffer: weightBuffer } },
-    { binding: 2, resource: { buffer: biasBuffer } },
-    { binding: 3, resource: { buffer: uniformBuffer } },
-  ]);
+  try {
+    return await runUnaryShader(makeConv2dReluShader(outputCount), input, outputCount, [
+      { binding: 1, resource: { buffer: weightBuffer } },
+      { binding: 2, resource: { buffer: biasBuffer } },
+      { binding: 3, resource: { buffer: uniformBuffer } },
+    ]);
+  } finally {
+    weightBuffer.destroy();
+    biasBuffer.destroy();
+    uniformBuffer.destroy();
+  }
 };
 
 export const runConv2dReluForwardBuffer = async (
@@ -155,45 +195,47 @@ export const runConv2dReluForwardBuffer = async (
   staticBuffers?: Conv2dForwardStaticBuffers,
   kernelVariant: ConvForwardKernelVariant = "scalar",
 ): Promise<GpuBufferRef> => {
+  assertSupportedForwardKernelVariant(kernelVariant);
   const { inChannels, outChannels, height, width } = validateConv2dParams(inputShape, weightShape);
   if (bias.length !== outChannels) throw new Error("conv2d-relu-forward only supports VGG-compatible params.");
   const gpuDevice: GPUDevice | null = getGpuDevice();
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
   const outCount: number = outChannels * height * width;
   const weightBuffer: GPUBuffer = staticBuffers?.weightBuffer ?? gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST });
-  const biasBuffer: GPUBuffer = staticBuffers?.biasBuffer ?? gpuDevice.createBuffer({ size: outChannels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST });
-  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST });
+  const biasBuffer: GPUBuffer = staticBuffers?.biasBuffer ?? gpuDevice.createBuffer({ size: outChannels * Float32Array.BYTES_PER_ELEMENT, usage: BUFFER_USAGE_STORAGE_COPY_DST });
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * Uint32Array.BYTES_PER_ELEMENT, usage: BUFFER_USAGE_UNIFORM_COPY_DST });
   if (staticBuffers === undefined) {
     gpuDevice.queue.writeBuffer(weightBuffer, 0, weight);
     gpuDevice.queue.writeBuffer(biasBuffer, 0, new Float32Array(bias));
   }
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]));
-  const useSpatialVec4 =
-    (kernelVariant === "spatial-vec4" || kernelVariant === "tiled-spatial") &&
-    outCount >= 4;
-  if (useSpatialVec4) {
-    return ownedBuffer(
-      runUnaryShaderToBufferWithDispatch(
-        gpuDevice,
-        makeConv2dReluSpatialVec4Shader(outCount),
-        input.buffer,
-        outCount,
-        Math.ceil(outCount / 4),
-        [
-          { binding: 1, resource: { buffer: weightBuffer } },
-          { binding: 2, resource: { buffer: biasBuffer } },
-          { binding: 3, resource: { buffer: uniformBuffer } },
-        ],
-      ),
-    );
-  }
-  return ownedBuffer(
-    runUnaryShaderToBuffer(gpuDevice, makeConv2dReluShader(outCount), input.buffer, outCount, [
-      { binding: 1, resource: { buffer: weightBuffer } },
-      { binding: 2, resource: { buffer: biasBuffer } },
-      { binding: 3, resource: { buffer: uniformBuffer } },
-    ]),
-  );
+  const useSpatialVec4: boolean = kernelVariant === "spatial-vec4" && outCount >= 4;
+  const outputBuffer: GPUBuffer = (() => {
+    try {
+      if (useSpatialVec4) {
+        return runUnaryShaderToBufferWithDispatch(
+          gpuDevice,
+          makeConv2dReluSpatialVec4Shader(outCount),
+          input.buffer,
+          outCount,
+          Math.ceil(outCount / 4),
+          [
+            { binding: 1, resource: { buffer: weightBuffer } },
+            { binding: 2, resource: { buffer: biasBuffer } },
+            { binding: 3, resource: { buffer: uniformBuffer } },
+          ],
+        );
+      }
+      return runUnaryShaderToBuffer(gpuDevice, makeConv2dReluShader(outCount), input.buffer, outCount, [
+        { binding: 1, resource: { buffer: weightBuffer } },
+        { binding: 2, resource: { buffer: biasBuffer } },
+        { binding: 3, resource: { buffer: uniformBuffer } },
+      ]);
+    } finally {
+      destroyForwardLocalBuffers(staticBuffers, weightBuffer, biasBuffer, uniformBuffer);
+    }
+  })();
+  return ownedBuffer(outputBuffer);
 };
 
 export const runConv2dBackwardInputBuffer = async (
@@ -204,13 +246,15 @@ export const runConv2dBackwardInputBuffer = async (
   staticBuffers?: Conv2dBackwardStaticBuffers,
   kernelVariant: ConvBackwardInputKernelVariant = "scalar",
 ): Promise<GpuBufferRef> => {
+  assertSupportedBackwardInputKernelVariant(kernelVariant);
   const { inChannels, outChannels, height, width } = validateConv2dParams(inputShape, weightShape);
   const gpuDevice: GPUDevice | null = getGpuDevice();
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
-  const outCount = inChannels * height * width;
+  const outCount: number = inChannels * height * width;
   const weightBuffer: GPUBuffer = staticBuffers?.weightBuffer ?? gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST });
   let transposedWeightBuffer: GPUBuffer | undefined = staticBuffers?.transposedWeightBuffer;
-  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST });
+  let ownsTransposedWeightBuffer = false;
+  const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * Uint32Array.BYTES_PER_ELEMENT, usage: BUFFER_USAGE_UNIFORM_COPY_DST });
   if (staticBuffers === undefined) {
     gpuDevice.queue.writeBuffer(weightBuffer, 0, weight);
   }
@@ -231,21 +275,31 @@ export const runConv2dBackwardInputBuffer = async (
       size: transposed.byteLength,
       usage: BUFFER_USAGE_STORAGE_COPY_DST,
     });
+    ownsTransposedWeightBuffer = true;
     gpuDevice.queue.writeBuffer(transposedWeightBuffer, 0, transposed);
   }
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]));
-  const shouldUseTransposed = kernelVariant === "transposed-weight-spatial-vec4";
-  const selectedWeightBuffer =
+  const shouldUseTransposed: boolean = kernelVariant === "transposed-weight-spatial-vec4";
+  const selectedWeightBuffer: GPUBuffer =
     shouldUseTransposed && transposedWeightBuffer !== undefined
       ? transposedWeightBuffer
       : weightBuffer;
-  const shaderCode = shouldUseTransposed
+  const shaderCode: string = shouldUseTransposed
     ? makeConv2dBackwardInputTransposedWeightShader(outCount)
     : makeConv2dBackwardInputShader(outCount);
-  return ownedBuffer(runUnaryShaderToBuffer(gpuDevice, shaderCode, gradOut.buffer, outCount, [
-    { binding: 1, resource: { buffer: selectedWeightBuffer } },
-    { binding: 2, resource: { buffer: uniformBuffer } },
-  ]));
+  const outputBuffer: GPUBuffer = (() => {
+    try {
+      return runUnaryShaderToBuffer(gpuDevice, shaderCode, gradOut.buffer, outCount, [
+        { binding: 1, resource: { buffer: selectedWeightBuffer } },
+        { binding: 2, resource: { buffer: uniformBuffer } },
+      ]);
+    } finally {
+      uniformBuffer.destroy();
+      if (staticBuffers === undefined) weightBuffer.destroy();
+      if (ownsTransposedWeightBuffer) transposedWeightBuffer?.destroy();
+    }
+  })();
+  return ownedBuffer(outputBuffer);
 };
 
 export const runConv2dBackwardInputReadback = async (
@@ -257,10 +311,13 @@ export const runConv2dBackwardInputReadback = async (
   weightShape: readonly [number, number, number, number],
 ): Promise<Float32Array> => {
   const gradOutBuffer = uploadToOwnedBuffer(getGpuDevice(), gradOut);
-  const outputBuffer = await runConv2dBackwardInputBuffer(gradOutBuffer, inputShape, weight, weightShape);
-  const outCount = inputShape[1] * inputShape[2] * inputShape[3];
-  const output = await readGpuBufferToArray(getGpuDevice(), outputBuffer.buffer, outCount);
-  releaseOwnedBuffer(gradOutBuffer);
-  releaseOwnedBuffer(outputBuffer);
-  return output;
+  let outputBuffer: GpuBufferRef | null = null;
+  try {
+    outputBuffer = await runConv2dBackwardInputBuffer(gradOutBuffer, inputShape, weight, weightShape);
+    const outCount: number = inputShape[1] * inputShape[2] * inputShape[3];
+    return await readGpuBufferToArray(getGpuDevice(), outputBuffer.buffer, outCount);
+  } finally {
+    releaseOwnedBuffer(gradOutBuffer);
+    if (outputBuffer !== null) releaseOwnedBuffer(outputBuffer);
+  }
 };
