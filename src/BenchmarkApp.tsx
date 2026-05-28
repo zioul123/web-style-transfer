@@ -267,6 +267,58 @@ export const BenchmarkApp = (): ReactElement => {
         name: "cached+persistent+step-pool+pool-scatter+vec4",
         kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, useStepBufferPool: true, usePoolBackwardScatter: true, useVec4Pointwise: true },
       },
+      {
+        name: "cached+persistent+step-pool+pool-scatter+vec4+gram-parallel+style-two-pass",
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+          useStepBufferPool: true,
+          usePoolBackwardScatter: true,
+          useVec4Pointwise: true,
+          gramKernel: "parallel-dot",
+          styleBackward: "two-pass",
+        },
+      },
+      {
+        name: "cached+persistent+step-pool+pool-scatter+vec4+gram-symmetric+style-fused",
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+          useStepBufferPool: true,
+          usePoolBackwardScatter: true,
+          useVec4Pointwise: true,
+          gramKernel: "symmetric-parallel-dot",
+          styleBackward: "fused-from-gram-diff",
+        },
+      },
+      {
+        name: "cached+persistent+step-pool+pool-scatter+vec4+gram-symmetric+style-fused+conv-spatial",
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+          useStepBufferPool: true,
+          usePoolBackwardScatter: true,
+          useVec4Pointwise: true,
+          gramKernel: "symmetric-parallel-dot",
+          styleBackward: "fused-from-gram-diff",
+          convForwardKernel: "spatial-vec4",
+          convBackwardInputKernel: "spatial-vec4",
+        },
+      },
+      {
+        name: "cached+persistent+step-pool+pool-scatter+vec4+gram-symmetric+style-fused+conv-transposed-backward",
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+          useStepBufferPool: true,
+          usePoolBackwardScatter: true,
+          useVec4Pointwise: true,
+          gramKernel: "symmetric-parallel-dot",
+          styleBackward: "fused-from-gram-diff",
+          convForwardKernel: "spatial-vec4",
+          convBackwardInputKernel: "transposed-weight-spatial-vec4",
+        },
+      },
     ];
     const rows: KernelLabRow[] = [];
     let baselineLoss = 0;

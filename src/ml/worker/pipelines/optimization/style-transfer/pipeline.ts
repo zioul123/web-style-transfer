@@ -138,8 +138,6 @@ const assertSupportedKernelFlags = (
     throw new Error("kernelFlags.useStepBufferPool=false is not supported.");
   }
   const unsupported: Array<[string, unknown]> = [
-    ["convForwardKernel", kernelFlags.convForwardKernel],
-    ["convBackwardInputKernel", kernelFlags.convBackwardInputKernel],
     ["weightStorage", kernelFlags.weightStorage],
   ];
   for (const [name, value] of unsupported) {
@@ -180,7 +178,9 @@ export const runStyleTransferPipeline = async (
   assertValuesMatchShape("contentImageValues", payload.contentImageValues, contentShape);
   assertValuesMatchShape("styleImageValues", payload.styleImageValues, styleShape);
 
-  const runtimeContext = createOptimizationRuntimeContext(device);
+  const runtimeContext = createOptimizationRuntimeContext(device, {
+    reuseTempBuffers: payload.kernelFlags?.useStepBufferPool === true,
+  });
   const convLayerCache = parseVgg19ConvLayerCache(payload.weights);
   const losses: number[] = [];
   let forwardMs = 0;
@@ -215,6 +215,7 @@ export const runStyleTransferPipeline = async (
   let weightUploadMs = 0;
   const persistentWeightBuffers: GPUBuffer[] = [];
   const persistentConvWeightBuffers = new Map<Float32Array, GPUBuffer>();
+  const persistentConvBackwardTransposedWeightBuffers = new Map<Float32Array, GPUBuffer>();
   const persistentConvBiasBuffers = new Map<Float32Array, GPUBuffer>();
   const persistentKernelResources: OptimizationPersistentKernelResources = {
     getConvForwardStaticBuffers: (weight: Float32Array, bias: Float32Array) => {
@@ -244,7 +245,10 @@ export const runStyleTransferPipeline = async (
       }
       return { weightBuffer, biasBuffer };
     },
-    getConvBackwardStaticBuffers: (weight: Float32Array) => {
+    getConvBackwardStaticBuffers: (
+      weight: Float32Array,
+      weightShape: TensorShape4D,
+    ) => {
       let weightBuffer = persistentConvWeightBuffers.get(weight);
       if (weightBuffer === undefined) {
         const uploadStart = performance.now();
@@ -257,7 +261,33 @@ export const runStyleTransferPipeline = async (
         persistentWeightBuffers.push(weightBuffer);
         weightUploadMs += performance.now() - uploadStart;
       }
-      return { weightBuffer };
+      let transposedWeightBuffer =
+        persistentConvBackwardTransposedWeightBuffers.get(weight);
+      if (transposedWeightBuffer === undefined) {
+        const [outChannels, inChannels] = weightShape;
+        const transposed = new Float32Array(weight.length);
+        for (let oc = 0; oc < outChannels; oc += 1) {
+          for (let ic = 0; ic < inChannels; ic += 1) {
+            for (let kh = 0; kh < 3; kh += 1) {
+              for (let kw = 0; kw < 3; kw += 1) {
+                const sourceIndex = ((oc * inChannels + ic) * 9) + kh * 3 + kw;
+                const targetIndex = (((ic * 3 + kh) * 3 + kw) * outChannels) + oc;
+                transposed[targetIndex] = weight[sourceIndex];
+              }
+            }
+          }
+        }
+        const uploadStart = performance.now();
+        transposedWeightBuffer = device.createBuffer({
+          size: transposed.byteLength,
+          usage: BUFFER_USAGE_STORAGE_COPY_DST,
+        });
+        device.queue.writeBuffer(transposedWeightBuffer, 0, transposed);
+        persistentConvBackwardTransposedWeightBuffers.set(weight, transposedWeightBuffer);
+        persistentWeightBuffers.push(transposedWeightBuffer);
+        weightUploadMs += performance.now() - uploadStart;
+      }
+      return { weightBuffer, transposedWeightBuffer };
     },
   };
 
@@ -276,10 +306,7 @@ export const runStyleTransferPipeline = async (
   const persistentBuffers: GpuBufferRef[] = [contentImageBuffer, styleImageBuffer];
 
   try {
-    const targetContext = createPersistentTargetContext(
-      runtimeContext,
-      persistentBuffers,
-    );
+    const targetContext = createPersistentTargetContext(runtimeContext, persistentBuffers);
     const targetTracked = createOptimizationTrackedOps(
       device,
       targetContext,

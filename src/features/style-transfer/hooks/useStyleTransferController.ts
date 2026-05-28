@@ -9,7 +9,6 @@ import {
 import type {
   FullWeights,
   ImageResolution,
-  KernelVariantMode,
   ResolutionPreset,
   UseStyleTransferControllerResult,
 } from "../types/controller";
@@ -148,41 +147,6 @@ const getInitialPackPreference = (): VggPackName => {
   return DEFAULT_VGG_PACK;
 };
 
-const KERNEL_VARIANT_TO_FLAGS: Record<
-  KernelVariantMode,
-  import("../../../types").WorkerKernelOptimizationFlags | undefined
-> = {
-  baseline: undefined,
-  "cached-pipelines": { useCachedPipelines: true },
-  "cached-persistent-weights": {
-    useCachedPipelines: true,
-    usePersistentWeightBuffers: true,
-  },
-  "cached-persistent-weights-step-pool": {
-    useCachedPipelines: true,
-    usePersistentWeightBuffers: true,
-    useStepBufferPool: true,
-  },
-  "cached-persistent-weights-pool-scatter": {
-    useCachedPipelines: true,
-    usePersistentWeightBuffers: true,
-    usePoolBackwardScatter: true,
-  },
-  "cached-persistent-weights-step-pool-pool-scatter": {
-    useCachedPipelines: true,
-    usePersistentWeightBuffers: true,
-    useStepBufferPool: true,
-    usePoolBackwardScatter: true,
-  },
-  "cached-persistent-weights-step-pool-pool-scatter-vec4-pointwise": {
-    useCachedPipelines: true,
-    usePersistentWeightBuffers: true,
-    useStepBufferPool: true,
-    usePoolBackwardScatter: true,
-    useVec4Pointwise: true,
-  },
-};
-
 export const useStyleTransferController =
   (): UseStyleTransferControllerResult => {
     const [workerStatus, setWorkerStatus] =
@@ -210,8 +174,26 @@ export const useStyleTransferController =
     const [lbfgsEpsilon, setLbfgsEpsilon] = useState<number>(1e-9);
     const [synchronizePhaseTimings, setSynchronizePhaseTimings] =
       useState<boolean>(false);
-    const [kernelVariant, setKernelVariant] =
-      useState<KernelVariantMode>("baseline");
+    const [useCachedPipelines, setUseCachedPipelines] =
+      useState<boolean>(true);
+    const [usePersistentWeightBuffers, setUsePersistentWeightBuffers] =
+      useState<boolean>(true);
+    const [useStepBufferPool, setUseStepBufferPool] = useState<boolean>(true);
+    const [useVec4Pointwise, setUseVec4Pointwise] = useState<boolean>(true);
+    const [usePoolBackwardScatter, setUsePoolBackwardScatter] =
+      useState<boolean>(true);
+    const [gramKernel, setGramKernel] = useState<
+      "scalar" | "parallel-dot" | "symmetric-parallel-dot"
+    >("scalar");
+    const [styleBackward, setStyleBackward] = useState<
+      "two-pass" | "fused-from-gram-diff"
+    >("two-pass");
+    const [convForwardKernel, setConvForwardKernel] = useState<
+      "scalar" | "spatial-vec4" | "tiled-spatial"
+    >("scalar");
+    const [convBackwardInputKernel, setConvBackwardInputKernel] = useState<
+      "scalar" | "spatial-vec4" | "transposed-weight-spatial-vec4"
+    >("scalar");
     const [iterations, setIterations] = useState<number>(0);
     const [isRunning, setIsRunning] = useState<boolean>(false);
     const [lastLoss, setLastLoss] = useState<number | null>(null);
@@ -245,6 +227,54 @@ export const useStyleTransferController =
     );
     const canRun =
       contentTensor !== null && styleTensor !== null && weights !== null;
+    const kernelFlags = useMemo(() => {
+      const flags: import("../../../types").WorkerKernelOptimizationFlags = {};
+      if (useCachedPipelines) flags.useCachedPipelines = true;
+      if (usePersistentWeightBuffers) flags.usePersistentWeightBuffers = true;
+      if (useStepBufferPool) flags.useStepBufferPool = true;
+      if (useVec4Pointwise) flags.useVec4Pointwise = true;
+      if (usePoolBackwardScatter) flags.usePoolBackwardScatter = true;
+      if (gramKernel !== "scalar") flags.gramKernel = gramKernel;
+      if (styleBackward !== "two-pass") flags.styleBackward = styleBackward;
+      if (convForwardKernel !== "scalar") flags.convForwardKernel = convForwardKernel;
+      if (convBackwardInputKernel !== "scalar") {
+        flags.convBackwardInputKernel = convBackwardInputKernel;
+      }
+      return Object.keys(flags).length > 0 ? flags : undefined;
+    }, [
+      convBackwardInputKernel,
+      convForwardKernel,
+      gramKernel,
+      styleBackward,
+      useCachedPipelines,
+      usePersistentWeightBuffers,
+      usePoolBackwardScatter,
+      useStepBufferPool,
+      useVec4Pointwise,
+    ]);
+    const kernelConfigSummary = useMemo(() => {
+      const enabled: string[] = [];
+      if (useCachedPipelines) enabled.push("cached-pipelines");
+      if (usePersistentWeightBuffers) enabled.push("persistent-weights");
+      if (useStepBufferPool) enabled.push("step-pool");
+      if (usePoolBackwardScatter) enabled.push("pool-scatter");
+      if (useVec4Pointwise) enabled.push("vec4-pointwise");
+      if (gramKernel !== "scalar") enabled.push(`gram=${gramKernel}`);
+      if (styleBackward !== "two-pass") enabled.push(`styleBackward=${styleBackward}`);
+      if (convForwardKernel !== "scalar") enabled.push(`convFwd=${convForwardKernel}`);
+      if (convBackwardInputKernel !== "scalar") enabled.push(`convBwdIn=${convBackwardInputKernel}`);
+      return enabled.length === 0 ? "baseline" : enabled.join(", ");
+    }, [
+      convBackwardInputKernel,
+      convForwardKernel,
+      gramKernel,
+      styleBackward,
+      useCachedPipelines,
+      usePersistentWeightBuffers,
+      usePoolBackwardScatter,
+      useStepBufferPool,
+      useVec4Pointwise,
+    ]);
 
     const clearWorkerSession = (sessionId: string): void => {
       if (workerRef.current === null) return;
@@ -421,7 +451,7 @@ export const useStyleTransferController =
         steps: stepsPerChunk,
         lossReadbackInterval: stepsPerChunk,
         synchronizePhaseTimings,
-        kernelFlags: KERNEL_VARIANT_TO_FLAGS[kernelVariant],
+        kernelFlags,
       } satisfies WorkerRequest);
     }, [
       adamBeta1,
@@ -443,7 +473,7 @@ export const useStyleTransferController =
       styleTensor,
       styleWeight,
       synchronizePhaseTimings,
-      kernelVariant,
+      kernelFlags,
       weights,
     ]);
 
@@ -614,14 +644,67 @@ export const useStyleTransferController =
             synchronizePhaseTimings,
             setSynchronizePhaseTimings,
           ),
-        kernelVariant,
-        setKernelVariant: (update) =>
+        useCachedPipelines,
+        setUseCachedPipelines: (update) =>
           updateOptimizerConfigWhenPaused(
             update,
-            kernelVariant,
-            setKernelVariant,
+            useCachedPipelines,
+            setUseCachedPipelines,
           ),
-        kernelFlags: KERNEL_VARIANT_TO_FLAGS[kernelVariant],
+        usePersistentWeightBuffers,
+        setUsePersistentWeightBuffers: (update) =>
+          updateOptimizerConfigWhenPaused(
+            update,
+            usePersistentWeightBuffers,
+            setUsePersistentWeightBuffers,
+          ),
+        useStepBufferPool,
+        setUseStepBufferPool: (update) =>
+          updateOptimizerConfigWhenPaused(
+            update,
+            useStepBufferPool,
+            setUseStepBufferPool,
+          ),
+        useVec4Pointwise,
+        setUseVec4Pointwise: (update) =>
+          updateOptimizerConfigWhenPaused(
+            update,
+            useVec4Pointwise,
+            setUseVec4Pointwise,
+          ),
+        usePoolBackwardScatter,
+        setUsePoolBackwardScatter: (update) =>
+          updateOptimizerConfigWhenPaused(
+            update,
+            usePoolBackwardScatter,
+            setUsePoolBackwardScatter,
+          ),
+        gramKernel,
+        setGramKernel: (update) =>
+          updateOptimizerConfigWhenPaused(update, gramKernel, setGramKernel),
+        styleBackward,
+        setStyleBackward: (update) =>
+          updateOptimizerConfigWhenPaused(
+            update,
+            styleBackward,
+            setStyleBackward,
+          ),
+        convForwardKernel,
+        setConvForwardKernel: (update) =>
+          updateOptimizerConfigWhenPaused(
+            update,
+            convForwardKernel,
+            setConvForwardKernel,
+          ),
+        convBackwardInputKernel,
+        setConvBackwardInputKernel: (update) =>
+          updateOptimizerConfigWhenPaused(
+            update,
+            convBackwardInputKernel,
+            setConvBackwardInputKernel,
+          ),
+        kernelConfigSummary,
+        kernelFlags,
         resetOptimizerState,
         resetOutputImage,
         clearModelCache,

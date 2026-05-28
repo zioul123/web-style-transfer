@@ -14,14 +14,6 @@ export type ImageResolution = {
   readonly height: number;
 };
 export type OptimizerMode = "sgd" | "adam" | "lbfgs";
-export type KernelVariantMode =
-  | "baseline"
-  | "cached-pipelines"
-  | "cached-persistent-weights"
-  | "cached-persistent-weights-step-pool"
-  | "cached-persistent-weights-pool-scatter"
-  | "cached-persistent-weights-step-pool-pool-scatter"
-  | "cached-persistent-weights-step-pool-pool-scatter-vec4-pointwise";
 export type FullWeights = Record<
   string,
   number[] | [number, number, number, number]
@@ -56,8 +48,38 @@ export interface StyleTransferControls {
   setLbfgsEpsilon: Dispatch<SetStateAction<number>>;
   synchronizePhaseTimings: boolean;
   setSynchronizePhaseTimings: Dispatch<SetStateAction<boolean>>;
-  kernelVariant: KernelVariantMode;
-  setKernelVariant: Dispatch<SetStateAction<KernelVariantMode>>;
+  useCachedPipelines: boolean;
+  setUseCachedPipelines: Dispatch<SetStateAction<boolean>>;
+  usePersistentWeightBuffers: boolean;
+  setUsePersistentWeightBuffers: Dispatch<SetStateAction<boolean>>;
+  useStepBufferPool: boolean;
+  setUseStepBufferPool: Dispatch<SetStateAction<boolean>>;
+  useVec4Pointwise: boolean;
+  setUseVec4Pointwise: Dispatch<SetStateAction<boolean>>;
+  usePoolBackwardScatter: boolean;
+  setUsePoolBackwardScatter: Dispatch<SetStateAction<boolean>>;
+  gramKernel: "scalar" | "parallel-dot" | "symmetric-parallel-dot";
+  setGramKernel: Dispatch<
+    SetStateAction<"scalar" | "parallel-dot" | "symmetric-parallel-dot">
+  >;
+  styleBackward: "two-pass" | "fused-from-gram-diff";
+  setStyleBackward: Dispatch<
+    SetStateAction<"two-pass" | "fused-from-gram-diff">
+  >;
+  convForwardKernel: "scalar" | "spatial-vec4" | "tiled-spatial";
+  setConvForwardKernel: Dispatch<
+    SetStateAction<"scalar" | "spatial-vec4" | "tiled-spatial">
+  >;
+  convBackwardInputKernel:
+    | "scalar"
+    | "spatial-vec4"
+    | "transposed-weight-spatial-vec4";
+  setConvBackwardInputKernel: Dispatch<
+    SetStateAction<
+      "scalar" | "spatial-vec4" | "transposed-weight-spatial-vec4"
+    >
+  >;
+  kernelConfigSummary: string;
   kernelFlags: WorkerKernelOptimizationFlags | undefined;
   resetOptimizerState: () => void;
   resetOutputImage: () => void;

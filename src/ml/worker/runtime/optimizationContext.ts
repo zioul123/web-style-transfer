@@ -17,13 +17,28 @@ export type OptimizationRuntimeContext = {
   disposeAll: () => void;
 };
 
-export const createOptimizationRuntimeContext = (device: GPUDevice): OptimizationRuntimeContext => {
+type OptimizationRuntimeContextOptions = {
+  reuseTempBuffers?: boolean;
+};
+
+export const createOptimizationRuntimeContext = (
+  device: GPUDevice,
+  options: OptimizationRuntimeContextOptions = {},
+): OptimizationRuntimeContext => {
   const tempByKey: Map<string, TempRecord> = new Map();
   const stepOwned: GpuBufferRef[] = [];
+  const stepTempBuffers: TempRecord[] = [];
+  const reuseTempBuffers = options.reuseTempBuffers ?? true;
 
   const tempKey = (shape: OptimizationShape4D, usage: number, role: string): string => `${shape.join("x")}:${usage}:${role}`;
 
   const acquireTemp = (shape: OptimizationShape4D, usage: number, role: string): GPUBuffer => {
+    if (!reuseTempBuffers) {
+      const size = elementCount(shape) * Float32Array.BYTES_PER_ELEMENT;
+      const buffer = acquireReusableBuffer(device, size, usage);
+      stepTempBuffers.push({ shape, usage, buffer });
+      return buffer;
+    }
     const key = tempKey(shape, usage, role);
     const existing = tempByKey.get(key);
     if (existing !== undefined) return existing.buffer;
@@ -42,6 +57,15 @@ export const createOptimizationRuntimeContext = (device: GPUDevice): Optimizatio
     while (stepOwned.length > 0) {
       const ref = stepOwned.pop();
       if (ref !== undefined) releaseOwnedBuffer(ref);
+    }
+    while (stepTempBuffers.length > 0) {
+      const tempRecord = stepTempBuffers.pop();
+      if (tempRecord === undefined) continue;
+      releaseReusableBuffer(
+        elementCount(tempRecord.shape) * Float32Array.BYTES_PER_ELEMENT,
+        tempRecord.usage,
+        tempRecord.buffer,
+      );
     }
   };
 
