@@ -9,6 +9,11 @@ import {
 import type {
   FullWeights,
   ImageResolution,
+  KernelConvBackwardInput,
+  KernelConvForward,
+  KernelGramKernel,
+  KernelStyleBackward,
+  KernelWeightStorage,
   ResolutionPreset,
   UseStyleTransferControllerResult,
 } from "../types/controller";
@@ -182,18 +187,16 @@ export const useStyleTransferController =
     const [useVec4Pointwise, setUseVec4Pointwise] = useState<boolean>(true);
     const [usePoolBackwardScatter, setUsePoolBackwardScatter] =
       useState<boolean>(true);
-    const [gramKernel, setGramKernel] = useState<
-      "scalar" | "parallel-dot" | "symmetric-parallel-dot"
-    >("scalar");
-    const [styleBackward, setStyleBackward] = useState<
-      "two-pass" | "fused-from-gram-diff"
-    >("two-pass");
-    const [convForwardKernel, setConvForwardKernel] = useState<
-      "scalar" | "spatial-vec4" | "tiled-spatial"
-    >("scalar");
-    const [convBackwardInputKernel, setConvBackwardInputKernel] = useState<
-      "scalar" | "spatial-vec4" | "transposed-weight-spatial-vec4"
-    >("scalar");
+    const [gramKernel, setGramKernel] =
+      useState<KernelGramKernel>("symmetric-parallel-dot");
+    const [styleBackward, setStyleBackward] =
+      useState<KernelStyleBackward>("fused-from-gram-diff");
+    const [convForwardKernel, setConvForwardKernel] =
+      useState<KernelConvForward>("scalar");
+    const [convBackwardInputKernel, setConvBackwardInputKernel] =
+      useState<KernelConvBackwardInput>("scalar");
+    const [weightStorage, setWeightStorage] =
+      useState<KernelWeightStorage>("fp32");
     const [iterations, setIterations] = useState<number>(0);
     const [isRunning, setIsRunning] = useState<boolean>(false);
     const [lastLoss, setLastLoss] = useState<number | null>(null);
@@ -240,6 +243,7 @@ export const useStyleTransferController =
       if (convBackwardInputKernel !== "scalar") {
         flags.convBackwardInputKernel = convBackwardInputKernel;
       }
+      if (weightStorage !== "fp32") flags.weightStorage = weightStorage;
       return Object.keys(flags).length > 0 ? flags : undefined;
     }, [
       convBackwardInputKernel,
@@ -251,6 +255,7 @@ export const useStyleTransferController =
       usePoolBackwardScatter,
       useStepBufferPool,
       useVec4Pointwise,
+      weightStorage,
     ]);
     const kernelConfigSummary = useMemo(() => {
       const enabled: string[] = [];
@@ -263,6 +268,7 @@ export const useStyleTransferController =
       if (styleBackward !== "two-pass") enabled.push(`styleBackward=${styleBackward}`);
       if (convForwardKernel !== "scalar") enabled.push(`convFwd=${convForwardKernel}`);
       if (convBackwardInputKernel !== "scalar") enabled.push(`convBwdIn=${convBackwardInputKernel}`);
+      if (weightStorage !== "fp32") enabled.push(`weightStorage=${weightStorage}`);
       return enabled.length === 0 ? "baseline" : enabled.join(", ");
     }, [
       convBackwardInputKernel,
@@ -274,6 +280,7 @@ export const useStyleTransferController =
       usePoolBackwardScatter,
       useStepBufferPool,
       useVec4Pointwise,
+      weightStorage,
     ]);
 
     const clearWorkerSession = (sessionId: string): void => {
@@ -702,6 +709,13 @@ export const useStyleTransferController =
             update,
             convBackwardInputKernel,
             setConvBackwardInputKernel,
+          ),
+        weightStorage,
+        setWeightStorage: (update) =>
+          updateOptimizerConfigWhenPaused(
+            update,
+            weightStorage,
+            setWeightStorage,
           ),
         kernelConfigSummary,
         kernelFlags,

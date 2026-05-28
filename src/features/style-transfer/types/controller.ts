@@ -14,6 +14,21 @@ export type ImageResolution = {
   readonly height: number;
 };
 export type OptimizerMode = "sgd" | "adam" | "lbfgs";
+export type KernelGramKernel = NonNullable<
+  WorkerKernelOptimizationFlags["gramKernel"]
+>;
+export type KernelStyleBackward = NonNullable<
+  WorkerKernelOptimizationFlags["styleBackward"]
+>;
+export type KernelConvForward = NonNullable<
+  WorkerKernelOptimizationFlags["convForwardKernel"]
+>;
+export type KernelConvBackwardInput = NonNullable<
+  WorkerKernelOptimizationFlags["convBackwardInputKernel"]
+>;
+export type KernelWeightStorage = NonNullable<
+  WorkerKernelOptimizationFlags["weightStorage"]
+>;
 export type FullWeights = Record<
   string,
   number[] | [number, number, number, number]
@@ -58,27 +73,18 @@ export interface StyleTransferControls {
   setUseVec4Pointwise: Dispatch<SetStateAction<boolean>>;
   usePoolBackwardScatter: boolean;
   setUsePoolBackwardScatter: Dispatch<SetStateAction<boolean>>;
-  gramKernel: "scalar" | "parallel-dot" | "symmetric-parallel-dot";
-  setGramKernel: Dispatch<
-    SetStateAction<"scalar" | "parallel-dot" | "symmetric-parallel-dot">
-  >;
-  styleBackward: "two-pass" | "fused-from-gram-diff";
-  setStyleBackward: Dispatch<
-    SetStateAction<"two-pass" | "fused-from-gram-diff">
-  >;
-  convForwardKernel: "scalar" | "spatial-vec4" | "tiled-spatial";
-  setConvForwardKernel: Dispatch<
-    SetStateAction<"scalar" | "spatial-vec4" | "tiled-spatial">
-  >;
-  convBackwardInputKernel:
-    | "scalar"
-    | "spatial-vec4"
-    | "transposed-weight-spatial-vec4";
+  gramKernel: KernelGramKernel;
+  setGramKernel: Dispatch<SetStateAction<KernelGramKernel>>;
+  styleBackward: KernelStyleBackward;
+  setStyleBackward: Dispatch<SetStateAction<KernelStyleBackward>>;
+  convForwardKernel: KernelConvForward;
+  setConvForwardKernel: Dispatch<SetStateAction<KernelConvForward>>;
+  convBackwardInputKernel: KernelConvBackwardInput;
   setConvBackwardInputKernel: Dispatch<
-    SetStateAction<
-      "scalar" | "spatial-vec4" | "transposed-weight-spatial-vec4"
-    >
+    SetStateAction<KernelConvBackwardInput>
   >;
+  weightStorage: KernelWeightStorage;
+  setWeightStorage: Dispatch<SetStateAction<KernelWeightStorage>>;
   kernelConfigSummary: string;
   kernelFlags: WorkerKernelOptimizationFlags | undefined;
   resetOptimizerState: () => void;

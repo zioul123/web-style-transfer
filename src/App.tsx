@@ -3,6 +3,11 @@ import type { ReactElement } from "react";
 import { TextureLoader } from "three";
 import { useStyleTransferController } from "./features/style-transfer/hooks/useStyleTransferController";
 import type {
+  KernelConvBackwardInput,
+  KernelConvForward,
+  KernelGramKernel,
+  KernelStyleBackward,
+  KernelWeightStorage,
   OptimizerMode,
   ResolutionPreset,
 } from "./features/style-transfer/types/controller";
@@ -16,10 +21,68 @@ const resolutionOptions: readonly ResolutionPreset[] = [
   "256x384",
 ];
 const optimizerOptions: readonly OptimizerMode[] = ["sgd", "adam", "lbfgs"];
+const kernelGramKernelOptions: readonly KernelGramKernel[] = [
+  "scalar",
+  "parallel-dot",
+  "symmetric-parallel-dot",
+];
+const kernelStyleBackwardOptions: readonly KernelStyleBackward[] = [
+  "two-pass",
+  "fused-from-gram-diff",
+];
+const kernelConvForwardOptions: readonly KernelConvForward[] = [
+  "scalar",
+  "spatial-vec4",
+  "tiled-spatial",
+];
+const kernelConvBackwardInputOptions: readonly KernelConvBackwardInput[] = [
+  "scalar",
+  "spatial-vec4",
+  "transposed-weight-spatial-vec4",
+];
+const kernelWeightStorageOptions: readonly KernelWeightStorage[] = [
+  "fp32",
+  "fp16-storage",
+  "int8-dequant-experimental",
+];
+const isResolutionPreset = (value: string): value is ResolutionPreset =>
+  resolutionOptions.some((option) => option === value);
 const isOptimizerMode = (value: string): value is OptimizerMode =>
-  optimizerOptions.includes(value as OptimizerMode);
+  optimizerOptions.some((option) => option === value);
 const isVggPackName = (value: string): value is VggPackName =>
   VGG_PACK_OPTIONS.some((option) => option.name === value);
+const isKernelGramKernel = (value: string): value is KernelGramKernel =>
+  kernelGramKernelOptions.some((option) => option === value);
+const isKernelStyleBackward = (value: string): value is KernelStyleBackward =>
+  kernelStyleBackwardOptions.some((option) => option === value);
+const isKernelConvForward = (value: string): value is KernelConvForward =>
+  kernelConvForwardOptions.some((option) => option === value);
+const isKernelConvBackwardInput = (
+  value: string,
+): value is KernelConvBackwardInput =>
+  kernelConvBackwardInputOptions.some((option) => option === value);
+const isKernelWeightStorage = (value: string): value is KernelWeightStorage =>
+  kernelWeightStorageOptions.some((option) => option === value);
+
+const kernelConvForwardLabel = (option: KernelConvForward): string => {
+  if (option === "spatial-vec4") return "spatial-vec4 (batched scalar)";
+  if (option === "tiled-spatial") return "tiled-spatial (unsupported)";
+  return option;
+};
+
+const kernelConvBackwardInputLabel = (
+  option: KernelConvBackwardInput,
+): string => {
+  if (option === "spatial-vec4") return "spatial-vec4 (unsupported)";
+  return option;
+};
+
+const kernelWeightStorageLabel = (option: KernelWeightStorage): string => {
+  if (option === "fp16-storage") return "fp16-storage (requires persistent)";
+  if (option === "int8-dequant-experimental")
+    return "int8-dequant-experimental (unsupported)";
+  return option;
+};
 
 type TextureImageSize = {
   readonly width: number;
@@ -102,11 +165,12 @@ function App() {
           Content resolution
           <select
             value={controls.contentResolution}
-            onChange={(event) =>
-              controls.setContentResolution(
-                event.target.value as ResolutionPreset,
-              )
-            }
+            onChange={(event) => {
+              const nextResolution = event.target.value;
+              if (isResolutionPreset(nextResolution)) {
+                controls.setContentResolution(nextResolution);
+              }
+            }}
           >
             {resolutionOptions.map((option) => (
               <option key={option} value={option}>
@@ -119,11 +183,12 @@ function App() {
           Style resolution
           <select
             value={controls.styleResolution}
-            onChange={(event) =>
-              controls.setStyleResolution(
-                event.target.value as ResolutionPreset,
-              )
-            }
+            onChange={(event) => {
+              const nextResolution = event.target.value;
+              if (isResolutionPreset(nextResolution)) {
+                controls.setStyleResolution(nextResolution);
+              }
+            }}
           >
             {resolutionOptions.map((option) => (
               <option key={option} value={option}>
@@ -269,70 +334,90 @@ function App() {
               Gram kernel
               <select
                 value={controls.gramKernel}
-                onChange={(event) =>
-                  controls.setGramKernel(
-                    event.target.value as
-                      | "scalar"
-                      | "parallel-dot"
-                      | "symmetric-parallel-dot",
-                  )
-                }
+                onChange={(event) => {
+                  const nextKernel = event.target.value;
+                  if (isKernelGramKernel(nextKernel)) {
+                    controls.setGramKernel(nextKernel);
+                  }
+                }}
               >
-                <option value="scalar">scalar</option>
-                <option value="parallel-dot">parallel-dot</option>
-                <option value="symmetric-parallel-dot">symmetric-parallel-dot</option>
+                {kernelGramKernelOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="flex flex-col gap-1">
               Style backward
               <select
                 value={controls.styleBackward}
-                onChange={(event) =>
-                  controls.setStyleBackward(
-                    event.target.value as
-                      | "two-pass"
-                      | "fused-from-gram-diff",
-                  )
-                }
+                onChange={(event) => {
+                  const nextStyleBackward = event.target.value;
+                  if (isKernelStyleBackward(nextStyleBackward)) {
+                    controls.setStyleBackward(nextStyleBackward);
+                  }
+                }}
               >
-                <option value="two-pass">two-pass</option>
-                <option value="fused-from-gram-diff">fused-from-gram-diff</option>
+                {kernelStyleBackwardOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="flex flex-col gap-1">
               Conv forward
               <select
                 value={controls.convForwardKernel}
-                onChange={(event) =>
-                  controls.setConvForwardKernel(
-                    event.target.value as
-                      | "scalar"
-                      | "spatial-vec4"
-                      | "tiled-spatial",
-                  )
-                }
+                onChange={(event) => {
+                  const nextConvForward = event.target.value;
+                  if (isKernelConvForward(nextConvForward)) {
+                    controls.setConvForwardKernel(nextConvForward);
+                  }
+                }}
               >
-                <option value="scalar">scalar</option>
-                <option value="spatial-vec4">spatial-vec4 (batched scalar)</option>
-                <option value="tiled-spatial">tiled-spatial (unsupported)</option>
+                {kernelConvForwardOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {kernelConvForwardLabel(option)}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="flex flex-col gap-1">
               Conv backward-input
               <select
                 value={controls.convBackwardInputKernel}
-                onChange={(event) =>
-                  controls.setConvBackwardInputKernel(
-                    event.target.value as
-                      | "scalar"
-                      | "spatial-vec4"
-                      | "transposed-weight-spatial-vec4",
-                  )
-                }
+                onChange={(event) => {
+                  const nextConvBackwardInput = event.target.value;
+                  if (isKernelConvBackwardInput(nextConvBackwardInput)) {
+                    controls.setConvBackwardInputKernel(nextConvBackwardInput);
+                  }
+                }}
               >
-                <option value="scalar">scalar</option>
-                <option value="spatial-vec4">spatial-vec4 (unsupported)</option>
-                <option value="transposed-weight-spatial-vec4">transposed-weight-spatial-vec4</option>
+                {kernelConvBackwardInputOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {kernelConvBackwardInputLabel(option)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              Weight storage
+              <select
+                value={controls.weightStorage}
+                onChange={(event) => {
+                  const nextWeightStorage = event.target.value;
+                  if (isKernelWeightStorage(nextWeightStorage)) {
+                    controls.setWeightStorage(nextWeightStorage);
+                  }
+                }}
+              >
+                {kernelWeightStorageOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {kernelWeightStorageLabel(option)}
+                  </option>
+                ))}
               </select>
             </label>
           </div>
