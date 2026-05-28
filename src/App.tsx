@@ -3,6 +3,7 @@ import type { ReactElement } from "react";
 import { TextureLoader } from "three";
 import { useStyleTransferController } from "./features/style-transfer/hooks/useStyleTransferController";
 import type {
+  KernelVariantMode,
   OptimizerMode,
   ResolutionPreset,
 } from "./features/style-transfer/types/controller";
@@ -16,8 +17,19 @@ const resolutionOptions: readonly ResolutionPreset[] = [
   "256x384",
 ];
 const optimizerOptions: readonly OptimizerMode[] = ["sgd", "adam", "lbfgs"];
+const kernelVariantOptions: readonly KernelVariantMode[] = [
+  "baseline",
+  "cached-pipelines",
+  "cached-persistent-weights",
+  "cached-persistent-weights-step-pool",
+  "cached-persistent-weights-pool-scatter",
+  "cached-persistent-weights-step-pool-pool-scatter",
+  "cached-persistent-weights-step-pool-pool-scatter-vec4-pointwise",
+];
 const isOptimizerMode = (value: string): value is OptimizerMode =>
   optimizerOptions.includes(value as OptimizerMode);
+const isKernelVariantMode = (value: string): value is KernelVariantMode =>
+  kernelVariantOptions.includes(value as KernelVariantMode);
 const isVggPackName = (value: string): value is VggPackName =>
   VGG_PACK_OPTIONS.some((option) => option.name === value);
 
@@ -210,6 +222,36 @@ function App() {
             <option value="lbfgs">L-BFGS</option>
           </select>
         </label>
+        <label className="flex flex-col gap-1">
+          Kernel variant
+          <select
+            value={controls.kernelVariant}
+            onChange={(event) => {
+              const nextVariant = event.target.value;
+              if (isKernelVariantMode(nextVariant)) {
+                controls.setKernelVariant(nextVariant);
+              }
+            }}
+          >
+            <option value="baseline">Baseline</option>
+            <option value="cached-pipelines">Cached pipelines</option>
+            <option value="cached-persistent-weights">
+              Cached + persistent weights
+            </option>
+            <option value="cached-persistent-weights-step-pool">
+              Cached + persistent weights + step pool
+            </option>
+            <option value="cached-persistent-weights-pool-scatter">
+              Cached + persistent weights + pool scatter
+            </option>
+            <option value="cached-persistent-weights-step-pool-pool-scatter">
+              Cached + persistent weights + step pool + pool scatter
+            </option>
+            <option value="cached-persistent-weights-step-pool-pool-scatter-vec4-pointwise">
+              Cached + persistent weights + step pool + pool scatter + vec4
+            </option>
+          </select>
+        </label>
         {controls.optimizer === "adam" ? (
           <>
             <label className="flex flex-col gap-1">
@@ -337,6 +379,7 @@ function App() {
         ) : (
           <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
             <p>Chunk steps: {status.runStats.steps}</p>
+            <p>Kernel variant: {controls.kernelVariant}</p>
             <p>Total: {status.runStats.elapsedMs.toFixed(1)} ms</p>
             <p>Avg step: {status.runStats.avgStepMs.toFixed(1)} ms</p>
             <p>Forward: {status.runStats.forwardMs.toFixed(1)} ms</p>

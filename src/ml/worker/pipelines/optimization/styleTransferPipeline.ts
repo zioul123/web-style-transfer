@@ -22,6 +22,7 @@ export type StyleTransferRunResult = {
     lossMs: number;
     updateMs: number;
     steps: number;
+    kernelStats?: import("../../../../types").WorkerKernelStats;
   };
 };
 

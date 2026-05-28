@@ -10,6 +10,8 @@ import {
 } from "./ml/worker/models/vgg19/weights";
 import type {
   WorkerFirstPoolBenchmarkStats,
+  WorkerKernelOptimizationFlags,
+  WorkerKernelStats,
   WorkerRequest,
   WorkerResponse,
   WorkerRunStats,
@@ -45,7 +47,7 @@ type Phase3FullPassFixture = {
   contentLayerIndex: number;
 };
 
-type BenchmarkTab = "first-pool" | "full-style";
+type BenchmarkTab = "first-pool" | "full-style" | "kernel-lab";
 
 type BenchmarkStats = WorkerFirstPoolBenchmarkStats | WorkerRunStats;
 
@@ -53,6 +55,20 @@ type BenchmarkResult = {
   losses: number[];
   stats?: BenchmarkStats;
   pack?: VggPackName;
+};
+type KernelLabRow = {
+  name: string;
+  elapsedMs: number;
+  forwardMs: number;
+  lossMs: number;
+  backwardMs: number;
+  updateMs: number;
+  finalLoss: number;
+  lossDeltaFromBaseline: number;
+  speedupVsBaseline: number;
+  ok: boolean;
+  error?: string;
+  kernelStats?: WorkerKernelStats;
 };
 
 type MetricSummary = { mean: number; p50: number; p95: number };
@@ -188,6 +204,7 @@ export const BenchmarkApp = (): ReactElement => {
   const [summary, setSummary] = useState<BenchmarkRunSummary | null>(null);
   const [packComparison, setPackComparison] = useState<PackComparisonRow[] | null>(null);
   const [packAcceptance, setPackAcceptance] = useState<Array<{ pack: VggPackName; verdict: "pass" | "fail"; reason: string }> | null>(null);
+  const [kernelLabRows, setKernelLabRows] = useState<KernelLabRow[] | null>(null);
 
   const [firstPoolSteps, setFirstPoolSteps] = useState<number>(6);
   const [firstPoolRuns, setFirstPoolRuns] = useState<number>(5);
@@ -210,12 +227,124 @@ export const BenchmarkApp = (): ReactElement => {
   const [fullLearningRate, setFullLearningRate] = useState<number>(1e-5);
   const [fullContentWeight, setFullContentWeight] = useState<number>(1);
   const [fullStyleWeight, setFullStyleWeight] = useState<number>(1);
+  const [kernelLabSteps, setKernelLabSteps] = useState<number>(1);
 
   const clearResults = (): void => {
     setResult(null);
     setSummary(null);
     setPackComparison(null);
     setPackAcceptance(null);
+    setKernelLabRows(null);
+  };
+
+  const runKernelLabBenchmark = async (worker: Worker): Promise<void> => {
+    setStatus("Loading full style-transfer fixtures for kernel lab...");
+    const fixture = await loadJson<Phase3FullPassFixture>(
+      "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
+    );
+    const weights = (await loadManifestWeights("fp32")).weights;
+    await initializeWorker(worker);
+    const variants: Array<{ name: string; kernelFlags?: WorkerKernelOptimizationFlags }> = [
+      { name: "baseline" },
+      { name: "cached-pipelines", kernelFlags: { useCachedPipelines: true } },
+      {
+        name: "cached+persistent-weights",
+        kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true },
+      },
+      {
+        name: "cached+persistent+step-pool",
+        kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, useStepBufferPool: true },
+      },
+      {
+        name: "cached+persistent+pool-scatter",
+        kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, usePoolBackwardScatter: true },
+      },
+      {
+        name: "cached+persistent+step-pool+pool-scatter",
+        kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, useStepBufferPool: true, usePoolBackwardScatter: true },
+      },
+      {
+        name: "cached+persistent+step-pool+pool-scatter+vec4",
+        kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, useStepBufferPool: true, usePoolBackwardScatter: true, useVec4Pointwise: true },
+      },
+    ];
+    const rows: KernelLabRow[] = [];
+    let baselineLoss = 0;
+    let baselineElapsed = 0;
+    for (const variant of variants) {
+      setStatus(`Running kernel lab variant: ${variant.name}...`);
+      const response = await askWorker(worker, {
+        type: "run-style-transfer",
+        id: `benchmark-kernel-lab-${variant.name}`,
+        optimizer: "sgd",
+        inputShape: fixture.inputShape,
+        inputImageValues: fixture.inputImageValues,
+        contentImageValues: fixture.contentImageValues,
+        styleImageValues: fixture.styleImageValues,
+        mean: fixture.mean,
+        std: fixture.std,
+        styleLayerIndices: fixture.styleLayerIndices,
+        contentLayerIndex: fixture.contentLayerIndex,
+        weights,
+        contentWeight: fullContentWeight,
+        styleWeight: fullStyleWeight,
+        learningRate: fullLearningRate,
+        steps: kernelLabSteps,
+        kernelFlags: variant.kernelFlags,
+        collectKernelStats: true,
+      });
+      if (response.type !== "run-style-transfer-result") {
+        rows.push({
+          name: variant.name,
+          elapsedMs: 0,
+          forwardMs: 0,
+          lossMs: 0,
+          backwardMs: 0,
+          updateMs: 0,
+          finalLoss: 0,
+          lossDeltaFromBaseline: 0,
+          speedupVsBaseline: 0,
+          ok: false,
+          error: "Unexpected worker response type.",
+        });
+        continue;
+      }
+      if (!response.ok) {
+        rows.push({
+          name: variant.name,
+          elapsedMs: 0,
+          forwardMs: 0,
+          lossMs: 0,
+          backwardMs: 0,
+          updateMs: 0,
+          finalLoss: 0,
+          lossDeltaFromBaseline: 0,
+          speedupVsBaseline: 0,
+          ok: false,
+          error: response.message,
+        });
+        continue;
+      }
+      const finalLoss = response.losses.at(-1) ?? 0;
+      if (variant.name === "baseline") {
+        baselineLoss = finalLoss;
+        baselineElapsed = response.stats.elapsedMs;
+      }
+      rows.push({
+        name: variant.name,
+        elapsedMs: response.stats.elapsedMs,
+        forwardMs: response.stats.forwardMs,
+        lossMs: response.stats.lossMs,
+        backwardMs: response.stats.backwardMs,
+        updateMs: response.stats.updateMs,
+        finalLoss,
+        lossDeltaFromBaseline: finalLoss - baselineLoss,
+        speedupVsBaseline: baselineElapsed > 0 ? baselineElapsed / response.stats.elapsedMs : 1,
+        ok: true,
+        kernelStats: response.stats.kernelStats,
+      });
+    }
+    setKernelLabRows(rows);
   };
 
   const initializeWorker = async (worker: Worker): Promise<void> => {
@@ -407,8 +536,10 @@ export const BenchmarkApp = (): ReactElement => {
     try {
       if (activeTab === "first-pool") {
         await runFirstPoolBenchmark(worker);
-      } else {
+      } else if (activeTab === "full-style") {
         await runFullStyleBenchmark(worker);
+      } else {
+        await runKernelLabBenchmark(worker);
       }
       setStatus("Done");
     } catch (error) {
@@ -448,6 +579,16 @@ export const BenchmarkApp = (): ReactElement => {
           type="button"
         >
           Full style transfer
+        </button>
+        <button
+          className={`px-4 py-2 ${activeTab === "kernel-lab" ? "bg-emerald-500 text-black" : "bg-slate-900 text-slate-200"}`}
+          onClick={() => {
+            setActiveTab("kernel-lab");
+            clearResults();
+          }}
+          type="button"
+        >
+          Kernel lab
         </button>
       </div>
 
@@ -551,7 +692,7 @@ export const BenchmarkApp = (): ReactElement => {
             <span>Gradient readback diagnostics</span>
           </label>
         </section>
-      ) : (
+      ) : activeTab === "full-style" ? (
         <section className="grid gap-3 rounded border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
           <label className="flex flex-col gap-1">
             Steps
@@ -598,6 +739,27 @@ export const BenchmarkApp = (): ReactElement => {
               type="number"
               value={fullStyleWeight}
               onChange={(event) => setFullStyleWeight(Number(event.target.value))}
+            />
+          </label>
+        </section>
+      ) : (
+        <section className="grid gap-3 rounded border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
+          <label className="flex flex-col gap-1">
+            Steps
+            <input
+              min={1}
+              type="number"
+              value={kernelLabSteps}
+              onChange={(event) => setKernelLabSteps(Number(event.target.value))}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            Learning rate
+            <input
+              step={0.00001}
+              type="number"
+              value={fullLearningRate}
+              onChange={(event) => setFullLearningRate(Number(event.target.value))}
             />
           </label>
         </section>
@@ -733,6 +895,48 @@ export const BenchmarkApp = (): ReactElement => {
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+        {kernelLabRows === null ? null : (
+          <div className="mt-6 overflow-x-auto">
+            <h3 className="mb-2 text-sm font-semibold text-slate-200">Kernel lab (cumulative variants)</h3>
+            <table className="w-full min-w-[900px] border-collapse text-left text-sm">
+              <thead className="text-slate-300">
+                <tr>
+                  <th className="border-b border-slate-700 py-2 pr-4">Variant</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">Elapsed ms</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">Forward</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">Loss</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">Backward</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">Update</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">Final loss</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">Loss delta</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">Speedup</th>
+                </tr>
+              </thead>
+              <tbody>
+                {kernelLabRows.map((row) => (
+                  <tr key={row.name}>
+                    <td className="border-b border-slate-800 py-2 pr-4">{row.name}</td>
+                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? row.elapsedMs.toFixed(2) : "-"}</td>
+                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? row.forwardMs.toFixed(2) : "-"}</td>
+                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? row.lossMs.toFixed(2) : "-"}</td>
+                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? row.backwardMs.toFixed(2) : "-"}</td>
+                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? row.updateMs.toFixed(2) : "-"}</td>
+                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? row.finalLoss.toFixed(6) : "-"}</td>
+                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? row.lossDeltaFromBaseline.toFixed(6) : "-"}</td>
+                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? `${row.speedupVsBaseline.toFixed(3)}x` : "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {kernelLabRows.some((row) => row.error !== undefined) ? (
+              <ul className="mt-3 space-y-1 text-sm text-rose-300">
+                {kernelLabRows.filter((row) => row.error !== undefined).map((row) => (
+                  <li key={`${row.name}-error`}>{row.name}: {row.error}</li>
+                ))}
+              </ul>
+            ) : null}
           </div>
         )}
       </section>

@@ -17,6 +17,15 @@ import {
   BUFFER_USAGE_UNIFORM_COPY_DST,
 } from "../../runtime/gpuFlags";
 
+export type Conv2dForwardStaticBuffers = {
+  weightBuffer: GPUBuffer;
+  biasBuffer: GPUBuffer;
+};
+
+export type Conv2dBackwardStaticBuffers = {
+  weightBuffer: GPUBuffer;
+};
+
 const validateConv2dParams = (
   inputShape: readonly [number, number, number, number],
   weightShape: readonly [number, number, number, number],
@@ -35,17 +44,20 @@ export const runConv2dForwardBuffer = async (
   weight: Float32Array,
   weightShape: readonly [number, number, number, number],
   bias: ArrayLike<number>,
+  staticBuffers?: Conv2dForwardStaticBuffers,
 ): Promise<GpuBufferRef> => {
   const { inChannels, outChannels, height, width } = validateConv2dParams(inputShape, weightShape);
   if (bias.length !== outChannels) throw new Error("conv2d-forward only supports VGG-compatible params.");
   const gpuDevice: GPUDevice | null = getGpuDevice();
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
   const outCount: number = outChannels * height * width;
-  const weightBuffer: GPUBuffer = gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST });
-  const biasBuffer: GPUBuffer = gpuDevice.createBuffer({ size: outChannels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST });
+  const weightBuffer: GPUBuffer = staticBuffers?.weightBuffer ?? gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST });
+  const biasBuffer: GPUBuffer = staticBuffers?.biasBuffer ?? gpuDevice.createBuffer({ size: outChannels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST });
   const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST });
-  gpuDevice.queue.writeBuffer(weightBuffer, 0, weight);
-  gpuDevice.queue.writeBuffer(biasBuffer, 0, new Float32Array(bias));
+  if (staticBuffers === undefined) {
+    gpuDevice.queue.writeBuffer(weightBuffer, 0, weight);
+    gpuDevice.queue.writeBuffer(biasBuffer, 0, new Float32Array(bias));
+  }
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]));
   return ownedBuffer(runUnaryShaderToBuffer(gpuDevice, makeConv2dShader(outCount), input.buffer, outCount, [
     { binding: 1, resource: { buffer: weightBuffer } },
@@ -107,17 +119,20 @@ export const runConv2dReluForwardBuffer = async (
   weight: Float32Array,
   weightShape: readonly [number, number, number, number],
   bias: ArrayLike<number>,
+  staticBuffers?: Conv2dForwardStaticBuffers,
 ): Promise<GpuBufferRef> => {
   const { inChannels, outChannels, height, width } = validateConv2dParams(inputShape, weightShape);
   if (bias.length !== outChannels) throw new Error("conv2d-relu-forward only supports VGG-compatible params.");
   const gpuDevice: GPUDevice | null = getGpuDevice();
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
   const outCount: number = outChannels * height * width;
-  const weightBuffer: GPUBuffer = gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST });
-  const biasBuffer: GPUBuffer = gpuDevice.createBuffer({ size: outChannels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST });
+  const weightBuffer: GPUBuffer = staticBuffers?.weightBuffer ?? gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST });
+  const biasBuffer: GPUBuffer = staticBuffers?.biasBuffer ?? gpuDevice.createBuffer({ size: outChannels * 4, usage: BUFFER_USAGE_STORAGE_COPY_DST });
   const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST });
-  gpuDevice.queue.writeBuffer(weightBuffer, 0, weight);
-  gpuDevice.queue.writeBuffer(biasBuffer, 0, new Float32Array(bias));
+  if (staticBuffers === undefined) {
+    gpuDevice.queue.writeBuffer(weightBuffer, 0, weight);
+    gpuDevice.queue.writeBuffer(biasBuffer, 0, new Float32Array(bias));
+  }
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]));
   return ownedBuffer(runUnaryShaderToBuffer(gpuDevice, makeConv2dReluShader(outCount), input.buffer, outCount, [
     { binding: 1, resource: { buffer: weightBuffer } },
@@ -131,14 +146,17 @@ export const runConv2dBackwardInputBuffer = async (
   inputShape: readonly [number, number, number, number],
   weight: Float32Array,
   weightShape: readonly [number, number, number, number],
+  staticBuffers?: Conv2dBackwardStaticBuffers,
 ): Promise<GpuBufferRef> => {
   const { inChannels, outChannels, height, width } = validateConv2dParams(inputShape, weightShape);
   const gpuDevice: GPUDevice | null = getGpuDevice();
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
   const outCount = inChannels * height * width;
-  const weightBuffer: GPUBuffer = gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST });
+  const weightBuffer: GPUBuffer = staticBuffers?.weightBuffer ?? gpuDevice.createBuffer({ size: weight.byteLength, usage: BUFFER_USAGE_STORAGE_COPY_DST });
   const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({ size: 4 * 4, usage: BUFFER_USAGE_UNIFORM_COPY_DST });
-  gpuDevice.queue.writeBuffer(weightBuffer, 0, weight);
+  if (staticBuffers === undefined) {
+    gpuDevice.queue.writeBuffer(weightBuffer, 0, weight);
+  }
   gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([inChannels, outChannels, height, width]));
   return ownedBuffer(runUnaryShaderToBuffer(gpuDevice, makeConv2dBackwardInputShader(outCount), gradOut.buffer, outCount, [
     { binding: 1, resource: { buffer: weightBuffer } },

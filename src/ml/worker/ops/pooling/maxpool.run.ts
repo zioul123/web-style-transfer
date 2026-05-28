@@ -1,4 +1,5 @@
 import {
+  makeMaxPool2dBackwardScatterShader,
   makeMaxPool2dBackwardShader,
   makeMaxPool2dShader,
 } from "./maxpool.shader";
@@ -10,8 +11,12 @@ import {
   uploadToOwnedBuffer,
   type GpuBufferRef,
 } from "../../runtime/bufferKernels";
+import { getOrCreateComputePipeline } from "../../runtime/computePipelineCache";
 import { getGpuDevice } from "../../runtime/deviceState";
-import { BUFFER_USAGE_UNIFORM_COPY_DST } from "../../runtime/gpuFlags";
+import {
+  BUFFER_USAGE_STORAGE_COPY_SRC,
+  BUFFER_USAGE_UNIFORM_COPY_DST,
+} from "../../runtime/gpuFlags";
 
 const getMaxPoolDims = (
   shape: readonly [number, number, number, number],
@@ -79,6 +84,7 @@ export const runMaxPool2dBackwardBuffer = async (
   input: GpuBufferRef,
   shape: readonly [number, number, number, number],
   gradOut: GpuBufferRef,
+  useScatter: boolean = false,
 ): Promise<GpuBufferRef> => {
   const { channels, inHeight, inWidth, outHeight, outWidth } = getMaxPoolDims(shape);
   const gpuDevice = getGpuDevice();
@@ -92,18 +98,50 @@ export const runMaxPool2dBackwardBuffer = async (
     0,
     new Uint32Array([channels, inHeight, inWidth, outHeight, outWidth, 0, 0, 0]),
   );
-  return ownedBuffer(
-    runUnaryShaderToBuffer(
-      gpuDevice,
-      makeMaxPool2dBackwardShader(shape[1] * shape[2] * shape[3]),
-      input.buffer,
-      shape[1] * shape[2] * shape[3],
-      [
-        { binding: 1, resource: { buffer: gradOut.buffer } },
-        { binding: 2, resource: { buffer: uniformBuffer } },
-      ],
-    ),
+  if (!useScatter) {
+    return ownedBuffer(
+      runUnaryShaderToBuffer(
+        gpuDevice,
+        makeMaxPool2dBackwardShader(shape[1] * shape[2] * shape[3]),
+        input.buffer,
+        shape[1] * shape[2] * shape[3],
+        [
+          { binding: 1, resource: { buffer: gradOut.buffer } },
+          { binding: 2, resource: { buffer: uniformBuffer } },
+        ],
+      ),
+    );
+  }
+
+  const inputCount = shape[1] * shape[2] * shape[3];
+  const outputCount = channels * outHeight * outWidth;
+  const outBuffer = gpuDevice.createBuffer({
+    size: inputCount * Float32Array.BYTES_PER_ELEMENT,
+    usage: BUFFER_USAGE_STORAGE_COPY_SRC,
+  });
+  const code = makeMaxPool2dBackwardScatterShader(outputCount);
+  const pipeline = getOrCreateComputePipeline(
+    gpuDevice,
+    `maxpool2d-backward-scatter:${outputCount}`,
+    code,
   );
+  const bindGroup = gpuDevice.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: input.buffer } },
+      { binding: 1, resource: { buffer: gradOut.buffer } },
+      { binding: 2, resource: { buffer: uniformBuffer } },
+      { binding: 3, resource: { buffer: outBuffer } },
+    ],
+  });
+  const encoder = gpuDevice.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.dispatchWorkgroups(Math.ceil(outputCount / 64));
+  pass.end();
+  gpuDevice.queue.submit([encoder.finish()]);
+  return ownedBuffer(outBuffer);
 };
 
 export const runMaxPool2dBackward = async (

@@ -9,6 +9,7 @@ import {
 import type {
   FullWeights,
   ImageResolution,
+  KernelVariantMode,
   ResolutionPreset,
   UseStyleTransferControllerResult,
 } from "../types/controller";
@@ -147,6 +148,41 @@ const getInitialPackPreference = (): VggPackName => {
   return DEFAULT_VGG_PACK;
 };
 
+const KERNEL_VARIANT_TO_FLAGS: Record<
+  KernelVariantMode,
+  import("../../../types").WorkerKernelOptimizationFlags | undefined
+> = {
+  baseline: undefined,
+  "cached-pipelines": { useCachedPipelines: true },
+  "cached-persistent-weights": {
+    useCachedPipelines: true,
+    usePersistentWeightBuffers: true,
+  },
+  "cached-persistent-weights-step-pool": {
+    useCachedPipelines: true,
+    usePersistentWeightBuffers: true,
+    useStepBufferPool: true,
+  },
+  "cached-persistent-weights-pool-scatter": {
+    useCachedPipelines: true,
+    usePersistentWeightBuffers: true,
+    usePoolBackwardScatter: true,
+  },
+  "cached-persistent-weights-step-pool-pool-scatter": {
+    useCachedPipelines: true,
+    usePersistentWeightBuffers: true,
+    useStepBufferPool: true,
+    usePoolBackwardScatter: true,
+  },
+  "cached-persistent-weights-step-pool-pool-scatter-vec4-pointwise": {
+    useCachedPipelines: true,
+    usePersistentWeightBuffers: true,
+    useStepBufferPool: true,
+    usePoolBackwardScatter: true,
+    useVec4Pointwise: true,
+  },
+};
+
 export const useStyleTransferController =
   (): UseStyleTransferControllerResult => {
     const [workerStatus, setWorkerStatus] =
@@ -174,6 +210,8 @@ export const useStyleTransferController =
     const [lbfgsEpsilon, setLbfgsEpsilon] = useState<number>(1e-9);
     const [synchronizePhaseTimings, setSynchronizePhaseTimings] =
       useState<boolean>(false);
+    const [kernelVariant, setKernelVariant] =
+      useState<KernelVariantMode>("baseline");
     const [iterations, setIterations] = useState<number>(0);
     const [isRunning, setIsRunning] = useState<boolean>(false);
     const [lastLoss, setLastLoss] = useState<number | null>(null);
@@ -383,6 +421,7 @@ export const useStyleTransferController =
         steps: stepsPerChunk,
         lossReadbackInterval: stepsPerChunk,
         synchronizePhaseTimings,
+        kernelFlags: KERNEL_VARIANT_TO_FLAGS[kernelVariant],
       } satisfies WorkerRequest);
     }, [
       adamBeta1,
@@ -404,6 +443,7 @@ export const useStyleTransferController =
       styleTensor,
       styleWeight,
       synchronizePhaseTimings,
+      kernelVariant,
       weights,
     ]);
 
@@ -574,6 +614,14 @@ export const useStyleTransferController =
             synchronizePhaseTimings,
             setSynchronizePhaseTimings,
           ),
+        kernelVariant,
+        setKernelVariant: (update) =>
+          updateOptimizerConfigWhenPaused(
+            update,
+            kernelVariant,
+            setKernelVariant,
+          ),
+        kernelFlags: KERNEL_VARIANT_TO_FLAGS[kernelVariant],
         resetOptimizerState,
         resetOutputImage,
         clearModelCache,

@@ -1,4 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
+import type { WorkerKernelOptimizationFlags } from "../../../types/worker-protocol/pipelines";
 import type { WorkerRunStats } from "../../../types/worker-protocol/pipelines";
 import type { VggPackName } from "../modelPacks";
 
@@ -13,6 +14,14 @@ export type ImageResolution = {
   readonly height: number;
 };
 export type OptimizerMode = "sgd" | "adam" | "lbfgs";
+export type KernelVariantMode =
+  | "baseline"
+  | "cached-pipelines"
+  | "cached-persistent-weights"
+  | "cached-persistent-weights-step-pool"
+  | "cached-persistent-weights-pool-scatter"
+  | "cached-persistent-weights-step-pool-pool-scatter"
+  | "cached-persistent-weights-step-pool-pool-scatter-vec4-pointwise";
 export type FullWeights = Record<
   string,
   number[] | [number, number, number, number]
@@ -47,6 +56,9 @@ export interface StyleTransferControls {
   setLbfgsEpsilon: Dispatch<SetStateAction<number>>;
   synchronizePhaseTimings: boolean;
   setSynchronizePhaseTimings: Dispatch<SetStateAction<boolean>>;
+  kernelVariant: KernelVariantMode;
+  setKernelVariant: Dispatch<SetStateAction<KernelVariantMode>>;
+  kernelFlags: WorkerKernelOptimizationFlags | undefined;
   resetOptimizerState: () => void;
   resetOutputImage: () => void;
   clearModelCache: () => Promise<void>;

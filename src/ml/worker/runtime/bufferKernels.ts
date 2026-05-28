@@ -4,12 +4,24 @@ import {
   BUFFER_USAGE_STORAGE_COPY_SRC,
   MAP_MODE_READ,
 } from "./gpuFlags";
+import { getOrCreateComputePipeline } from "./computePipelineCache";
 import { runBinaryOpToBuffer } from "./shaderRunner";
 import { getGpuDevice } from "./deviceState";
 
 export type OwnedGpuBuffer = { owned: true; buffer: GPUBuffer };
 export type BorrowedGpuBuffer = { owned: false; buffer: GPUBuffer };
 export type GpuBufferRef = OwnedGpuBuffer | BorrowedGpuBuffer;
+type KernelRuntimeOptions = { useCachedPipelines: boolean };
+
+const kernelRuntimeOptions: KernelRuntimeOptions = { useCachedPipelines: false };
+
+export const setKernelRuntimeOptions = (
+  options: Partial<KernelRuntimeOptions>,
+): void => {
+  if (options.useCachedPipelines !== undefined) {
+    kernelRuntimeOptions.useCachedPipelines = options.useCachedPipelines;
+  }
+};
 
 export const ownedBuffer = (buffer: GPUBuffer): OwnedGpuBuffer => ({ owned: true, buffer });
 export const borrowedBuffer = (buffer: GPUBuffer): BorrowedGpuBuffer => ({ owned: false, buffer });
@@ -66,10 +78,12 @@ export const runUnaryShaderToBuffer = (
     size: outCount * 4,
     usage: BUFFER_USAGE_STORAGE_COPY_SRC,
   });
-  const pipeline = gpuDevice.createComputePipeline({
-    layout: "auto",
-    compute: { module: gpuDevice.createShaderModule({ code }), entryPoint: "main" },
-  });
+  const pipeline = kernelRuntimeOptions.useCachedPipelines
+    ? getOrCreateComputePipeline(gpuDevice, code, code)
+    : gpuDevice.createComputePipeline({
+      layout: "auto",
+      compute: { module: gpuDevice.createShaderModule({ code }), entryPoint: "main" },
+    });
   const bindGroup = gpuDevice.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
     entries: [
@@ -83,6 +97,43 @@ export const runUnaryShaderToBuffer = (
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bindGroup);
   pass.dispatchWorkgroups(Math.ceil(outCount / 64));
+  pass.end();
+  gpuDevice.queue.submit([encoder.finish()]);
+  return outBuffer;
+};
+
+export const runUnaryShaderToBufferWithDispatch = (
+  gpuDevice: GPUDevice | null,
+  code: string,
+  inputBuffer: GPUBuffer,
+  outputFloatCount: number,
+  dispatchElementCount: number,
+  extraEntries: GPUBindGroupEntry[] = [],
+): GPUBuffer => {
+  if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
+  const outBuffer: GPUBuffer = gpuDevice.createBuffer({
+    size: outputFloatCount * Float32Array.BYTES_PER_ELEMENT,
+    usage: BUFFER_USAGE_STORAGE_COPY_SRC,
+  });
+  const pipeline = kernelRuntimeOptions.useCachedPipelines
+    ? getOrCreateComputePipeline(gpuDevice, code, code)
+    : gpuDevice.createComputePipeline({
+      layout: "auto",
+      compute: { module: gpuDevice.createShaderModule({ code }), entryPoint: "main" },
+    });
+  const bindGroup = gpuDevice.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: inputBuffer } },
+      ...extraEntries,
+      { binding: extraEntries.length + 1, resource: { buffer: outBuffer } },
+    ],
+  });
+  const encoder: GPUCommandEncoder = gpuDevice.createCommandEncoder();
+  const pass: GPUComputePassEncoder = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.dispatchWorkgroups(Math.ceil(dispatchElementCount / 64));
   pass.end();
   gpuDevice.queue.submit([encoder.finish()]);
   return outBuffer;
