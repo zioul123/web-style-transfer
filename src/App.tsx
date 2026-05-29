@@ -1,4 +1,5 @@
 import { Canvas, useLoader } from "@react-three/fiber";
+import { useEffect } from "react";
 import type { ReactElement } from "react";
 import { TextureLoader } from "three";
 import { useStyleTransferController } from "./features/style-transfer/hooks/useStyleTransferController";
@@ -11,7 +12,10 @@ import type {
   OptimizerMode,
   ResolutionPreset,
 } from "./features/style-transfer/types/controller";
-import { VGG_PACK_OPTIONS, type VggPackName } from "./features/style-transfer/modelPacks";
+import {
+  VGG_PACK_OPTIONS,
+  type VggPackName,
+} from "./features/style-transfer/modelPacks";
 
 const resolutionOptions: readonly ResolutionPreset[] = [
   "128x128",
@@ -21,6 +25,10 @@ const resolutionOptions: readonly ResolutionPreset[] = [
   "256x384",
 ];
 const optimizerOptions: readonly OptimizerMode[] = ["sgd", "adam", "lbfgs"];
+const hostedVggPackOptions: readonly VggPackName[] = [
+  "int8-per-channel",
+  "int4log-experimental",
+];
 const kernelGramKernelOptions: readonly KernelGramKernel[] = [
   "scalar",
   "parallel-dot",
@@ -51,6 +59,14 @@ const isOptimizerMode = (value: string): value is OptimizerMode =>
   optimizerOptions.some((option) => option === value);
 const isVggPackName = (value: string): value is VggPackName =>
   VGG_PACK_OPTIONS.some((option) => option.name === value);
+const isHostedVggPackName = (value: VggPackName): boolean =>
+  hostedVggPackOptions.some((option) => option === value);
+const isLocalhost = (): boolean => {
+  const hostname = window.location.hostname;
+  return (
+    hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
+  );
+};
 const isKernelGramKernel = (value: string): value is KernelGramKernel =>
   kernelGramKernelOptions.some((option) => option === value);
 const isKernelStyleBackward = (value: string): value is KernelStyleBackward =>
@@ -122,7 +138,19 @@ const Plane = ({ url, x }: { url: string; x: number }): ReactElement => {
 function App() {
   const { controls, status, images, canRun, setIsRunning, onUpload } =
     useStyleTransferController();
+  const { selectedPack, setSelectedPack } = controls;
   const cacheSizeMb = (status.modelCacheBytes / (1024 * 1024)).toFixed(2);
+  const canUseAllModelPacks = isLocalhost();
+  const modelPackOptions = canUseAllModelPacks
+    ? VGG_PACK_OPTIONS
+    : VGG_PACK_OPTIONS.filter((option) => isHostedVggPackName(option.name));
+
+  useEffect(() => {
+    if (canUseAllModelPacks || isHostedVggPackName(selectedPack)) {
+      return;
+    }
+    setSelectedPack("int8log-per-channel");
+  }, [canUseAllModelPacks, selectedPack, setSelectedPack]);
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-6 py-8 text-slate-100">
@@ -209,7 +237,7 @@ function App() {
               }
             }}
           >
-            {VGG_PACK_OPTIONS.map((option) => (
+            {modelPackOptions.map((option) => (
               <option key={option.name} value={option.name}>
                 {option.label}
               </option>
