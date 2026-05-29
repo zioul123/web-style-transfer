@@ -40,6 +40,31 @@ Build production bundle:
 npm run build
 ```
 
+## Deploying to GitHub Pages
+
+This app can be hosted as a static Vite build on GitHub Pages. The included workflow at `.github/workflows/deploy-pages.yml` builds the app on pushes to `main` and publishes the `dist/` artifact.
+
+### Repository settings
+
+1. Push this branch to GitHub and merge it into `main`.
+2. In the GitHub repository, open **Settings → Pages**.
+3. Set **Build and deployment → Source** to **GitHub Actions**.
+4. Run the **Deploy GitHub Pages** workflow from the **Actions** tab, or push to `main`.
+
+The workflow sets `BASE_PATH=/${{ github.event.repository.name }}/` during `npm run build`, so Vite generates URLs that work under `https://<owner>.github.io/<repo>/`.
+
+### VGG19 model pack hosting
+
+By default, runtime model fetches use Vite's public asset base and resolve to `<base>/vgg19-models/...`. If the generated VGG19 model packs are committed under `public/vgg19-models`, they will be included in the Pages artifact automatically.
+
+If you do not want to include the large model shards in the Pages artifact, host them from GitHub raw files instead and set `VITE_VGG19_MODEL_BASE_URL` while building. Use a raw URL, not the human-facing `github.com/<owner>/<repo>/blob/...` URL, for example:
+
+```bash
+VITE_VGG19_MODEL_BASE_URL=https://raw.githubusercontent.com/<owner>/<repo>/main/public/vgg19-models npm run build
+```
+
+To use this in GitHub Actions, uncomment and update the `VITE_VGG19_MODEL_BASE_URL` line in `.github/workflows/deploy-pages.yml`.
+
 ## WebGPU/Worker verification with Playwright (SwiftShader)
 
 This environment has no physical GPU. Use Chromium + SwiftShader to validate worker wiring and WebGPU adapter/device initialization behavior.

@@ -3,6 +3,7 @@ import {
   type Vgg19WeightsManifest,
 } from "../../ml/worker/models/vgg19/weights";
 import type { FullWeights } from "./types/controller";
+import { vgg19ModelUrl } from "../../shared/assetUrls";
 import {
   clearModelCache,
   createModelCacheKey,
@@ -66,7 +67,7 @@ const downloadShards = async (
 ): Promise<Record<string, ArrayBuffer>> => {
   const shardEntries = await Promise.all(
     manifest.shards.map(async (shard) => {
-      const response = await fetch(`/vgg19-models/${pack}/${shard.name}`);
+      const response = await fetch(vgg19ModelUrl(`${pack}/${shard.name}`));
       if (!response.ok) {
         throw new Error(`Missing weight shard: ${shard.name}`);
       }
@@ -80,7 +81,7 @@ export const loadVgg19ManifestWeightsForPack = async (
   pack: VggPackName,
 ): Promise<VggPackLoadResult> => {
   const manifest = await loadJson<Vgg19WeightsManifest>(
-    `/vgg19-models/${pack}/manifest.json`,
+    vgg19ModelUrl(`${pack}/manifest.json`),
   );
   const cacheKey = createModelCacheKey(
     manifest.modelId,
