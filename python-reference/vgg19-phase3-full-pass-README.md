@@ -37,8 +37,8 @@ public/vgg19-phase3-full-pass/
 - `tests/kernel-lab.spec.ts`
 - `/benchmark` full-style and kernel-lab flows
 
-Some consumers also require a manifest-backed `fp32` model pack under `public/vgg19-models/fp32/` or an external model base URL that provides it.
+Consumers prefer the legacy fp32 weights JSON when it is generated locally. When that file is absent, Playwright coverage can use a manifest-backed `fp32` pack if available or the committed `int8-per-channel` pack with quantized-weight tolerances.
 
 ## Commit policy
 
-The generated full-pass artifacts are intentionally large and are not committed by default. Generate them locally when running optional full-pass parity or benchmark tests, and do not commit newly generated artifacts unless the task explicitly requires it.
+The compact `vgg19_phase3_full_pass_fixture.json` is committed so CI can exercise full-style-transfer paths with the committed `int8-per-channel` model pack. The generated legacy fp32 weights JSON and generated model packs are intentionally large; generate them locally for exact-fp32 parity and do not commit those large artifacts unless the task explicitly requires it.

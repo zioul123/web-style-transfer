@@ -1,5 +1,8 @@
 import { useState, type ReactElement } from "react";
-import { buildPackAcceptanceRows, type PackComparisonRow } from "./features/style-transfer/benchmark/packAcceptance";
+import {
+  buildPackAcceptanceRows,
+  type PackComparisonRow,
+} from "./features/style-transfer/benchmark/packAcceptance";
 import { assetUrl, vgg19ModelUrl } from "./shared/assetUrls";
 import {
   VGG_PACK_OPTIONS,
@@ -91,7 +94,8 @@ type BenchmarkRunSummary = {
 };
 type WeightLoadStats = { downloadSizeBytes: number; decodeLoadMs: number };
 
-const KERNEL_LAB_BASELINE_NAME = "baseline (default pooled fp32)";
+const kernelLabBaselineName = (pack: VggPackName): string =>
+  `baseline (default pooled ${pack})`;
 
 const percentile = (sortedValues: readonly number[], p: number): number => {
   if (sortedValues.length === 0) return 0;
@@ -111,13 +115,17 @@ const summarize = (values: readonly number[]): MetricSummary => {
 
 const loadJson = async <T,>(url: string): Promise<T> => {
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`Failed to load ${url}: ${response.status}`);
+  if (!response.ok)
+    throw new Error(`Failed to load ${url}: ${response.status}`);
   return (await response.json()) as T;
 };
 
 const loadManifestWeights = async (
   pack: VggPackName,
-): Promise<{ weights: Record<string, number[] | [number, number, number, number]>; stats: WeightLoadStats }> => {
+): Promise<{
+  weights: Record<string, number[] | [number, number, number, number]>;
+  stats: WeightLoadStats;
+}> => {
   const decodeStart = performance.now();
   const manifest = await loadJson<Vgg19WeightsManifest>(
     vgg19ModelUrl(`${pack}/manifest.json`),
@@ -129,13 +137,23 @@ const loadManifestWeights = async (
       return [shard.name, await response.arrayBuffer()] as const;
     }),
   );
-  const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(shardEntries);
-  const layerCache = await parseVgg19ManifestBackedLayerCache(manifest, shardMap);
-  const weights: Record<string, number[] | [number, number, number, number]> = {};
+  const shardMap: Record<string, ArrayBuffer> =
+    Object.fromEntries(shardEntries);
+  const layerCache = await parseVgg19ManifestBackedLayerCache(
+    manifest,
+    shardMap,
+  );
+  const weights: Record<string, number[] | [number, number, number, number]> =
+    {};
   for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
     const layer = layerCache[layerIndex];
     if (layer === undefined) continue;
-    weights[`conv${layerIndex}.weightShape`] = [...layer.shape] as [number, number, number, number];
+    weights[`conv${layerIndex}.weightShape`] = [...layer.shape] as [
+      number,
+      number,
+      number,
+      number,
+    ];
     weights[`conv${layerIndex}.weightValues`] = Array.from(layer.values);
     weights[`conv${layerIndex}.biasValues`] = Array.from(layer.bias);
   }
@@ -150,6 +168,28 @@ const loadManifestWeights = async (
       decodeLoadMs: performance.now() - decodeStart,
     },
   };
+};
+
+const loadFirstAvailableManifestWeights = async (
+  packs: readonly VggPackName[],
+): Promise<{
+  pack: VggPackName;
+  weights: Record<string, number[] | [number, number, number, number]>;
+  stats: WeightLoadStats;
+}> => {
+  const errors: string[] = [];
+  for (const pack of packs) {
+    try {
+      return { pack, ...(await loadManifestWeights(pack)) };
+    } catch (error) {
+      errors.push(
+        `${pack}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  throw new Error(
+    `No requested VGG19 model pack is available. ${errors.join("; ")}`,
+  );
 };
 
 const askWorker = (
@@ -170,7 +210,9 @@ const hasReadbackStats = (
   stats: BenchmarkStats,
 ): stats is WorkerFirstPoolBenchmarkStats => "readbackMs" in stats;
 
-const summarizeRuns = (runStats: readonly BenchmarkStats[]): BenchmarkRunSummary => {
+const summarizeRuns = (
+  runStats: readonly BenchmarkStats[],
+): BenchmarkRunSummary => {
   const firstPoolStats = runStats.filter(hasReadbackStats);
   return {
     runs: runStats.length,
@@ -205,9 +247,17 @@ export const BenchmarkApp = (): ReactElement => {
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [result, setResult] = useState<BenchmarkResult | null>(null);
   const [summary, setSummary] = useState<BenchmarkRunSummary | null>(null);
-  const [packComparison, setPackComparison] = useState<PackComparisonRow[] | null>(null);
-  const [packAcceptance, setPackAcceptance] = useState<Array<{ pack: VggPackName; verdict: "pass" | "fail"; reason: string }> | null>(null);
-  const [kernelLabRows, setKernelLabRows] = useState<KernelLabRow[] | null>(null);
+  const [packComparison, setPackComparison] = useState<
+    PackComparisonRow[] | null
+  >(null);
+  const [packAcceptance, setPackAcceptance] = useState<Array<{
+    pack: VggPackName;
+    verdict: "pass" | "fail";
+    reason: string;
+  }> | null>(null);
+  const [kernelLabRows, setKernelLabRows] = useState<KernelLabRow[] | null>(
+    null,
+  );
 
   const [firstPoolSteps, setFirstPoolSteps] = useState<number>(6);
   const [firstPoolRuns, setFirstPoolRuns] = useState<number>(5);
@@ -245,14 +295,25 @@ export const BenchmarkApp = (): ReactElement => {
     const fixture = await loadJson<Phase3FullPassFixture>(
       assetUrl("vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json"),
     );
-    const weights = (await loadManifestWeights("fp32")).weights;
+    const baselineWeights = await loadFirstAvailableManifestWeights([
+      "fp32",
+      "int8-per-channel",
+    ]);
+    const weights = baselineWeights.weights;
+    const baselineName = kernelLabBaselineName(baselineWeights.pack);
     await initializeWorker(worker);
-    const variants: Array<{ name: string; kernelFlags?: WorkerKernelOptimizationFlags }> = [
-      { name: KERNEL_LAB_BASELINE_NAME },
+    const variants: Array<{
+      name: string;
+      kernelFlags?: WorkerKernelOptimizationFlags;
+    }> = [
+      { name: baselineName },
       { name: "cached-pipelines", kernelFlags: { useCachedPipelines: true } },
       {
         name: "cached+persistent-weights",
-        kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true },
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+        },
       },
       {
         name: "cached+persistent+fp16-storage",
@@ -264,11 +325,20 @@ export const BenchmarkApp = (): ReactElement => {
       },
       {
         name: "cached+persistent+pool-scatter",
-        kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, usePoolBackwardScatter: true },
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+          usePoolBackwardScatter: true,
+        },
       },
       {
         name: "cached+persistent+pool-scatter+vec4",
-        kernelFlags: { useCachedPipelines: true, usePersistentWeightBuffers: true, usePoolBackwardScatter: true, useVec4Pointwise: true },
+        kernelFlags: {
+          useCachedPipelines: true,
+          usePersistentWeightBuffers: true,
+          usePoolBackwardScatter: true,
+          useVec4Pointwise: true,
+        },
       },
       {
         name: "cached+persistent+pool-scatter+vec4+gram-parallel+style-two-pass",
@@ -332,10 +402,9 @@ export const BenchmarkApp = (): ReactElement => {
         },
       },
     ];
-    const smokeMode = new URLSearchParams(window.location.search).get("kernelLabSmoke") === "1";
-    const selectedVariants = smokeMode
-      ? [variants[0], variants[3]]
-      : variants;
+    const smokeMode =
+      new URLSearchParams(window.location.search).get("kernelLabSmoke") === "1";
+    const selectedVariants = smokeMode ? [variants[0], variants[3]] : variants;
     const rows: KernelLabRow[] = [];
     let baselineLoss = 0;
     let baselineElapsed = 0;
@@ -434,7 +503,7 @@ export const BenchmarkApp = (): ReactElement => {
         continue;
       }
       const finalLoss = response.losses.at(-1) ?? 0;
-      if (variant.name === KERNEL_LAB_BASELINE_NAME) {
+      if (variant.name === baselineName) {
         baselineLoss = finalLoss;
         baselineElapsed = response.stats.elapsedMs;
       }
@@ -447,7 +516,8 @@ export const BenchmarkApp = (): ReactElement => {
         updateMs: response.stats.updateMs,
         finalLoss,
         lossDeltaFromBaseline: finalLoss - baselineLoss,
-        speedupVsBaseline: baselineElapsed > 0 ? baselineElapsed / response.stats.elapsedMs : 1,
+        speedupVsBaseline:
+          baselineElapsed > 0 ? baselineElapsed / response.stats.elapsedMs : 1,
         ok: true,
         kernelStats: response.stats.kernelStats,
       });
@@ -486,7 +556,9 @@ export const BenchmarkApp = (): ReactElement => {
     let lastResult: BenchmarkResult | null = null;
 
     for (let runIndex = 0; runIndex < cappedRuns; runIndex += 1) {
-      setStatus(`Running first-pool benchmark (${runIndex + 1}/${cappedRuns})...`);
+      setStatus(
+        `Running first-pool benchmark (${runIndex + 1}/${cappedRuns})...`,
+      );
       const optimized = await askWorker(worker, {
         type: "run-first-pool-optimizer",
         id: `benchmark-first-pool-${runIndex}`,
@@ -541,7 +613,10 @@ export const BenchmarkApp = (): ReactElement => {
     );
     const packs: VggPackName[] = VGG_PACK_OPTIONS.map((option) => option.name);
     const comparisonRows: PackComparisonRow[] = [];
-    let finalWeightsResult: Record<string, number[] | [number, number, number, number]> | null = null;
+    let finalWeightsResult: Record<
+      string,
+      number[] | [number, number, number, number]
+    > | null = null;
     for (const pack of packs) {
       try {
         setStatus(`Loading ${pack} weights for pack comparison...`);
@@ -581,7 +656,8 @@ export const BenchmarkApp = (): ReactElement => {
           downloadSizeBytes: weightsResult.stats.downloadSizeBytes,
         });
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
         throw new Error(`Pack comparison failed for ${pack}: ${errorMessage}`, {
           cause: error,
         });
@@ -597,7 +673,9 @@ export const BenchmarkApp = (): ReactElement => {
     let lastResult: BenchmarkResult | null = null;
 
     for (let runIndex = 0; runIndex < cappedRuns; runIndex += 1) {
-      setStatus(`Running full style-transfer benchmark (${runIndex + 1}/${cappedRuns})...`);
+      setStatus(
+        `Running full style-transfer benchmark (${runIndex + 1}/${cappedRuns})...`,
+      );
       const optimized = await askWorker(worker, {
         type: "run-style-transfer",
         id: `benchmark-full-style-${runIndex}`,
@@ -620,13 +698,19 @@ export const BenchmarkApp = (): ReactElement => {
         throw new Error("Unexpected full style-transfer run response");
       }
       if (!optimized.ok) throw new Error(optimized.message);
-      lastResult = { losses: optimized.losses, stats: optimized.stats, pack: "fp32" };
+      lastResult = {
+        losses: optimized.losses,
+        stats: optimized.stats,
+        pack: "fp32",
+      };
       runStats.push(optimized.stats);
     }
 
     if (lastResult !== null) setResult(lastResult);
     if (runStats.length > 0) {
-      const perf = performance as Performance & { memory?: { usedJSHeapSize: number } };
+      const perf = performance as Performance & {
+        memory?: { usedJSHeapSize: number };
+      };
       setSummary({
         ...summarizeRuns(runStats),
         downloadSizeBytes: fp32WeightsResult.stats.downloadSizeBytes,
@@ -640,9 +724,12 @@ export const BenchmarkApp = (): ReactElement => {
   const runBenchmark = async (): Promise<void> => {
     setIsRunning(true);
     clearResults();
-    const worker = new Worker(new URL("./styleTransfer.worker.ts", import.meta.url), {
-      type: "module",
-    });
+    const worker = new Worker(
+      new URL("./styleTransfer.worker.ts", import.meta.url),
+      {
+        type: "module",
+      },
+    );
     try {
       if (activeTab === "first-pool") {
         await runFirstPoolBenchmark(worker);
@@ -714,7 +801,9 @@ export const BenchmarkApp = (): ReactElement => {
               min={1}
               type="number"
               value={firstPoolSteps}
-              onChange={(event) => setFirstPoolSteps(Number(event.target.value))}
+              onChange={(event) =>
+                setFirstPoolSteps(Number(event.target.value))
+              }
             />
           </label>
           <label className="flex flex-col gap-1">
@@ -752,7 +841,9 @@ export const BenchmarkApp = (): ReactElement => {
             <input
               type="number"
               value={styleWeightConv1}
-              onChange={(event) => setStyleWeightConv1(Number(event.target.value))}
+              onChange={(event) =>
+                setStyleWeightConv1(Number(event.target.value))
+              }
             />
           </label>
           <label className="flex flex-col gap-1">
@@ -760,7 +851,9 @@ export const BenchmarkApp = (): ReactElement => {
             <input
               type="number"
               value={styleWeightConv3}
-              onChange={(event) => setStyleWeightConv3(Number(event.target.value))}
+              onChange={(event) =>
+                setStyleWeightConv3(Number(event.target.value))
+              }
             />
           </label>
           <label className="flex items-center gap-2">
@@ -848,7 +941,9 @@ export const BenchmarkApp = (): ReactElement => {
             <input
               type="number"
               value={fullStyleWeight}
-              onChange={(event) => setFullStyleWeight(Number(event.target.value))}
+              onChange={(event) =>
+                setFullStyleWeight(Number(event.target.value))
+              }
             />
           </label>
         </section>
@@ -860,7 +955,9 @@ export const BenchmarkApp = (): ReactElement => {
               min={1}
               type="number"
               value={kernelLabSteps}
-              onChange={(event) => setKernelLabSteps(Number(event.target.value))}
+              onChange={(event) =>
+                setKernelLabSteps(Number(event.target.value))
+              }
             />
           </label>
           <label className="flex flex-col gap-1">
@@ -869,7 +966,9 @@ export const BenchmarkApp = (): ReactElement => {
               step={0.00001}
               type="number"
               value={fullLearningRate}
-              onChange={(event) => setFullLearningRate(Number(event.target.value))}
+              onChange={(event) =>
+                setFullLearningRate(Number(event.target.value))
+              }
             />
           </label>
         </section>
@@ -896,7 +995,9 @@ export const BenchmarkApp = (): ReactElement => {
             <table className="w-full min-w-[620px] border-collapse text-left text-sm">
               <thead className="text-slate-300">
                 <tr>
-                  <th className="border-b border-slate-700 py-2 pr-4">Metric</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
+                    Metric
+                  </th>
                   <th className="border-b border-slate-700 py-2 pr-4">
                     mean / p50 / p95 ms
                   </th>
@@ -904,13 +1005,17 @@ export const BenchmarkApp = (): ReactElement => {
               </thead>
               <tbody>
                 <tr>
-                  <td className="border-b border-slate-800 py-2 pr-4">Elapsed</td>
+                  <td className="border-b border-slate-800 py-2 pr-4">
+                    Elapsed
+                  </td>
                   <td className="border-b border-slate-800 py-2 pr-4">
                     {formatMetric(summary.elapsedMs)}
                   </td>
                 </tr>
                 <tr>
-                  <td className="border-b border-slate-800 py-2 pr-4">Forward</td>
+                  <td className="border-b border-slate-800 py-2 pr-4">
+                    Forward
+                  </td>
                   <td className="border-b border-slate-800 py-2 pr-4">
                     {formatMetric(summary.forwardMs)}
                   </td>
@@ -922,19 +1027,25 @@ export const BenchmarkApp = (): ReactElement => {
                   </td>
                 </tr>
                 <tr>
-                  <td className="border-b border-slate-800 py-2 pr-4">Backward</td>
+                  <td className="border-b border-slate-800 py-2 pr-4">
+                    Backward
+                  </td>
                   <td className="border-b border-slate-800 py-2 pr-4">
                     {formatMetric(summary.backwardMs)}
                   </td>
                 </tr>
                 <tr>
-                  <td className="border-b border-slate-800 py-2 pr-4">Update</td>
+                  <td className="border-b border-slate-800 py-2 pr-4">
+                    Update
+                  </td>
                   <td className="border-b border-slate-800 py-2 pr-4">
                     {formatMetric(summary.updateMs)}
                   </td>
                 </tr>
                 <tr>
-                  <td className="border-b border-slate-800 py-2 pr-4">Readback</td>
+                  <td className="border-b border-slate-800 py-2 pr-4">
+                    Readback
+                  </td>
                   <td className="border-b border-slate-800 py-2 pr-4">
                     {formatMetric(summary.readbackMs)}
                   </td>
@@ -953,10 +1064,30 @@ export const BenchmarkApp = (): ReactElement => {
                     {formatMetric(summary.diagnosticsReadbackMs)}
                   </td>
                 </tr>
-                <tr><td className="py-2 pr-4">Download size (bytes)</td><td className="py-2 pr-4">{summary.downloadSizeBytes ?? "-"}</td></tr>
-                <tr><td className="py-2 pr-4">Decode/load time (ms)</td><td className="py-2 pr-4">{summary.decodeLoadMs?.toFixed(2) ?? "-"}</td></tr>
-                <tr><td className="py-2 pr-4">First-iteration latency (ms)</td><td className="py-2 pr-4">{summary.firstIterationMs?.toFixed(2) ?? "-"}</td></tr>
-                <tr><td className="py-2 pr-4">Peak memory (JS heap bytes)</td><td className="py-2 pr-4">{summary.peakMemoryBytes ?? "-"}</td></tr>
+                <tr>
+                  <td className="py-2 pr-4">Download size (bytes)</td>
+                  <td className="py-2 pr-4">
+                    {summary.downloadSizeBytes ?? "-"}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-2 pr-4">Decode/load time (ms)</td>
+                  <td className="py-2 pr-4">
+                    {summary.decodeLoadMs?.toFixed(2) ?? "-"}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-2 pr-4">First-iteration latency (ms)</td>
+                  <td className="py-2 pr-4">
+                    {summary.firstIterationMs?.toFixed(2) ?? "-"}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-2 pr-4">Peak memory (JS heap bytes)</td>
+                  <td className="py-2 pr-4">
+                    {summary.peakMemoryBytes ?? "-"}
+                  </td>
+                </tr>
               </tbody>
             </table>
             <p className="mt-3 text-sm text-slate-400">
@@ -966,25 +1097,45 @@ export const BenchmarkApp = (): ReactElement => {
         )}
         {packComparison === null ? null : (
           <div className="mt-6 overflow-x-auto">
-            <h3 className="mb-2 text-sm font-semibold text-slate-200">Pack comparison (single run each)</h3>
+            <h3 className="mb-2 text-sm font-semibold text-slate-200">
+              Pack comparison (single run each)
+            </h3>
             <table className="w-full min-w-[620px] border-collapse text-left text-sm">
               <thead className="text-slate-300">
                 <tr>
                   <th className="border-b border-slate-700 py-2 pr-4">Pack</th>
-                  <th className="border-b border-slate-700 py-2 pr-4">Download bytes</th>
-                  <th className="border-b border-slate-700 py-2 pr-4">Elapsed ms</th>
-                  <th className="border-b border-slate-700 py-2 pr-4">Avg step ms</th>
-                  <th className="border-b border-slate-700 py-2 pr-4">Final loss</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
+                    Download bytes
+                  </th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
+                    Elapsed ms
+                  </th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
+                    Avg step ms
+                  </th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
+                    Final loss
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {packComparison.map((row) => (
                   <tr key={row.pack}>
-                    <td className="border-b border-slate-800 py-2 pr-4">{row.pack}</td>
-                    <td className="border-b border-slate-800 py-2 pr-4">{row.downloadSizeBytes}</td>
-                    <td className="border-b border-slate-800 py-2 pr-4">{row.elapsedMs.toFixed(2)}</td>
-                    <td className="border-b border-slate-800 py-2 pr-4">{row.avgStepMs.toFixed(2)}</td>
-                    <td className="border-b border-slate-800 py-2 pr-4">{row.finalLoss.toFixed(6)}</td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      {row.pack}
+                    </td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      {row.downloadSizeBytes}
+                    </td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      {row.elapsedMs.toFixed(2)}
+                    </td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      {row.avgStepMs.toFixed(2)}
+                    </td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      {row.finalLoss.toFixed(6)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -993,11 +1144,19 @@ export const BenchmarkApp = (): ReactElement => {
         )}
         {packAcceptance === null ? null : (
           <div className="mt-4 overflow-x-auto">
-            <h3 className="mb-2 text-sm font-semibold text-slate-200">Acceptance verdicts</h3>
+            <h3 className="mb-2 text-sm font-semibold text-slate-200">
+              Acceptance verdicts
+            </h3>
             <ul className="space-y-1 text-sm">
               {packAcceptance.map((row) => (
                 <li key={row.pack}>
-                  <span className={row.verdict === "pass" ? "text-emerald-300" : "text-rose-300"}>
+                  <span
+                    className={
+                      row.verdict === "pass"
+                        ? "text-emerald-300"
+                        : "text-rose-300"
+                    }
+                  >
                     {row.verdict.toUpperCase()}
                   </span>{" "}
                   <span className="text-slate-200">{row.pack}</span>{" "}
@@ -1009,42 +1168,82 @@ export const BenchmarkApp = (): ReactElement => {
         )}
         {kernelLabRows === null ? null : (
           <div className="mt-6 overflow-x-auto">
-            <h3 className="mb-2 text-sm font-semibold text-slate-200">Kernel lab (cumulative variants, default pooled)</h3>
+            <h3 className="mb-2 text-sm font-semibold text-slate-200">
+              Kernel lab (cumulative variants, default pooled)
+            </h3>
             <table className="w-full min-w-[900px] border-collapse text-left text-sm">
               <thead className="text-slate-300">
                 <tr>
-                  <th className="border-b border-slate-700 py-2 pr-4">Variant</th>
-                  <th className="border-b border-slate-700 py-2 pr-4">Elapsed ms</th>
-                  <th className="border-b border-slate-700 py-2 pr-4">Forward</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
+                    Variant
+                  </th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
+                    Elapsed ms
+                  </th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
+                    Forward
+                  </th>
                   <th className="border-b border-slate-700 py-2 pr-4">Loss</th>
-                  <th className="border-b border-slate-700 py-2 pr-4">Backward</th>
-                  <th className="border-b border-slate-700 py-2 pr-4">Update</th>
-                  <th className="border-b border-slate-700 py-2 pr-4">Final loss</th>
-                  <th className="border-b border-slate-700 py-2 pr-4">Loss delta</th>
-                  <th className="border-b border-slate-700 py-2 pr-4">Speedup</th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
+                    Backward
+                  </th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
+                    Update
+                  </th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
+                    Final loss
+                  </th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
+                    Loss delta
+                  </th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
+                    Speedup
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {kernelLabRows.map((row) => (
                   <tr key={row.name}>
-                    <td className="border-b border-slate-800 py-2 pr-4">{row.name}</td>
-                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? row.elapsedMs.toFixed(2) : "-"}</td>
-                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? row.forwardMs.toFixed(2) : "-"}</td>
-                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? row.lossMs.toFixed(2) : "-"}</td>
-                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? row.backwardMs.toFixed(2) : "-"}</td>
-                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? row.updateMs.toFixed(2) : "-"}</td>
-                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? row.finalLoss.toFixed(6) : "-"}</td>
-                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? row.lossDeltaFromBaseline.toFixed(6) : "-"}</td>
-                    <td className="border-b border-slate-800 py-2 pr-4">{row.ok ? `${row.speedupVsBaseline.toFixed(3)}x` : "-"}</td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      {row.name}
+                    </td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      {row.ok ? row.elapsedMs.toFixed(2) : "-"}
+                    </td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      {row.ok ? row.forwardMs.toFixed(2) : "-"}
+                    </td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      {row.ok ? row.lossMs.toFixed(2) : "-"}
+                    </td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      {row.ok ? row.backwardMs.toFixed(2) : "-"}
+                    </td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      {row.ok ? row.updateMs.toFixed(2) : "-"}
+                    </td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      {row.ok ? row.finalLoss.toFixed(6) : "-"}
+                    </td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      {row.ok ? row.lossDeltaFromBaseline.toFixed(6) : "-"}
+                    </td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      {row.ok ? `${row.speedupVsBaseline.toFixed(3)}x` : "-"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
             {kernelLabRows.some((row) => row.error !== undefined) ? (
               <ul className="mt-3 space-y-1 text-sm text-rose-300">
-                {kernelLabRows.filter((row) => row.error !== undefined).map((row) => (
-                  <li key={`${row.name}-error`}>{row.name}: {row.error}</li>
-                ))}
+                {kernelLabRows
+                  .filter((row) => row.error !== undefined)
+                  .map((row) => (
+                    <li key={`${row.name}-error`}>
+                      {row.name}: {row.error}
+                    </li>
+                  ))}
               </ul>
             ) : null}
           </div>

@@ -30,7 +30,9 @@ __pycache__
 *.tsbuildinfo
 .vite
 test-results
-public/vgg19-phase3-full-pass
+public/vgg19-phase3-full-pass/*
+!public/vgg19-phase3-full-pass/
+!public/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json
 
 # Output folder
 expt

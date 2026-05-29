@@ -2,37 +2,6 @@ import { expect, test } from "@playwright/test";
 import type { WorkerRequest, WorkerResponse } from "../src/types";
 import { gotoStableApp } from "./helpers/appPage";
 
-
-
-type ManifestTensorEntry = {
-  shape: number[];
-  dtype: "float32";
-  shard: string;
-  offset: number;
-  length: number;
-};
-
-type Vgg19Manifest = {
-  layers: Record<string, { weight: ManifestTensorEntry; bias: ManifestTensorEntry }>;
-  shards: Array<{ name: string; byteLength: number }>;
-};
-
-type Phase3FullPassFixture = {
-  inputShape: [number, number, number, number];
-  inputImageValues: number[];
-  contentImageValues: number[];
-  styleImageValues: number[];
-  mean: [number, number, number];
-  std: [number, number, number];
-  styleLayerIndices: number[];
-  contentLayerIndex: number;
-  expectedGradients?: {
-    content?: number[];
-    styleByLayer?: Record<string, number[]>;
-    total?: number[];
-  };
-};
-
 test("phase 6 model pack selector reloads manifest-backed weights and supports fp32", async ({
   page,
 }) => {
@@ -78,7 +47,9 @@ test("phase 6 model pack selector reloads manifest-backed weights and supports f
         const state = window as Window & { __packFetches?: string[] };
         return state.__packFetches ?? [];
       });
-      return urls.some((url) => url.includes("/vgg19-models/fp32/manifest.json"));
+      return urls.some((url) =>
+        url.includes("/vgg19-models/fp32/manifest.json"),
+      );
     })
     .toBeTruthy();
 });
@@ -89,51 +60,11 @@ test("phase 5 full style transfer endpoint returns losses", async ({
   test.setTimeout(300000);
   await gotoStableApp(page);
   const result = await page.evaluate(async () => {
-    const loadJson = async <T>(url: string): Promise<T | null> => {
-      const response = await fetch(url);
-      if (!response.ok) return null;
-      const text = await response.text();
-      try {
-        return JSON.parse(text) as T;
-      } catch {
-        return null;
-      }
-    };
-    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/fp32/manifest.json");
-    if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
-    const shardPayload = await Promise.all(
-      manifest.shards.map(async (shard) => {
-        const response = await fetch(`/vgg19-models/fp32/${shard.name}`);
-        if (!response.ok) return null;
-        return [shard.name, await response.arrayBuffer()] as const;
-      }),
-    );
-    if (shardPayload.some((entry) => entry === null))
-      return { ok: false as const, reason: "missing-fixtures" as const };
-    const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(
-      shardPayload as Array<readonly [string, ArrayBuffer]>,
-    );
-    const weights: Record<string, number[] | [number, number, number, number]> = {};
-    for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
-      const layer = manifest.layers[`conv${layerIndex}`];
-      if (layer === undefined) continue;
-      const weightBytes = shardMap[layer.weight.shard].slice(
-        layer.weight.offset,
-        layer.weight.offset + layer.weight.length,
-      );
-      const biasBytes = shardMap[layer.bias.shard].slice(
-        layer.bias.offset,
-        layer.bias.offset + layer.bias.length,
-      );
-      weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [number, number, number, number];
-      weights[`conv${layerIndex}.weightValues`] = Array.from(new Float32Array(weightBytes));
-      weights[`conv${layerIndex}.biasValues`] = Array.from(new Float32Array(biasBytes));
-    }
-    const fixture = await loadJson<Phase3FullPassFixture>(
-      "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
-    );
-    if (weights === null || fixture === null)
-      return { ok: false as const, reason: "missing-fixtures" as const };
+    const { loadFullPassArtifacts } =
+      await import("/tests/helpers/fullPassArtifacts.ts");
+    const artifactsResult = await loadFullPassArtifacts();
+    if (!artifactsResult.ok) return artifactsResult;
+    const { fixture, weights } = artifactsResult.artifacts;
     const worker = new Worker(
       new URL("/src/styleTransfer.worker.ts", window.location.origin),
       { type: "module" },
@@ -181,7 +112,7 @@ test("phase 5 full style transfer endpoint returns losses", async ({
   });
   test.skip(
     !result.ok && result.reason === "missing-fixtures",
-    "Missing phase3 full-pass fixtures. Run python-reference/export_vgg19_phase3_full_pass.py first.",
+    result.ok ? "" : result.message,
   );
   if (!result.ok && result.reason !== "missing-fixtures")
     throw new Error(
@@ -198,49 +129,11 @@ test("phase 5 full style transfer supports rectangular style shape", async ({
   test.setTimeout(300000);
   await gotoStableApp(page);
   const result = await page.evaluate(async () => {
-    const loadJson = async <T>(url: string): Promise<T | null> => {
-      const response = await fetch(url);
-      if (!response.ok) return null;
-      const text = await response.text();
-      try {
-        return JSON.parse(text) as T;
-      } catch {
-        return null;
-      }
-    };
-    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/fp32/manifest.json");
-    if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
-    const shardPayload = await Promise.all(
-      manifest.shards.map(async (shard) => {
-        const response = await fetch(`/vgg19-models/fp32/${shard.name}`);
-        if (!response.ok) return null;
-        return [shard.name, await response.arrayBuffer()] as const;
-      }),
-    );
-    if (shardPayload.some((entry) => entry === null))
-      return { ok: false as const, reason: "missing-fixtures" as const };
-    const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(
-      shardPayload as Array<readonly [string, ArrayBuffer]>,
-    );
-    const weights: Record<string, number[] | [number, number, number, number]> = {};
-    for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
-      const layer = manifest.layers[`conv${layerIndex}`];
-      if (layer === undefined) continue;
-      const weightBytes = shardMap[layer.weight.shard].slice(
-        layer.weight.offset,
-        layer.weight.offset + layer.weight.length,
-      );
-      const biasBytes = shardMap[layer.bias.shard].slice(
-        layer.bias.offset,
-        layer.bias.offset + layer.bias.length,
-      );
-      weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [number, number, number, number];
-      weights[`conv${layerIndex}.weightValues`] = Array.from(new Float32Array(weightBytes));
-      weights[`conv${layerIndex}.biasValues`] = Array.from(new Float32Array(biasBytes));
-    }
-    if (weights === null)
-      return { ok: false as const, reason: "missing-fixtures" as const };
-
+    const { loadFullPassArtifacts } =
+      await import("/tests/helpers/fullPassArtifacts.ts");
+    const artifactsResult = await loadFullPassArtifacts();
+    if (!artifactsResult.ok) return artifactsResult;
+    const { weights } = artifactsResult.artifacts;
     const makeValues = (count: number, phase: number): number[] =>
       Array.from(
         { length: count },
@@ -306,7 +199,7 @@ test("phase 5 full style transfer supports rectangular style shape", async ({
   });
   test.skip(
     !result.ok && result.reason === "missing-fixtures",
-    "Missing phase3 full-pass weights.",
+    result.ok ? "" : result.message,
   );
   if (!result.ok && result.reason !== "missing-fixtures")
     throw new Error(
@@ -324,51 +217,16 @@ test("phase 5 run-style-transfer first-step gradient matches pytorch oracle", as
   test.setTimeout(300000);
   await gotoStableApp(page);
   const result = await page.evaluate(async () => {
-    const loadJson = async <T>(url: string): Promise<T | null> => {
-      const response = await fetch(url);
-      if (!response.ok) return null;
-      const text = await response.text();
-      try {
-        return JSON.parse(text) as T;
-      } catch {
-        return null;
-      }
-    };
-    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/fp32/manifest.json");
-    if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
-    const shardPayload = await Promise.all(
-      manifest.shards.map(async (shard) => {
-        const response = await fetch(`/vgg19-models/fp32/${shard.name}`);
-        if (!response.ok) return null;
-        return [shard.name, await response.arrayBuffer()] as const;
-      }),
-    );
-    if (shardPayload.some((entry) => entry === null))
-      return { ok: false as const, reason: "missing-fixtures" as const };
-    const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(
-      shardPayload as Array<readonly [string, ArrayBuffer]>,
-    );
-    const weights: Record<string, number[] | [number, number, number, number]> = {};
-    for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
-      const layer = manifest.layers[`conv${layerIndex}`];
-      if (layer === undefined) continue;
-      const weightBytes = shardMap[layer.weight.shard].slice(
-        layer.weight.offset,
-        layer.weight.offset + layer.weight.length,
-      );
-      const biasBytes = shardMap[layer.bias.shard].slice(
-        layer.bias.offset,
-        layer.bias.offset + layer.bias.length,
-      );
-      weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [number, number, number, number];
-      weights[`conv${layerIndex}.weightValues`] = Array.from(new Float32Array(weightBytes));
-      weights[`conv${layerIndex}.biasValues`] = Array.from(new Float32Array(biasBytes));
-    }
-    const fixture = await loadJson<Phase3FullPassFixture>(
-      "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
-    );
-    if (weights === null || fixture === null)
-      return { ok: false as const, reason: "missing-fixtures" as const };
+    const { loadFullPassArtifacts } =
+      await import("/tests/helpers/fullPassArtifacts.ts");
+    const artifactsResult = await loadFullPassArtifacts();
+    if (!artifactsResult.ok) return artifactsResult;
+    const {
+      fixture,
+      weights,
+      firstStepGradientMeanTolerance,
+      firstStepGradientMaxTolerance,
+    } = artifactsResult.artifacts;
     if (fixture.expectedGradients?.total === undefined)
       return {
         ok: false as const,
@@ -431,11 +289,17 @@ test("phase 5 run-style-transfer first-step gradient matches pytorch oracle", as
       meanDiff += diff;
     }
     meanDiff /= gradObserved.length;
-    return { ok: true as const, maxDiff, meanDiff };
+    return {
+      ok: true as const,
+      maxDiff,
+      meanDiff,
+      meanTolerance: firstStepGradientMeanTolerance,
+      maxTolerance: firstStepGradientMaxTolerance,
+    };
   });
   test.skip(
     !result.ok && result.reason === "missing-fixtures",
-    "Missing phase3 full-pass fixtures. Run python-reference/export_vgg19_phase3_full_pass.py first.",
+    result.ok ? "" : result.message,
   );
   test.skip(
     !result.ok && result.reason === "missing-gradient-fixture",
@@ -450,8 +314,8 @@ test("phase 5 run-style-transfer first-step gradient matches pytorch oracle", as
       result.reason === "worker-failed" ? result.message : result.reason,
     );
   if (!result.ok) return;
-  expect(result.maxDiff).toBeLessThan(2e-1);
-  expect(result.meanDiff).toBeLessThan(2e-2);
+  expect(result.maxDiff).toBeLessThan(result.maxTolerance);
+  expect(result.meanDiff).toBeLessThan(result.meanTolerance);
 });
 
 test("phase 5 weighted first-step gradient composes content and style gradients", async ({
@@ -460,51 +324,16 @@ test("phase 5 weighted first-step gradient composes content and style gradients"
   test.setTimeout(300000);
   await gotoStableApp(page);
   const result = await page.evaluate(async () => {
-    const loadJson = async <T>(url: string): Promise<T | null> => {
-      const response = await fetch(url);
-      if (!response.ok) return null;
-      const text = await response.text();
-      try {
-        return JSON.parse(text) as T;
-      } catch {
-        return null;
-      }
-    };
-    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/fp32/manifest.json");
-    if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
-    const shardPayload = await Promise.all(
-      manifest.shards.map(async (shard) => {
-        const response = await fetch(`/vgg19-models/fp32/${shard.name}`);
-        if (!response.ok) return null;
-        return [shard.name, await response.arrayBuffer()] as const;
-      }),
-    );
-    if (shardPayload.some((entry) => entry === null))
-      return { ok: false as const, reason: "missing-fixtures" as const };
-    const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(
-      shardPayload as Array<readonly [string, ArrayBuffer]>,
-    );
-    const weights: Record<string, number[] | [number, number, number, number]> = {};
-    for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
-      const layer = manifest.layers[`conv${layerIndex}`];
-      if (layer === undefined) continue;
-      const weightBytes = shardMap[layer.weight.shard].slice(
-        layer.weight.offset,
-        layer.weight.offset + layer.weight.length,
-      );
-      const biasBytes = shardMap[layer.bias.shard].slice(
-        layer.bias.offset,
-        layer.bias.offset + layer.bias.length,
-      );
-      weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [number, number, number, number];
-      weights[`conv${layerIndex}.weightValues`] = Array.from(new Float32Array(weightBytes));
-      weights[`conv${layerIndex}.biasValues`] = Array.from(new Float32Array(biasBytes));
-    }
-    const fixture = await loadJson<Phase3FullPassFixture>(
-      "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
-    );
-    if (weights === null || fixture === null)
-      return { ok: false as const, reason: "missing-fixtures" as const };
+    const { loadFullPassArtifacts } =
+      await import("/tests/helpers/fullPassArtifacts.ts");
+    const artifactsResult = await loadFullPassArtifacts();
+    if (!artifactsResult.ok) return artifactsResult;
+    const {
+      fixture,
+      weights,
+      weightedGradientMeanTolerance,
+      weightedGradientMaxTolerance,
+    } = artifactsResult.artifacts;
     if (
       fixture.expectedGradients?.content === undefined ||
       fixture.expectedGradients.styleByLayer === undefined
@@ -577,11 +406,17 @@ test("phase 5 weighted first-step gradient composes content and style gradients"
       meanDiff += diff;
     }
     meanDiff /= gradObserved.length;
-    return { ok: true as const, maxDiff, meanDiff };
+    return {
+      ok: true as const,
+      maxDiff,
+      meanDiff,
+      meanTolerance: weightedGradientMeanTolerance,
+      maxTolerance: weightedGradientMaxTolerance,
+    };
   });
   test.skip(
     !result.ok && result.reason === "missing-fixtures",
-    "Missing phase3 full-pass fixtures. Run python-reference/export_vgg19_phase3_full_pass.py first.",
+    result.ok ? "" : result.message,
   );
   test.skip(
     !result.ok && result.reason === "missing-gradient-fixture",
@@ -596,61 +431,19 @@ test("phase 5 weighted first-step gradient composes content and style gradients"
       result.reason === "worker-failed" ? result.message : result.reason,
     );
   if (!result.ok) return;
-  expect(result.maxDiff).toBeLessThan(6e-1);
-  expect(result.meanDiff).toBeLessThan(2e-2);
+  expect(result.maxDiff).toBeLessThan(result.maxTolerance);
+  expect(result.meanDiff).toBeLessThan(result.meanTolerance);
 });
 
-test("phase 5 style transfer supports adam and lbfgs", async ({
-  page,
-}) => {
+test("phase 5 style transfer supports adam and lbfgs", async ({ page }) => {
   test.setTimeout(300000);
   await gotoStableApp(page);
   const result = await page.evaluate(async () => {
-    const loadJson = async <T>(url: string): Promise<T | null> => {
-      const response = await fetch(url);
-      if (!response.ok) return null;
-      const text = await response.text();
-      try {
-        return JSON.parse(text) as T;
-      } catch {
-        return null;
-      }
-    };
-    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/fp32/manifest.json");
-    if (manifest === null) return { ok: false as const, reason: "missing-fixtures" as const };
-    const shardPayload = await Promise.all(
-      manifest.shards.map(async (shard) => {
-        const response = await fetch(`/vgg19-models/fp32/${shard.name}`);
-        if (!response.ok) return null;
-        return [shard.name, await response.arrayBuffer()] as const;
-      }),
-    );
-    if (shardPayload.some((entry) => entry === null))
-      return { ok: false as const, reason: "missing-fixtures" as const };
-    const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(
-      shardPayload as Array<readonly [string, ArrayBuffer]>,
-    );
-    const weights: Record<string, number[] | [number, number, number, number]> = {};
-    for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
-      const layer = manifest.layers[`conv${layerIndex}`];
-      if (layer === undefined) continue;
-      const weightBytes = shardMap[layer.weight.shard].slice(
-        layer.weight.offset,
-        layer.weight.offset + layer.weight.length,
-      );
-      const biasBytes = shardMap[layer.bias.shard].slice(
-        layer.bias.offset,
-        layer.bias.offset + layer.bias.length,
-      );
-      weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [number, number, number, number];
-      weights[`conv${layerIndex}.weightValues`] = Array.from(new Float32Array(weightBytes));
-      weights[`conv${layerIndex}.biasValues`] = Array.from(new Float32Array(biasBytes));
-    }
-    const fixture = await loadJson<Phase3FullPassFixture>(
-      "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
-    );
-    if (weights === null || fixture === null)
-      return { ok: false as const, reason: "missing-fixtures" as const };
+    const { loadFullPassArtifacts } =
+      await import("/tests/helpers/fullPassArtifacts.ts");
+    const artifactsResult = await loadFullPassArtifacts();
+    if (!artifactsResult.ok) return artifactsResult;
+    const { fixture, weights } = artifactsResult.artifacts;
     const worker = new Worker(
       new URL("/src/styleTransfer.worker.ts", window.location.origin),
       { type: "module" },
@@ -730,7 +523,7 @@ test("phase 5 style transfer supports adam and lbfgs", async ({
   });
   test.skip(
     !result.ok && result.reason === "missing-fixtures",
-    "Missing phase3 full-pass fixtures.",
+    result.ok ? "" : result.message,
   );
   if (!result.ok && result.reason !== "missing-fixtures") {
     throw new Error(
@@ -759,12 +552,10 @@ test("phase 5 gpu vector reductions match cpu references", async ({ page }) => {
     if (adapter === null)
       return { ok: false as const, reason: "adapter-unavailable" as const };
     const device = await adapter.requestDevice();
-    const { createGpuVectorOps } = await import(
-      "/src/ml/worker/pipelines/optimization/input-optimizer/gpuVectorOps.ts"
-    );
-    const { uploadToOwnedBuffer, releaseOwnedBuffer } = await import(
-      "/src/ml/worker/runtime/bufferKernels.ts"
-    );
+    const { createGpuVectorOps } =
+      await import("/src/ml/worker/pipelines/optimization/input-optimizer/gpuVectorOps.ts");
+    const { uploadToOwnedBuffer, releaseOwnedBuffer } =
+      await import("/src/ml/worker/runtime/bufferKernels.ts");
 
     const count = 3 * 128 + 17;
     const a = new Float32Array(count);
@@ -886,43 +677,11 @@ test("phase 6 style-transfer supports gram/style kernel variants", async ({
   test.setTimeout(300000);
   await gotoStableApp(page);
   const result = await page.evaluate(async () => {
-    const loadJson = async <T>(url: string): Promise<T | null> => {
-      const response = await fetch(url);
-      if (!response.ok) return null;
-      try {
-        return (await response.json()) as T;
-      } catch {
-        return null;
-      }
-    };
-    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/fp32/manifest.json");
-    const fixture = await loadJson<Phase3FullPassFixture>(
-      "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
-    );
-    if (manifest === null || fixture === null)
-      return { ok: false as const, reason: "missing-fixtures" as const };
-    const shardPayload = await Promise.all(
-      manifest.shards.map(async (shard) => {
-        const response = await fetch(`/vgg19-models/fp32/${shard.name}`);
-        if (!response.ok) return null;
-        return [shard.name, await response.arrayBuffer()] as const;
-      }),
-    );
-    if (shardPayload.some((entry) => entry === null))
-      return { ok: false as const, reason: "missing-fixtures" as const };
-    const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(
-      shardPayload as Array<readonly [string, ArrayBuffer]>,
-    );
-    const weights: Record<string, number[] | [number, number, number, number]> = {};
-    for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
-      const layer = manifest.layers[`conv${layerIndex}`];
-      if (layer === undefined) continue;
-      const weightBytes = shardMap[layer.weight.shard].slice(layer.weight.offset, layer.weight.offset + layer.weight.length);
-      const biasBytes = shardMap[layer.bias.shard].slice(layer.bias.offset, layer.bias.offset + layer.bias.length);
-      weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [number, number, number, number];
-      weights[`conv${layerIndex}.weightValues`] = Array.from(new Float32Array(weightBytes));
-      weights[`conv${layerIndex}.biasValues`] = Array.from(new Float32Array(biasBytes));
-    }
+    const { loadFullPassArtifacts } =
+      await import("/tests/helpers/fullPassArtifacts.ts");
+    const artifactsResult = await loadFullPassArtifacts();
+    if (!artifactsResult.ok) return artifactsResult;
+    const { fixture, weights } = artifactsResult.artifacts;
     const worker = new Worker(
       new URL("/src/styleTransfer.worker.ts", window.location.origin),
       { type: "module" },
@@ -967,8 +726,18 @@ test("phase 6 style-transfer supports gram/style kernel variants", async ({
           usePersistentWeightBuffers: true,
         },
       });
-      if (out.type !== "run-style-transfer-result" || !out.ok || out.losses.length === 0) {
-        return { ok: false, reason: out.type === "run-style-transfer-result" ? out.message : "wrong-response" };
+      if (
+        out.type !== "run-style-transfer-result" ||
+        !out.ok ||
+        out.losses.length === 0
+      ) {
+        return {
+          ok: false,
+          reason:
+            out.type === "run-style-transfer-result"
+              ? out.message
+              : "wrong-response",
+        };
       }
       return { ok: true, loss: out.losses[0] };
     };
@@ -995,7 +764,7 @@ test("phase 6 style-transfer supports gram/style kernel variants", async ({
   });
   test.skip(
     !result.ok && result.reason === "missing-fixtures",
-    "Missing phase3 full-pass fixtures. Run python-reference/export_vgg19_phase3_full_pass.py first.",
+    result.ok ? "" : result.message,
   );
   if (!result.ok && result.reason !== "missing-fixtures")
     throw new Error(result.reason);
@@ -1011,43 +780,11 @@ test("phase 6 kernel flags preserve baseline semantics and support fp16-storage"
   test.setTimeout(300000);
   await gotoStableApp(page);
   const result = await page.evaluate(async () => {
-    const loadJson = async <T>(url: string): Promise<T | null> => {
-      const response = await fetch(url);
-      if (!response.ok) return null;
-      try {
-        return (await response.json()) as T;
-      } catch {
-        return null;
-      }
-    };
-    const manifest = await loadJson<Vgg19Manifest>("/vgg19-models/fp32/manifest.json");
-    const fixture = await loadJson<Phase3FullPassFixture>(
-      "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
-    );
-    if (manifest === null || fixture === null)
-      return { ok: false as const, reason: "missing-fixtures" as const };
-    const shardPayload = await Promise.all(
-      manifest.shards.map(async (shard) => {
-        const response = await fetch(`/vgg19-models/fp32/${shard.name}`);
-        if (!response.ok) return null;
-        return [shard.name, await response.arrayBuffer()] as const;
-      }),
-    );
-    if (shardPayload.some((entry) => entry === null))
-      return { ok: false as const, reason: "missing-fixtures" as const };
-    const shardMap: Record<string, ArrayBuffer> = Object.fromEntries(
-      shardPayload as Array<readonly [string, ArrayBuffer]>,
-    );
-    const weights: Record<string, number[] | [number, number, number, number]> = {};
-    for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
-      const layer = manifest.layers[`conv${layerIndex}`];
-      if (layer === undefined) continue;
-      const weightBytes = shardMap[layer.weight.shard].slice(layer.weight.offset, layer.weight.offset + layer.weight.length);
-      const biasBytes = shardMap[layer.bias.shard].slice(layer.bias.offset, layer.bias.offset + layer.bias.length);
-      weights[`conv${layerIndex}.weightShape`] = layer.weight.shape as [number, number, number, number];
-      weights[`conv${layerIndex}.weightValues`] = Array.from(new Float32Array(weightBytes));
-      weights[`conv${layerIndex}.biasValues`] = Array.from(new Float32Array(biasBytes));
-    }
+    const { loadFullPassArtifacts } =
+      await import("/tests/helpers/fullPassArtifacts.ts");
+    const artifactsResult = await loadFullPassArtifacts();
+    if (!artifactsResult.ok) return artifactsResult;
+    const { fixture, weights } = artifactsResult.artifacts;
     const worker = new Worker(
       new URL("/src/styleTransfer.worker.ts", window.location.origin),
       { type: "module" },
@@ -1064,7 +801,10 @@ test("phase 6 kernel flags preserve baseline semantics and support fp16-storage"
         worker.postMessage(payload);
       });
     await ask({ type: "init-webgpu", id: "phase6-kernel-storage-init" });
-    type RunStyleRequest = Extract<WorkerRequest, { type: "run-style-transfer" }>;
+    type RunStyleRequest = Extract<
+      WorkerRequest,
+      { type: "run-style-transfer" }
+    >;
     const baseRequest = (id: string): Omit<RunStyleRequest, "kernelFlags"> => ({
       type: "run-style-transfer",
       id,
@@ -1091,7 +831,8 @@ test("phase 6 kernel flags preserve baseline semantics and support fp16-storage"
       | { ok: false; reason: string }
     > => {
       const out = await ask({ ...baseRequest(id), kernelFlags });
-      if (out.type !== "run-style-transfer-result") return { ok: false, reason: "wrong-response" };
+      if (out.type !== "run-style-transfer-result")
+        return { ok: false, reason: "wrong-response" };
       if (!out.ok) return { ok: false, reason: out.message };
       return {
         ok: true,
@@ -1107,7 +848,10 @@ test("phase 6 kernel flags preserve baseline semantics and support fp16-storage"
       if (out.type !== "run-style-transfer-result") return "wrong-response";
       return out.ok ? "unexpected-success" : out.message;
     };
-    const meanAbsDelta = (a: readonly number[], b: readonly number[]): number => {
+    const meanAbsDelta = (
+      a: readonly number[],
+      b: readonly number[],
+    ): number => {
       if (a.length !== b.length) return Number.POSITIVE_INFINITY;
       let total = 0;
       for (let i = 0; i < a.length; i += 1) total += Math.abs(a[i] - b[i]);
@@ -1125,12 +869,18 @@ test("phase 6 kernel flags preserve baseline semantics and support fp16-storage"
     const tiledMessage = await runFailure("phase6-kernel-unsupported-tiled", {
       convForwardKernel: "tiled-spatial",
     });
-    const spatialBackwardMessage = await runFailure("phase6-kernel-unsupported-spatial-backward", {
-      convBackwardInputKernel: "spatial-vec4",
-    });
-    const fp16WithoutPersistentMessage = await runFailure("phase6-kernel-fp16-without-persistent", {
-      weightStorage: "fp16-storage",
-    });
+    const spatialBackwardMessage = await runFailure(
+      "phase6-kernel-unsupported-spatial-backward",
+      {
+        convBackwardInputKernel: "spatial-vec4",
+      },
+    );
+    const fp16WithoutPersistentMessage = await runFailure(
+      "phase6-kernel-fp16-without-persistent",
+      {
+        weightStorage: "fp16-storage",
+      },
+    );
     const int8Message = await runFailure("phase6-kernel-int8-storage", {
       usePersistentWeightBuffers: true,
       weightStorage: "int8-dequant-experimental",
@@ -1143,7 +893,10 @@ test("phase 6 kernel flags preserve baseline semantics and support fp16-storage"
       ok: true as const,
       baselineLoss: baseline.loss,
       explicitPooledLossDelta: Math.abs(explicitPooled.loss - baseline.loss),
-      explicitPooledOutputMeanDelta: meanAbsDelta(explicitPooled.finalValues, baseline.finalValues),
+      explicitPooledOutputMeanDelta: meanAbsDelta(
+        explicitPooled.finalValues,
+        baseline.finalValues,
+      ),
       fp16Loss: fp16.loss,
       fp16LossDelta: Math.abs(fp16.loss - baseline.loss),
       fp16OutputMeanDelta: meanAbsDelta(fp16.finalValues, baseline.finalValues),
@@ -1155,7 +908,7 @@ test("phase 6 kernel flags preserve baseline semantics and support fp16-storage"
   });
   test.skip(
     !result.ok && result.reason === "missing-fixtures",
-    "Missing phase3 full-pass fixtures. Run python-reference/export_vgg19_phase3_full_pass.py first.",
+    result.ok ? "" : result.message,
   );
   if (!result.ok && result.reason !== "missing-fixtures")
     throw new Error(result.reason);
@@ -1167,7 +920,13 @@ test("phase 6 kernel flags preserve baseline semantics and support fp16-storage"
   expect(result.fp16LossDelta).toBeLessThan(0.05);
   expect(result.fp16OutputMeanDelta).toBeLessThan(0.02);
   expect(result.tiledMessage).toContain("convForwardKernel=tiled-spatial");
-  expect(result.spatialBackwardMessage).toContain("convBackwardInputKernel=spatial-vec4");
-  expect(result.fp16WithoutPersistentMessage).toContain("requires usePersistentWeightBuffers=true");
-  expect(result.int8Message).toContain("weightStorage=int8-dequant-experimental");
+  expect(result.spatialBackwardMessage).toContain(
+    "convBackwardInputKernel=spatial-vec4",
+  );
+  expect(result.fp16WithoutPersistentMessage).toContain(
+    "requires usePersistentWeightBuffers=true",
+  );
+  expect(result.int8Message).toContain(
+    "weightStorage=int8-dequant-experimental",
+  );
 });
