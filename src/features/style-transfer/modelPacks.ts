@@ -36,7 +36,7 @@ export type VggPackLoadResult = {
   cacheStatus: ModelCacheStatus;
 };
 
-export const DEFAULT_VGG_PACK: VggPackName = "int8log-per-channel";
+export const DEFAULT_VGG_PACK: VggPackName = "int4log-experimental";
 export const VGG_PACK_STORAGE_KEY = "style-transfer.vgg-pack";
 
 const loadJson = async <T,>(url: string): Promise<T> => {
