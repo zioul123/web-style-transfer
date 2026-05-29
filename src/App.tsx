@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { RefObject } from "react";
 import { useStyleTransferController } from "./features/style-transfer/hooks/useStyleTransferController";
 import type {
   KernelConvBackwardInput,
@@ -98,17 +99,50 @@ const kernelWeightStorageLabel = (option: KernelWeightStorage): string => {
   return option;
 };
 
+type ImageCard =
+  | {
+      kind: "source";
+      label: "Content" | "Style";
+      src: string | null;
+      inputRef: RefObject<HTMLInputElement | null>;
+      target: "content" | "style";
+    }
+  | {
+      kind: "output";
+      label: "Output";
+      src: string | null;
+    };
+
 function App() {
   const { controls, status, images, canRun, setIsRunning, onUpload } =
     useStyleTransferController();
   const { selectedPack, setSelectedPack } = controls;
   const [showOptions, setShowOptions] = useState<boolean>(false);
+  const contentFileInputRef = useRef<HTMLInputElement | null>(null);
+  const styleFileInputRef = useRef<HTMLInputElement | null>(null);
   const cacheSizeMb = (status.modelCacheBytes / (1024 * 1024)).toFixed(2);
   const benchmarkUrl = assetUrl("benchmark");
   const canUseAllModelPacks = isLocalhost();
   const modelPackOptions = canUseAllModelPacks
     ? VGG_PACK_OPTIONS
     : VGG_PACK_OPTIONS.filter((option) => isHostedVggPackName(option.name));
+  const imageCards: readonly ImageCard[] = [
+    {
+      kind: "source",
+      label: "Content",
+      src: images.contentImage,
+      inputRef: contentFileInputRef,
+      target: "content",
+    },
+    {
+      kind: "source",
+      label: "Style",
+      src: images.styleImage,
+      inputRef: styleFileInputRef,
+      target: "style",
+    },
+    { kind: "output", label: "Output", src: images.outputImage },
+  ];
 
   useEffect(() => {
     if (canUseAllModelPacks || isHostedVggPackName(selectedPack)) {
@@ -129,8 +163,8 @@ function App() {
               WebGPU Style Transfer
             </h1>
             <p className="mt-3 text-sm leading-6 text-slate-300">
-              Blend Madeira with Starry Night, tune the optimizer when you need
-              to, and keep the main canvas focused on the images.
+              Stylize your photographs in the browser with WebGPU-powered
+              optimization and a handful of device-tuned controls.
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:justify-end">
@@ -150,11 +184,7 @@ function App() {
         </header>
 
         <section className="grid gap-4 md:grid-cols-3">
-          {[
-            { label: "Content", src: images.contentImage },
-            { label: "Style", src: images.styleImage },
-            { label: "Output", src: images.outputImage },
-          ].map((image) => (
+          {imageCards.map((image) => (
             <figure
               className="overflow-hidden rounded-lg border border-white/10 bg-slate-950/65 shadow-xl shadow-black/20"
               key={image.label}
@@ -176,9 +206,26 @@ function App() {
                 <span className="font-semibold text-slate-100">
                   {image.label}
                 </span>
-                <span className="text-slate-400">
-                  {image.label === "Output" ? "Optimized" : "Source"}
-                </span>
+                {image.kind === "source" ? (
+                  <>
+                    <input
+                      className="hidden"
+                      ref={image.inputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={(event) => void onUpload(event, image.target)}
+                    />
+                    <button
+                      className="rounded-lg bg-sky-300 px-3 py-1.5 font-semibold text-sky-950 transition hover:bg-sky-200"
+                      type="button"
+                      onClick={() => image.inputRef.current?.click()}
+                    >
+                      Select
+                    </button>
+                  </>
+                ) : (
+                  <span className="text-slate-400">Optimized</span>
+                )}
               </figcaption>
             </figure>
           ))}
