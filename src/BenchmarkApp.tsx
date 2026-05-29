@@ -1,5 +1,6 @@
 import { useState, type ReactElement } from "react";
 import { buildPackAcceptanceRows, type PackComparisonRow } from "./features/style-transfer/benchmark/packAcceptance";
+import { assetUrl, vgg19ModelUrl } from "./shared/assetUrls";
 import {
   VGG_PACK_OPTIONS,
   type VggPackName,
@@ -119,11 +120,11 @@ const loadManifestWeights = async (
 ): Promise<{ weights: Record<string, number[] | [number, number, number, number]>; stats: WeightLoadStats }> => {
   const decodeStart = performance.now();
   const manifest = await loadJson<Vgg19WeightsManifest>(
-    `/vgg19-models/${pack}/manifest.json`,
+    vgg19ModelUrl(`${pack}/manifest.json`),
   );
   const shardEntries = await Promise.all(
     manifest.shards.map(async (shard) => {
-      const response = await fetch(`/vgg19-models/${pack}/${shard.name}`);
+      const response = await fetch(vgg19ModelUrl(`${pack}/${shard.name}`));
       if (!response.ok) throw new Error(`Missing weight shard: ${shard.name}`);
       return [shard.name, await response.arrayBuffer()] as const;
     }),
@@ -242,7 +243,7 @@ export const BenchmarkApp = (): ReactElement => {
   const runKernelLabBenchmark = async (worker: Worker): Promise<void> => {
     setStatus("Loading full style-transfer fixtures for kernel lab...");
     const fixture = await loadJson<Phase3FullPassFixture>(
-      "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
+      assetUrl("vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json"),
     );
     const weights = (await loadManifestWeights("fp32")).weights;
     await initializeWorker(worker);
@@ -473,10 +474,10 @@ export const BenchmarkApp = (): ReactElement => {
     setStatus("Loading first-pool fixtures...");
     const [weights, caseData] = await Promise.all([
       loadJson<VggFirstPoolWeightsFixture>(
-        "/vgg19-first-pool/vgg19_first_pool_weights.json",
+        assetUrl("vgg19-first-pool/vgg19_first_pool_weights.json"),
       ),
       loadJson<VggFirstPoolCaseFixture>(
-        "/vgg19-first-pool/vgg19_first_pool_case_madeira16.json",
+        assetUrl("vgg19-first-pool/vgg19_first_pool_case_madeira16.json"),
       ),
     ]);
     await initializeWorker(worker);
@@ -536,7 +537,7 @@ export const BenchmarkApp = (): ReactElement => {
   const runFullStyleBenchmark = async (worker: Worker): Promise<void> => {
     setStatus("Loading full style-transfer fixtures...");
     const fixture = await loadJson<Phase3FullPassFixture>(
-      "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
+      assetUrl("vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json"),
     );
     const packs: VggPackName[] = VGG_PACK_OPTIONS.map((option) => option.name);
     const comparisonRows: PackComparisonRow[] = [];
@@ -581,7 +582,9 @@ export const BenchmarkApp = (): ReactElement => {
         });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        throw new Error(`Pack comparison failed for ${pack}: ${errorMessage}`);
+        throw new Error(`Pack comparison failed for ${pack}: ${errorMessage}`, {
+          cause: error,
+        });
       }
     }
     setPackComparison(comparisonRows);

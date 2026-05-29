@@ -3,6 +3,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
+  base: process.env.BASE_PATH ?? "/",
   plugins: [react(), tailwindcss()],
   server: {
     hmr: process.env.PLAYWRIGHT_TEST === "1" ? false : undefined,
