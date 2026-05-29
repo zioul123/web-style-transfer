@@ -1,307 +1,227 @@
 # Web Style Transfer Architecture Overview
 
-This document explains the current architecture of the application end-to-end, from React UI input to WebGPU worker execution, and calls out areas where responsibilities appear out-of-place and could be reorganized in follow-up refactors.
+This document describes the current module boundaries and runtime data flow for the WebGPU style-transfer app.
 
-## 1. System shape at a glance
+## System shape
 
-The app is a **browser-first style transfer system** with three major layers:
+The app has three main layers:
 
-1. **UI + orchestration on main thread** (`src/App.tsx`)
-   - owns controls, image loading, and iterative run loop state.
-2. **Typed request/response protocol** (`src/types.ts`)
-   - defines all worker messages for op-level tests and pipeline-level optimization runs.
-3. **Worker-side compute stack** (`src/styleTransfer.worker.ts` + `src/ml/worker/**`)
-   - owns WebGPU device lifecycle, message routing, kernels, runtime helpers, and optimization pipelines.
+1. **Main-thread UI and orchestration**
+   - React app shell in `src/App.tsx`.
+   - Style-transfer controller, model-pack loading, cache status, and image/tensor conversion in `src/features/style-transfer/`.
+   - Benchmark route in `src/BenchmarkApp.tsx`.
+2. **Typed worker protocol**
+   - Public type exports through `src/types.ts`.
+   - Split protocol definitions in `src/types/worker-protocol/`.
+3. **Worker-side WebGPU compute**
+   - Worker entrypoint in `src/styleTransfer.worker.ts`.
+   - Message routing in `src/ml/worker/main-thread-protocol/`.
+   - Runtime helpers, kernels, and optimization pipelines under `src/ml/worker/`.
 
-Data flow is intentionally message-driven:
+The project is intentionally message-driven. The main thread posts a typed request, the worker routes it by discriminant, compute runs on the worker-owned WebGPU device, and the worker posts back a typed response.
 
-- Main thread posts `WorkerRequest` messages.
-- Worker routes by `type`, runs an op/pipeline, and posts `WorkerResponse`.
-- Main thread updates iteration state and may enqueue another run chunk.
+## Main-thread app
 
----
+### `src/App.tsx`
 
-## 2. Main thread architecture
+`App.tsx` is now mostly presentation:
 
-## 2.1 App shell and control plane (`src/App.tsx`)
+- Renders content/style/output cards.
+- Renders run controls and advanced options.
+- Displays worker/GPU/model-cache status.
+- Delegates state and side effects to `useStyleTransferController`.
+- Switches model-pack options based on whether the app is running locally or from hosted assets.
 
-`App.tsx` currently combines UI, worker lifecycle, payload construction, and utility conversion logic:
+It still owns UI-specific labels and some option presentation helpers. That is appropriate for now.
 
-- Creates and manages a single Worker instance (`styleTransfer.worker.ts`).
-- Pings worker and initializes WebGPU.
-- Loads VGG artifacts from `public/vgg19-phase3-full-pass`.
-- Converts uploaded images to NCHW tensor data.
-- Sends `run-style-transfer` requests with optimizer settings.
-- Receives chunked results (`losses`, `finalValues`, `stats`) and updates preview image + run telemetry.
+### `src/features/style-transfer/hooks/useStyleTransferController.ts`
 
-Important local constants and knobs include:
+The controller hook owns most main-thread orchestration:
 
-- Style/content tap indices from `src/ml/constants/vgg19.ts` (`VGG19_RELU_TAP_STYLE_LAYER_INDICES`, `VGG19_RELU_TAP_CONTENT_LAYER_INDEX`) using torch `vgg19.features` post-ReLU indices.
-- Resolution presets.
-- Optimizer mode and hyperparameters (`sgd`, `adam`, `lbfgs`).
+- Creates and manages the style-transfer worker.
+- Pings the worker and initializes WebGPU.
+- Loads default images and uploaded images.
+- Converts DOM images to NCHW float tensors and output tensors back to PNG data URLs.
+- Chooses resolution presets, including automatic portrait/landscape matching.
+- Loads selected VGG19 model packs and tracks IndexedDB cache status.
+- Builds `run-style-transfer` requests.
+- Maintains chunked run state, optimizer session IDs, losses, iteration count, timing text, and preview output.
+- Clears worker-side sessions and model cache when relevant controls change.
 
-### Out-of-place note
+This is the main seam for future UI/component extraction.
 
-`App.tsx` contains substantial logic that would better live in feature modules:
+### `src/features/style-transfer/modelPacks.ts` and `modelCache.ts`
 
-- Image ↔ tensor conversion helpers.
-- Worker request dispatching/retry/chunk loop behavior.
-- Weight-loading concerns.
+`modelPacks.ts` resolves manifest/shard URLs, parses VGG19 model packs into the worker payload shape, and writes successful downloads into IndexedDB.
 
-A future `features/style-transfer/` split (controller hook + data adapters + UI components) would reduce coupling and improve testability.
+`modelCache.ts` wraps IndexedDB operations for model-pack records and exposes cache status/clear helpers. If IndexedDB is unavailable, cache calls degrade to empty/no-op results.
 
-## 2.2 Main-thread ML exports (`src/ml/index.ts`, `src/ml/ops/cpu.ts`, `src/ml/tensor.ts`)
+### `src/BenchmarkApp.tsx`
 
-The main-thread ML module exports:
+The benchmark route is selected when the path after the Vite base starts with `/benchmark`. It provides:
 
-- `createTensor` validation wrapper.
-- CPU reference ops used as correctness oracles in tests.
+- First-pool optimization benchmarks.
+- Full-style-transfer benchmark runs.
+- Model-pack comparison and acceptance helpers.
+- Kernel-lab variants for experimental optimization flags.
 
-This gives the project a shared tensor shape contract across UI/tests/worker.
+Some benchmark flows require optional fixtures or model packs that are not committed by default.
 
----
+## Worker protocol
 
-## 3. Protocol layer (`src/types.ts`)
+The public import surface is `src/types.ts`, which re-exports the split protocol files in `src/types/worker-protocol/`.
 
-`src/types.ts` is the contract between threads and tests.
+The protocol is organized as:
 
-It defines:
+- `core.ts`: tensor shapes, worker tensor payloads, operands, and tensor response payloads.
+- `tensor-ops.ts`: op-level request variants used by parity tests and debugging.
+- `pipelines.ts`: first-pool/full-style-transfer pipeline requests, optimizer flags, and run stats.
+- `messages.ts`: full worker request/response unions.
 
-- Tensor data model (`TensorShape`, `WorkerTensor`, `WorkerTensorOperand`).
-- Op-level request variants (`tensor-op` union for conv/relu/pool/gram/loss/grad operations).
-- Pipeline-level request variants:
-  - `run-first-pool-optimizer`
-  - `run-style-transfer`
-- Response unions for success/failure and scalar/vector payload forms.
-- Runtime stats payload (`WorkerRunStats`).
+Important message families:
 
-### Strengths
+- Infrastructure: `ping`, `init-webgpu`, `tensor-roundtrip`.
+- Tensor ops: primitive, VGG-layer, loss, and backward parity routes.
+- Pipelines: `run-first-pool-optimizer`, `run-style-transfer`, `clear-style-transfer-session`.
 
-- Strong discriminated unions prevent broad/unsafe envelopes.
-- Enables test suite to validate ops independently from full optimization runs.
+The discriminated unions keep request validation explicit and make Playwright tests able to exercise individual operations without running the full app.
 
-### Out-of-place note
+## Worker bootstrap and routing
 
-This file is becoming large and spans multiple concerns (primitive ops, pipeline endpoints, stats types). It could be split into:
+### `src/styleTransfer.worker.ts`
 
-- `types/worker-protocol/core.ts`
-- `types/worker-protocol/tensor-ops.ts`
-- `types/worker-protocol/pipelines.ts`
+The worker entrypoint is intentionally tiny. It imports and mounts the message router.
 
----
+### `src/ml/worker/main-thread-protocol/messageRouter.ts`
 
-## 4. Worker bootstrap and routing
+The message router handles high-level request dispatch:
 
-## 4.1 Worker entrypoint (`src/styleTransfer.worker.ts`)
+- `ping`
+- `init-webgpu`
+- `tensor-roundtrip`
+- pipeline requests
+- style-transfer session clearing
+- delegation of all `tensor-op` requests to `tensorOpRouter`
 
-Entrypoint is intentionally minimal:
+Pipeline errors are caught and converted into typed failed responses.
 
-- imports `mountMessageRouter`
-- mounts listener
+### `src/ml/worker/main-thread-protocol/tensorOpRouter.ts`
 
-This is clean and aligns with the current refactor goal.
+The tensor-op router owns operation-level dispatch for tests and debug routes. It converts protocol tensors/operands into runtime tensors or buffers, invokes the relevant op runner, and returns JSON-friendly arrays/scalars.
 
-## 4.2 Message router (`src/ml/worker/main-thread-protocol/messageRouter.ts`)
+These routes are intentionally readback-heavy because they are correctness/debug endpoints. The full optimization pipelines use GPU-resident buffers more aggressively.
 
-Router responsibilities:
+### Response and initialization helpers
 
-- Parses `WorkerRequest` by discriminant.
-- Handles worker infra messages (`ping`, `init-webgpu`, roundtrip).
-- Dispatches pipeline requests directly to:
-  - `runFirstPoolOptimizer`
-  - `runStyleTransfer`
-- Handles a broad `tensor-op` branch for layer/loss primitives and backward ops.
+- `responses.ts` centralizes typed worker response posting.
+- `initWebGpu.ts` obtains the adapter/device and resets runtime caches when needed.
 
-### Strengths
+## Runtime infrastructure
 
-- Centralized, explicit dispatch.
-- Keeps protocol behavior in one place.
+Runtime helpers live in `src/ml/worker/runtime/`:
 
-### Out-of-place note
+- `deviceState.ts`: worker-global WebGPU device state.
+- `bufferKernels.ts`: upload, readback, owned-buffer helpers, and reusable buffer utilities.
+- `bufferPool.ts`: reusable GPU buffer pool for allocation-sensitive paths.
+- `computeContext.ts`: shared compute helpers such as unary dispatch.
+- `computePipelineCache.ts`: cached compute pipeline creation.
+- `gpuFlags.ts`: common WebGPU usage/map flag constants.
+- `operands.ts`: protocol operand parsing.
+- `optimizationContext.ts`: per-run optimization runtime context and cleanup lifecycle.
+- `shaderRunner.ts`: lower-level shader execution helpers for primitive routes.
+- `tensorShapes.ts`: tensor-shape arithmetic and validation helpers.
 
-`tensor-op` branch is now very large and includes repeated marshal/convert boilerplate. This is a candidate for extraction into dedicated handlers (e.g., `tensorOpRouter.ts`) and possibly op-family subrouters.
+A recurring pattern in the worker is explicit ownership: buffers that are created for a step are either released through the optimization context or returned as owned outputs to the caller.
 
-## 4.3 Response helpers (`responses.ts`) and WebGPU init (`initWebGpu.ts`)
+## Operation modules
 
-- `responses.ts` provides typed helper emitters for common message payloads.
-- `initWebGpu.ts` handles adapter/device init and clears buffer pool on reset.
+Worker ops are grouped by operator family under `src/ml/worker/ops/`:
 
-Out-of-place note: `messageRouter.ts` still sometimes uses direct `postResponse` while helpers exist for error/result pathways; consistency could be improved by using the helper surface uniformly.
+- `convolution/`: conv2d forward, fused conv+ReLU, and input-gradient backward variants.
+- `relu/`: ReLU forward/backward.
+- `pooling/`: max-pool forward/backward.
+- `normalization/`: ImageNet normalization forward/backward.
+- `gram/`: Gram matrix forward/backward.
+- `loss/`: MSE, content loss, style loss, and weighted scalar sum helpers.
 
----
+Most families split shader source generation from run helpers. Many run helpers expose both readback routes for tests and buffer-returning routes for pipeline execution.
 
-## 5. Worker runtime infrastructure (`src/ml/worker/runtime/*`)
+## Optimization pipelines
 
-## 5.1 Device state (`deviceState.ts`)
+### First-pool pipeline
 
-Owns singleton-ish worker GPU device state with set/get/clear accessors.
+The first-pool optimizer is a smaller benchmark and parity target. It optimizes through a truncated VGG path ending at the first max-pool and is useful for fast iteration on forward/backward/update behavior.
 
-## 5.2 Shader runner (`shaderRunner.ts`)
+### Full style-transfer pipeline
 
-Generic utility layer for dispatching compute kernels against buffers and returning mapped readbacks. Includes scalar/tensor binary op helpers and clamp.
+The full pipeline under `src/ml/worker/pipelines/optimization/style-transfer/` runs the fixed VGG19 style-transfer graph:
 
-## 5.3 Buffer pool (`bufferPool.ts`)
+1. Uploads content, style, and current input image tensors.
+2. Parses supplied VGG19 conv weights.
+3. Builds persistent target context for content features and style Gram matrices when possible.
+4. Runs forward passes through the configured VGG19 layer plan.
+5. Computes content/style losses.
+6. Backpropagates gradients from tap layers to the input tensor.
+7. Applies the selected optimizer update.
+8. Clamps pixels and records timing/kernel stats.
+9. Reads back losses according to `lossReadbackInterval` and returns final/output values for preview.
 
-Reusable GPU buffer pool to reduce allocation churn. Explicit acquire/release lifecycle.
+The worker can keep optimizer state by `sessionId`. `clear-style-transfer-session` disposes state when the main thread resets or changes incompatible run settings.
 
-## 5.4 Operand helpers (`operands.ts`)
+### Input optimizers
 
-Parses protocol operands into tensor/scalar values for op runners.
+`input-optimizer/` provides a common interface over GPU vector operations. Current modes are:
 
-## 5.5 GPU usage constants (`gpuFlags.ts`)
+- `sgd`
+- `adam`
+- `lbfgs`
 
-Centralized usage/mapping constants for consistent buffer creation flags.
+The optimizer updates buffers representing image pixels, not VGG19 weights.
 
-### Architectural observation
+## VGG19 layer constants
 
-Runtime primitives are fairly reusable and reasonably separated, but some API signatures are still verbose (many repeated usage-flag args). A small `PipelineContext` or runtime facade could reduce repetitive call signatures across routers/pipelines.
+`src/ml/constants/vgg19.ts` centralizes the torch `vgg19.features` ReLU tap indices used by the app and tests. Pipeline layer schedules live in `src/ml/worker/pipelines/optimization/layerSchedules.ts` and `style-transfer/vgg19Plan.ts`.
 
----
+Keeping UI tap constants and worker schedules aligned is important. If future work changes tap layers or truncation depth, update constants, pipeline plans, tests, and fixture exporters together.
 
-## 6. Worker operation modules (`src/ml/worker/ops/*`)
+## Model-pack loading
 
-Ops are split by domain and pair `.run.ts` wrappers with shader sources in `.shader.ts` files.
+Manifests are parsed by `src/ml/worker/models/vgg19/weights.ts`. The parser validates supported formats, shard byte lengths, checksums, tensor byte ranges, and tensor shapes, then decodes weights to `Float32Array` for the compute pipeline.
 
-- `convolution/`: conv forward/backward-input and fused conv+relu.
-- `relu/`: forward/backward.
-- `pooling/`: maxpool forward/backward.
-- `normalization/`: forward/backward.
-- `gram/`: gram forward/backward.
-- `loss/`: mse, content loss backward, style loss backward.
+The app resolves model URLs through `src/shared/assetUrls.ts`:
 
-This structure matches the phased implementation plan and supports isolated parity testing.
+- `assetUrl()` respects Vite `BASE_URL`.
+- `vgg19ModelUrl()` uses `VITE_VGG19_MODEL_BASE_URL` when configured and otherwise falls back to public assets.
 
-### Cleanup note
+## End-to-end app flow
 
-Alternate full style-transfer pipeline modes have been removed. The `run-style-transfer` endpoint now has one production implementation, with fused conv+ReLU treated as an implementation detail.
+1. React renders defaults and starts the controller hook.
+2. The controller creates the worker and initializes WebGPU.
+3. The controller loads selected model-pack manifests/shards, using IndexedDB when possible.
+4. Content/style images are converted to NCHW float arrays at the selected resolution.
+5. The controller sends `run-style-transfer` chunks to the worker.
+6. The worker executes the fixed graph and optimizer updates.
+7. The worker returns losses, timing stats, and updated output values.
+8. The controller renders the output PNG preview and schedules the next chunk if the run is still active.
 
----
+## Testing architecture
 
-## 7. Optimization pipelines (`src/ml/worker/pipelines/optimization/*`)
+Playwright is used for integration, worker, and WebGPU parity coverage. The suite includes:
 
-## 7.1 First-pool optimizer (`firstPoolOptimizer.ts`)
+- App boot and worker/WebGPU initialization checks.
+- Tensor primitive parity tests.
+- VGG first-pool forward and optimization checks.
+- Full phase-3 forward/loss parity checks when fixtures are present.
+- Backward parity checks with committed phase-4 fixture data.
+- Full style-transfer endpoint checks when optional fixtures/model packs are present.
+- LBFGS and benchmark utility tests.
+- Kernel-lab smoke tests when optional benchmark fixtures are present.
 
-Contains the targeted optimization route for the early VGG slice. It performs:
+The tests are designed to skip optional large-fixture paths rather than fail a fresh checkout.
 
-- normalization
-- conv/relu/pool sequence
-- style/content losses at configured points
-- backward pass for image gradient
-- optimizer update + clamp loop
+## Known follow-ups
 
-This route remains useful as a compact benchmark and regression target for the early VGG slice, but it now uses the same GPU-buffer loss accumulation style as the full pipeline.
-
-## 7.2 Style transfer pipeline (`styleTransferPipeline.ts`)
-
-Contains the full VGG-style optimization orchestration:
-
-- constructs conv layer cache from payload weights
-- runs the fixed fused conv+ReLU forward plan
-- computes style + content losses
-- backpropagates through required ops
-- applies SGD/Adam/LBFGS update
-- clamps and reports timing stats
-
-This is the heaviest compute coordinator in the codebase.
-
-## 7.3 Layer schedules (`layerSchedules.ts`)
-
-Centralized constants:
-
-- ReLU layer indices
-- pool layer indices
-
-Good separation of schedule policy from execution logic.
-
-### Out-of-place note
-
-Some related layer metadata still appears in other modules (e.g., UI tap indices in `App.tsx`). Consolidating these into one shared schedule/config module (possibly split by “pipeline schedule” vs “UI defaults”) would avoid drift.
-
----
-
-## 8. End-to-end execution sequence
-
-1. App loads weights and user images.
-2. App converts content/style to normalized tensor value arrays.
-3. App initializes worker and WebGPU device (`init-webgpu`).
-4. App sends `run-style-transfer` with chunk step count.
-5. Worker router forwards to `runStyleTransfer`.
-6. Pipeline executes forward/loss/backward/update loop for `steps`.
-7. Worker returns losses + updated image tensor + timing stats.
-8. App renders updated preview and may enqueue next chunk while running.
-
----
-
-## 9. Testing architecture
-
-Playwright e2e suite validates progressive phases:
-
-- app boot / worker availability
-- primitive op parity and reduction behavior
-- VGG forward parity
-- loss parity
-- backward parity
-- endpoint optimization behavior for the first-pool and full style-transfer pipelines
-
-Fixture generation scripts in `python-reference/` provide deterministic baselines for parity checks.
-
----
-
-## 10. Architectural fit review (May 21, 2026)
-
-The two highest-priority refactors from the previous version of this document have been addressed in code:
-
-1. **`runUnary` ownership moved to runtime** ✅
-   - `runUnary` now lives in `src/ml/worker/runtime/computeContext.ts`.
-   - Both optimization pipelines and `tensorOpRouter` import it from runtime.
-   - `firstPoolOptimizer.ts` no longer owns cross-cutting runtime helpers.
-
-2. **`tensor-op` routing extracted from `messageRouter.ts`** ✅
-   - `src/ml/worker/main-thread-protocol/tensorOpRouter.ts` now owns tensor-op dispatch.
-   - `messageRouter.ts` delegates tensor-op requests to this dedicated router.
-   - The top-level router is materially smaller and easier to scan.
-
-Additional previously-suggested refactors are also now implemented:
-
-- **Protocol type sprawl**: resolved by splitting into `src/types/worker-protocol/{core,messages,pipelines,tensor-ops}.ts`, with `src/types.ts` as a barrel export.
-- **UI-heavy orchestration in `App.tsx`**: largely addressed by `src/features/style-transfer/hooks/useStyleTransferController.ts`, with `App.tsx` now mainly composing UI and controller state.
-
-Still-open architecture concerns are now narrower and are listed as concrete follow-up tasks in section 11.
-
----
-
-## 11. Suggested follow-up refactor tasks (remaining confusion points)
-
-### Update: VGG tap indices are now canonicalized and validated at request build time.
-
-Style/content tap indices now live in `src/ml/constants/vgg19.ts` and are consumed directly by the style transfer controller. The canonical scheme is documented as torch `vgg19.features` **post-ReLU layer indices** (`relu1_1`, `relu2_1`, `relu3_1`, `relu4_1`, `relu5_1`, and `relu4_2`). A shared assertion helper (`assertValidVgg19ReluTapIndices`) fails fast on invalid or duplicate tap-index combinations before request dispatch.
-
-
-### Issue: Worker request/response posting patterns are still mixed between raw `postResponse` calls and response helper wrappers, which makes error-path behavior harder to reason about.
-
-:::task-stub{title="Standardize worker response emission through shared helper APIs"}
-Normalize message emission in `src/ml/worker/main-thread-protocol/` so success/error pathways use a consistent helper surface.
-
-Steps:
-1. Audit `messageRouter.ts` and `tensorOpRouter.ts` for direct `postResponse(...)` calls and categorize them by response type (`error`, `tensor-op-result`, pipeline result).
-2. Expand `responses.ts` only as needed to cover missing cases with explicit, narrow helper signatures.
-3. Replace ad-hoc response construction with helper calls, preserving existing payload shapes.
-4. Ensure the default/unknown request path and exception path share a uniform error envelope.
-5. Add a small protocol-focused test (or extend existing worker protocol tests) that verifies representative success + failure responses still match `WorkerResponse` unions.
-:::
-
-### Issue: Op-level worker routes still rely on per-op GPU→CPU readback (`runUnaryShader`), making their performance profile very different from the optimization pipelines.
-
-:::task-stub{title="Introduce explicit GPU-resident execution boundaries in worker runtime"}
-Refactor runtime execution to make buffer-resident tensors and explicit readback boundaries reusable beyond the optimization pipelines.
-
-Steps:
-1. In `src/ml/worker/runtime/`, define a minimal intermediate representation for GPU-resident tensor handles (buffer + shape metadata + lifecycle ownership).
-2. Add helper APIs in `computeContext.ts` for:
-   - op-to-op chaining without immediate readback,
-   - explicit scalar readback points (loss extraction),
-   - explicit image snapshot readback points (preview/final output).
-3. Migrate one constrained op-level route first to prove API clarity before broad rollout.
-4. Update buffer-pool ownership/release rules to prevent leaks when handles survive across multiple ops.
-5. Document the new boundary model in `docs/architecture-overview.md` and/or runtime module docs so contributors can reason about when data is on GPU vs CPU.
-:::
+- Move image conversion and worker orchestration into smaller feature modules if the controller hook continues to grow.
+- Keep model-pack UI options in sync with what is actually hosted for non-local deployments.
+- Continue promoting successful kernel-lab flags into default pipeline behavior only after broad device validation.
+- Add a consolidated model-pack export guide or script that covers all supported formats.

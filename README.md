@@ -1,128 +1,174 @@
 # Web Style Transfer
 
-## Introduction
+Browser-native neural style transfer powered by React, TypeScript, Vite, and WebGPU. The app implements the classical Gatys optimization loop: VGG19 weights stay fixed, and the pixels of the output image are optimized to match content features and style Gram matrices.
 
-This project ports a minimal Gatys style transfer pipeline to the browser with WebGPU. The Python reference remains in `python-reference/` and is used as the parity baseline for operation-level and loss-level verification.
+The codebase keeps a PyTorch reference implementation in `python-reference/` and uses generated fixtures to verify the browser kernels and worker pipelines against deterministic baselines.
 
-## Running Python Version
+## Current state
 
-From the root folder, first install dependencies:
+The browser app is runnable and includes:
+
+- A React UI for content/style image selection, resolution presets, optimizer controls, model-pack selection, progress telemetry, and final image preview.
+- A Web Worker that owns WebGPU initialization, GPU buffers, shader dispatch, and pipeline execution.
+- WebGPU kernels for forward ops, loss ops, manual input-gradient backpropagation, and optimizer updates.
+- End-to-end style-transfer execution through VGG19 feature layers up to `conv5_1` / torch `features[28]`.
+- Optimizer support for SGD, Adam, and LBFGS-style input updates.
+- Manifest-backed VGG19 model packs, IndexedDB model-pack caching, and optional external model-pack hosting.
+- A `/benchmark` route for first-pool benchmarks, full style-transfer benchmarks, model-pack acceptance checks, and kernel-lab experiments.
+
+The implementation is still intentionally correctness-first in several kernels. The most important remaining work is performance tuning, browser/device QA, and cleaning up fixture/model-pack generation workflows.
+
+## Repository layout
+
+| Path                                                                   | Purpose                                                                                                    |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `src/App.tsx`                                                          | Main app shell and presentation layer.                                                                     |
+| `src/features/style-transfer/`                                         | Main-thread style-transfer controller, model-pack loading, caching, and benchmark helpers.                 |
+| `src/styleTransfer.worker.ts`                                          | Worker entrypoint.                                                                                         |
+| `src/ml/worker/main-thread-protocol/`                                  | Worker message routing and response helpers.                                                               |
+| `src/ml/worker/runtime/`                                               | WebGPU device state, buffer helpers, reusable buffer pool, pipeline cache, and shader execution utilities. |
+| `src/ml/worker/ops/`                                                   | WebGPU op implementations for convolution, ReLU, pooling, normalization, Gram matrices, and losses.        |
+| `src/ml/worker/pipelines/optimization/`                                | First-pool and full-style-transfer optimization pipelines.                                                 |
+| `src/types/worker-protocol/`                                           | Typed worker request/response protocol.                                                                    |
+| `tests/`                                                               | Playwright integration and parity tests.                                                                   |
+| `python-reference/`                                                    | PyTorch reference scripts and fixture exporters.                                                           |
+| `public/vgg19-models/`                                                 | Committed VGG19 model packs used by the app by default.                                                    |
+| `public/vgg19-first-pool/`, `public/phase4-backprop/`, `public/lbfgs/` | Smaller committed fixtures.                                                                                |
+| `docs/`                                                                | Architecture and implementation-plan notes.                                                                |
+
+## Requirements
+
+- Node.js 22 is used by the GitHub Pages workflow.
+- npm dependencies from `package-lock.json`.
+- A Chromium-family browser with WebGPU for real browser execution.
+- Python dependencies from `requirements.txt` for reference scripts and fixture generation.
+
+## Install and run the web app
 
 ```bash
-pip install -r requirements.txt
-```
-
-Then, run the script with:
-
-```bash
-python python-reference/style-transfer.py
-```
-
-This generates `./expt` outputs from style transfer.
-
-## Phase 0 Web App (React + TypeScript + Vite + Tailwind)
-
-Install dependencies:
-
-```bash
-npm install
-```
-
-Run the app:
-
-```bash
+npm ci
 npm run dev
 ```
 
-Build production bundle:
+Then open the Vite URL printed by the dev server.
+
+Build the production bundle:
 
 ```bash
 npm run build
 ```
 
-## Deploying to GitHub Pages
+Preview a production build locally:
 
-This app can be hosted as a static Vite build on GitHub Pages. The included workflow at `.github/workflows/deploy-pages.yml` builds the app on pushes to `main` and publishes the `dist/` artifact.
+```bash
+npm run preview
+```
 
-### Repository settings
+Run the benchmark UI by visiting `/benchmark` under the dev or preview server.
 
-1. Push this branch to GitHub and merge it into `main`.
-2. In the GitHub repository, open **Settings → Pages**.
-3. Set **Build and deployment → Source** to **GitHub Actions**.
-4. Run the **Deploy GitHub Pages** workflow from the **Actions** tab, or push to `main`.
+## Model packs
 
-The workflow sets `BASE_PATH=/${{ github.event.repository.name }}/` during `npm run build`, so Vite generates URLs that work under `https://<owner>.github.io/<repo>/`.
+Runtime model loading resolves model assets from:
 
-### VGG19 model pack hosting
+1. `VITE_VGG19_MODEL_BASE_URL`, when set; otherwise
+2. Vite public assets at `<base>/vgg19-models/...`.
 
-By default, runtime model fetches use Vite's public asset base and resolve to `<base>/vgg19-models/...`. If the generated VGG19 model packs are committed under `public/vgg19-models`, they will be included in the Pages artifact automatically.
+Committed model packs currently include:
 
-If you do not want to include the large model shards in the Pages artifact, host them from GitHub raw files instead and set `VITE_VGG19_MODEL_BASE_URL` while building. Use a raw URL, not the human-facing `github.com/<owner>/<repo>/blob/...` URL, for example:
+- `int8-per-channel`
+- `int4log-experimental`
+
+The UI exposes additional pack names (`fp32`, `fp16`, `int8log-per-channel`, `int4-experimental`) because the parser and benchmark tooling support them, but those packs are not all committed by default. If a selected pack is unavailable, the fetch for that pack's manifest or shard will fail.
+
+Model packs are cached in IndexedDB after download. The UI includes cache status and a cache-clear path through the style-transfer controller.
+
+To host packs outside the app bundle, provide a raw asset base URL at build time:
 
 ```bash
 VITE_VGG19_MODEL_BASE_URL=https://raw.githubusercontent.com/<owner>/<repo>/main/public/vgg19-models npm run build
 ```
 
-To use this in GitHub Actions, uncomment and update the `VITE_VGG19_MODEL_BASE_URL` line in `.github/workflows/deploy-pages.yml`.
+Use raw file URLs, not `github.com/.../blob/...` URLs.
 
-## WebGPU/Worker verification with Playwright (SwiftShader)
+## Python reference
 
-This environment has no physical GPU. Use Chromium + SwiftShader to validate worker wiring and WebGPU adapter/device initialization behavior.
+Install Python dependencies:
 
-Install browser + OS dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+Run the original reference style-transfer script:
+
+```bash
+python python-reference/style-transfer.py
+```
+
+This writes experiment outputs under `./expt`.
+
+Important fixture/export scripts:
+
+```bash
+python python-reference/export_vgg19_first_pool.py
+python python-reference/export_vgg19_phase3_full_pass.py
+python python-reference/export_phase4_backprop_fixtures.py
+python python-reference/export_lbfgs_fixtures.py
+python python-reference/evaluate_vgg19_quantization.py
+```
+
+Large generated fixtures and full model packs should not be committed unless the repository already tracks them or the task explicitly requires it.
+
+## Testing
+
+Run all Playwright tests:
+
+```bash
+npm test
+```
+
+Some tests skip automatically when large generated fixtures or optional full model packs are absent. To enable the full phase-3/full-style-transfer fixture tests, generate fixtures first:
+
+```bash
+python python-reference/export_vgg19_phase3_full_pass.py
+```
+
+In environments missing Playwright's Chromium system dependencies, install Chromium and dependencies first:
 
 ```bash
 npx playwright install chromium
 npx playwright install-deps chromium
 ```
 
-Run phase 0 browser tests:
+Always run the production build before concluding code changes:
 
 ```bash
-npm test
+npm run build
 ```
 
-## WebGPU Port Planning
+Optional checks:
 
-See `docs/webgpu-style-transfer-plan.md` for the full phased implementation plan.
+```bash
+npm run lint
+npm run format:check
+```
 
-## Current ML Worker Architecture (Forward + Backward)
+## Deployment to GitHub Pages
 
-The browser ML runtime is intentionally worker-first and message-driven:
+The workflow at `.github/workflows/deploy-pages.yml` builds on pushes to `main` and publishes the `dist/` artifact through GitHub Pages.
 
-- `src/styleTransfer.worker.ts` owns WebGPU device lifecycle and kernel dispatch.
-- The app sends typed `tensor-op` requests (`src/types.ts`) and receives scalar/vector results.
-- Each op is validated, executed on GPU where supported, and returned in plain JSON-friendly arrays.
+Repository setup:
 
-### Forward path currently implemented
+1. Open **Settings → Pages** in GitHub.
+2. Set **Build and deployment → Source** to **GitHub Actions**.
+3. Push to `main` or run the workflow manually.
 
-- Tensor elementwise ops: `add`, `sub`, `mul`, `div`, `clamp`, `mse`.
-- VGG feature ops: `normalize-forward`, `conv2d-forward`, `relu-forward`, `maxpool2d-forward`.
-- Style-transfer loss prep: `reshape-chw-flatten`, `gram-matrix`, `content-loss`, `style-loss`.
+The workflow sets `BASE_PATH=/${{ github.event.repository.name }}/`, so Vite emits URLs that work under `https://<owner>.github.io/<repo>/`.
 
-### Backward path currently implemented (phase 4 groundwork)
+If model packs become too large for the Pages artifact, host them separately and set `VITE_VGG19_MODEL_BASE_URL` in the workflow's build step.
 
-- Loss/Gram backward on GPU in worker:
-  - `content-loss-backward`
-  - `gram-backward`
-  - `style-loss-backward` (gram + mse chain)
-- Layer backward reference ops exposed via worker routes:
-  - `relu-backward`, `maxpool2d-backward`, `normalize-backward`, `conv2d-backward-input`
+## More documentation
 
-Important design choice: gradients are computed for the **input image tensor only**. VGG weights remain fixed.
-
-### Parity and fixture strategy
-
-- PyTorch fixture generator: `python-reference/export_phase4_backprop_fixtures.py`
-- Generated fixture artifact: `public/phase4-backprop/phase4_backprop_fixture.json`
-- Backward parity test: `tests/phase4.spec.ts`
-
-This keeps implementation deterministic and reviewable while preserving a direct numerical baseline against PyTorch.
-
-### GPU-resident style-transfer execution
-
-`run-style-transfer` uses the GPU-resident optimization path. Intermediate tensors remain on GPU where possible, with readback limited to scalar loss reporting and final/output snapshots.
-
-### Current transfer bottleneck notes
-
-The optimization pipelines keep intermediate tensors GPU-resident and only read back scalar losses plus final/output snapshots. The remaining readback-heavy paths are the op-level worker routes used by parity tests and debugging; those intentionally return JSON-friendly arrays to the main thread.
+- `docs/architecture-overview.md` explains current module responsibilities and data flow.
+- `docs/webgpu-style-transfer-plan.md` describes the implementation plan, phase status, and remaining follow-ups.
+- `public/vgg19-models/README.md` documents the model-pack layout and manifest schema.
+- `python-reference/vgg19-phase3-full-pass-README.md` documents the large phase-3 fixture exporter.
