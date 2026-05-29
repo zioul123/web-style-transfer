@@ -104,6 +104,12 @@ const kernelWeightStorageLabel = (option: KernelWeightStorage): string => {
   return option;
 };
 
+const formatBytes = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+};
+
 type ImageCard =
   | {
       kind: "source";
@@ -409,6 +415,75 @@ function App() {
                 <option value="lbfgs">L-BFGS</option>
               </select>
             </label>
+            {controls.optimizer === "adam" ? (
+              <>
+                <label className="flex flex-col gap-1">
+                  Adam β1
+                  <input
+                    className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                    type="number"
+                    step={0.001}
+                    value={controls.adamBeta1}
+                    onChange={(event) =>
+                      controls.setAdamBeta1(Number(event.target.value))
+                    }
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  Adam β2
+                  <input
+                    className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                    type="number"
+                    step={0.001}
+                    value={controls.adamBeta2}
+                    onChange={(event) =>
+                      controls.setAdamBeta2(Number(event.target.value))
+                    }
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  Adam ε
+                  <input
+                    className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                    type="number"
+                    step={0.00000001}
+                    value={controls.adamEpsilon}
+                    onChange={(event) =>
+                      controls.setAdamEpsilon(Number(event.target.value))
+                    }
+                  />
+                </label>
+              </>
+            ) : null}
+            {controls.optimizer === "lbfgs" ? (
+              <>
+                <label className="flex flex-col gap-1">
+                  L-BFGS history
+                  <input
+                    className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={controls.lbfgsMemory}
+                    onChange={(event) =>
+                      controls.setLbfgsMemory(Number(event.target.value))
+                    }
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  L-BFGS tolerance change
+                  <input
+                    className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                    type="number"
+                    step={0.00000001}
+                    value={controls.lbfgsEpsilon}
+                    onChange={(event) =>
+                      controls.setLbfgsEpsilon(Number(event.target.value))
+                    }
+                  />
+                </label>
+              </>
+            ) : null}
             <div className="flex flex-col gap-3 rounded-lg border border-white/10 bg-slate-900/70 p-3 md:col-span-3">
               <p className="text-sm font-semibold text-slate-200">
                 Kernel Options
@@ -567,75 +642,67 @@ function App() {
                 </label>
               </div>
             </div>
-            {controls.optimizer === "adam" ? (
-              <>
-                <label className="flex flex-col gap-1">
-                  Adam β1
-                  <input
-                    className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-                    type="number"
-                    step={0.001}
-                    value={controls.adamBeta1}
-                    onChange={(event) =>
-                      controls.setAdamBeta1(Number(event.target.value))
-                    }
-                  />
-                </label>
-                <label className="flex flex-col gap-1">
-                  Adam β2
-                  <input
-                    className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-                    type="number"
-                    step={0.001}
-                    value={controls.adamBeta2}
-                    onChange={(event) =>
-                      controls.setAdamBeta2(Number(event.target.value))
-                    }
-                  />
-                </label>
-                <label className="flex flex-col gap-1">
-                  Adam ε
-                  <input
-                    className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-                    type="number"
-                    step={0.00000001}
-                    value={controls.adamEpsilon}
-                    onChange={(event) =>
-                      controls.setAdamEpsilon(Number(event.target.value))
-                    }
-                  />
-                </label>
-              </>
-            ) : null}
-            {controls.optimizer === "lbfgs" ? (
-              <>
-                <label className="flex flex-col gap-1">
-                  L-BFGS history
-                  <input
-                    className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={controls.lbfgsMemory}
-                    onChange={(event) =>
-                      controls.setLbfgsMemory(Number(event.target.value))
-                    }
-                  />
-                </label>
-                <label className="flex flex-col gap-1">
-                  L-BFGS tolerance change
-                  <input
-                    className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-                    type="number"
-                    step={0.00000001}
-                    value={controls.lbfgsEpsilon}
-                    onChange={(event) =>
-                      controls.setLbfgsEpsilon(Number(event.target.value))
-                    }
-                  />
-                </label>
-              </>
-            ) : null}
+            <div className="flex flex-col gap-3 rounded-lg border border-white/10 bg-slate-900/70 p-3 md:col-span-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-200">
+                    Model Cache
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    {status.modelCachePackStatuses.length} cached pack
+                    {status.modelCachePackStatuses.length === 1
+                      ? ""
+                      : "s"} · {formatBytes(status.modelCacheBytes)}
+                  </p>
+                </div>
+                <button
+                  className="rounded-lg bg-zinc-300 px-4 py-2 font-semibold text-zinc-950 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
+                  type="button"
+                  onClick={() => void controls.clearModelCache()}
+                  disabled={status.isRunning}
+                >
+                  Clear model cache
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-96 text-left text-sm">
+                  <thead className="text-xs uppercase text-slate-400">
+                    <tr>
+                      <th className="border-b border-white/10 py-2 pr-4">
+                        Pack
+                      </th>
+                      <th className="border-b border-white/10 py-2 pr-4">
+                        Size
+                      </th>
+                      <th className="border-b border-white/10 py-2">Cached</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {status.modelCachePackStatuses.length === 0 ? (
+                      <tr>
+                        <td className="py-3 text-slate-400" colSpan={3}>
+                          No model packs cached yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      status.modelCachePackStatuses.map((pack) => (
+                        <tr key={`${pack.tier}-${pack.updatedAtMs}`}>
+                          <td className="border-b border-white/5 py-2 pr-4 font-medium text-slate-200">
+                            {pack.tier}
+                          </td>
+                          <td className="border-b border-white/5 py-2 pr-4 text-slate-300">
+                            {formatBytes(pack.bytes)}
+                          </td>
+                          <td className="border-b border-white/5 py-2 text-slate-300">
+                            {new Date(pack.updatedAtMs).toLocaleDateString()}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
             <label className="flex items-center gap-2 md:col-span-2">
               <input
                 type="checkbox"
@@ -663,13 +730,6 @@ function App() {
             disabled={!status.isRunning}
           >
             ⏸ Pause
-          </button>
-          <button
-            className="rounded-lg bg-zinc-300 px-4 py-3 font-semibold text-zinc-950 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={() => void controls.clearModelCache()}
-            disabled={status.isRunning}
-          >
-            Clear model cache
           </button>
           <button
             className="rounded-lg bg-sky-400 px-4 py-3 font-semibold text-sky-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-50"

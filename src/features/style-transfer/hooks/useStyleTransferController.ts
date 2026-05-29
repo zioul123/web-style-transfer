@@ -25,6 +25,7 @@ import {
   VGG_PACK_STORAGE_KEY,
   type VggPackName,
 } from "../modelPacks";
+import type { ModelCachePackStatus } from "../modelCache";
 
 const DEFAULT_CONTENT_IMAGE_URL = new URL(
   "../../../../assets/madeira_900x1600.jpeg",
@@ -93,10 +94,7 @@ const createMessageId = (): string =>
 const createOptimizationSessionId = (): string =>
   `style-transfer-session-${createMessageId()}`;
 
-const toResolvedState = <T,>(
-  update: SetStateAction<T>,
-  current: T,
-): T =>
+const toResolvedState = <T>(update: SetStateAction<T>, current: T): T =>
   typeof update === "function"
     ? (update as (previous: T) => T)(current)
     : update;
@@ -218,10 +216,12 @@ export const useStyleTransferController =
     const [contentWeight, setContentWeight] = useState<number>(1);
     const [styleWeight, setStyleWeight] = useState<number>(500000);
     const [learningRate, setLearningRate] = useState<number>(1);
-    const [selectedPack, setSelectedPackState] =
-      useState<VggPackName>(getInitialPackPreference);
-    const [optimizer, setOptimizer] =
-      useState<"sgd" | "adam" | "lbfgs">("lbfgs");
+    const [selectedPack, setSelectedPackState] = useState<VggPackName>(
+      getInitialPackPreference,
+    );
+    const [optimizer, setOptimizer] = useState<"sgd" | "adam" | "lbfgs">(
+      "lbfgs",
+    );
     const [adamBeta1, setAdamBeta1] = useState<number>(0.9);
     const [adamBeta2, setAdamBeta2] = useState<number>(0.999);
     const [adamEpsilon, setAdamEpsilon] = useState<number>(1e-8);
@@ -229,18 +229,19 @@ export const useStyleTransferController =
     const [lbfgsEpsilon, setLbfgsEpsilon] = useState<number>(1e-9);
     const [synchronizePhaseTimings, setSynchronizePhaseTimings] =
       useState<boolean>(false);
-    const [useCachedPipelines, setUseCachedPipelines] =
-      useState<boolean>(true);
+    const [useCachedPipelines, setUseCachedPipelines] = useState<boolean>(true);
     const [usePersistentWeightBuffers, setUsePersistentWeightBuffers] =
       useState<boolean>(true);
     const [useStepBufferPool, setUseStepBufferPool] = useState<boolean>(true);
     const [useVec4Pointwise, setUseVec4Pointwise] = useState<boolean>(true);
     const [usePoolBackwardScatter, setUsePoolBackwardScatter] =
       useState<boolean>(true);
-    const [gramKernel, setGramKernel] =
-      useState<KernelGramKernel>("symmetric-parallel-dot");
-    const [styleBackward, setStyleBackward] =
-      useState<KernelStyleBackward>("fused-from-gram-diff");
+    const [gramKernel, setGramKernel] = useState<KernelGramKernel>(
+      "symmetric-parallel-dot",
+    );
+    const [styleBackward, setStyleBackward] = useState<KernelStyleBackward>(
+      "fused-from-gram-diff",
+    );
     const [convForwardKernel, setConvForwardKernel] =
       useState<KernelConvForward>("scalar");
     const [convBackwardInputKernel, setConvBackwardInputKernel] =
@@ -261,8 +262,9 @@ export const useStyleTransferController =
     const [contentTensor, setContentTensor] = useState<number[] | null>(null);
     const [styleTensor, setStyleTensor] = useState<number[] | null>(null);
     const [inputTensor, setInputTensor] = useState<number[] | null>(null);
-    const [optimizationSessionId, setOptimizationSessionId] =
-      useState<string>(createOptimizationSessionId);
+    const [optimizationSessionId, setOptimizationSessionId] = useState<string>(
+      createOptimizationSessionId,
+    );
     const [runStats, setRunStats] = useState<
       import("../../../types").WorkerRunStats | null
     >(null);
@@ -270,6 +272,9 @@ export const useStyleTransferController =
       "downloading" | "cached" | "ready"
     >("downloading");
     const [modelCacheBytes, setModelCacheBytes] = useState<number>(0);
+    const [modelCachePackStatuses, setModelCachePackStatuses] = useState<
+      ModelCachePackStatus[]
+    >([]);
 
     const workerRef = useRef<Worker | null>(null);
     const contentImageResolution = RESOLUTION_PRESETS[contentResolution];
@@ -289,7 +294,8 @@ export const useStyleTransferController =
       if (usePoolBackwardScatter) flags.usePoolBackwardScatter = true;
       if (gramKernel !== "scalar") flags.gramKernel = gramKernel;
       if (styleBackward !== "two-pass") flags.styleBackward = styleBackward;
-      if (convForwardKernel !== "scalar") flags.convForwardKernel = convForwardKernel;
+      if (convForwardKernel !== "scalar")
+        flags.convForwardKernel = convForwardKernel;
       if (convBackwardInputKernel !== "scalar") {
         flags.convBackwardInputKernel = convBackwardInputKernel;
       }
@@ -315,10 +321,14 @@ export const useStyleTransferController =
       if (usePoolBackwardScatter) enabled.push("pool-scatter");
       if (useVec4Pointwise) enabled.push("vec4-pointwise");
       if (gramKernel !== "scalar") enabled.push(`gram=${gramKernel}`);
-      if (styleBackward !== "two-pass") enabled.push(`styleBackward=${styleBackward}`);
-      if (convForwardKernel !== "scalar") enabled.push(`convFwd=${convForwardKernel}`);
-      if (convBackwardInputKernel !== "scalar") enabled.push(`convBwdIn=${convBackwardInputKernel}`);
-      if (weightStorage !== "fp32") enabled.push(`weightStorage=${weightStorage}`);
+      if (styleBackward !== "two-pass")
+        enabled.push(`styleBackward=${styleBackward}`);
+      if (convForwardKernel !== "scalar")
+        enabled.push(`convFwd=${convForwardKernel}`);
+      if (convBackwardInputKernel !== "scalar")
+        enabled.push(`convBwdIn=${convBackwardInputKernel}`);
+      if (weightStorage !== "fp32")
+        enabled.push(`weightStorage=${weightStorage}`);
       return enabled.length === 0 ? "baseline" : enabled.join(", ");
     }, [
       convBackwardInputKernel,
@@ -360,15 +370,18 @@ export const useStyleTransferController =
         setWorkerStatus(`Loading VGG19 weights pack: ${selectedPack}...`);
         setModelCacheState("downloading");
         try {
-          const nextWeights = await loadVgg19ManifestWeightsForPack(selectedPack);
+          const nextWeights =
+            await loadVgg19ManifestWeightsForPack(selectedPack);
           if (!isCurrent) return;
           setWeights(nextWeights.weights);
           setModelCacheState(nextWeights.state);
           setModelCacheBytes(nextWeights.cacheStatus.bytes);
+          setModelCachePackStatuses(nextWeights.cacheStatus.packStatuses);
           setWorkerStatus(`Loaded VGG19 weights pack: ${selectedPack}.`);
         } catch (error) {
           if (!isCurrent) return;
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           setWorkerStatus(
             `Failed to load VGG19 weights pack '${selectedPack}': ${message}`,
           );
@@ -384,6 +397,7 @@ export const useStyleTransferController =
       void (async (): Promise<void> => {
         const status = await getCachedVggModelPackStatus();
         setModelCacheBytes(status.bytes);
+        setModelCachePackStatuses(status.packStatuses);
       })();
     }, []);
 
@@ -406,7 +420,10 @@ export const useStyleTransferController =
             payload.ok ? payload.message : `Fallback: ${payload.message}`,
           );
         if (payload.type === "error") setWorkerStatus(payload.message);
-        if (payload.type === "clear-style-transfer-session-result" && !payload.ok)
+        if (
+          payload.type === "clear-style-transfer-session-result" &&
+          !payload.ok
+        )
           setWorkerStatus(payload.message);
         if (payload.type === "run-style-transfer-result") {
           if (!payload.ok) {
@@ -639,7 +656,7 @@ export const useStyleTransferController =
       }
     };
 
-    const updateOptimizerConfigWhenPaused = <T,>(
+    const updateOptimizerConfigWhenPaused = <T>(
       update: SetStateAction<T>,
       current: T,
       setter: Dispatch<SetStateAction<T>>,
@@ -659,7 +676,9 @@ export const useStyleTransferController =
       if (contentTensor === null) return;
       rotateOptimizationSession(true);
       setInputTensor(contentTensor);
-      setOutputImage(tensorValuesToDataUrl(contentTensor, contentImageResolution));
+      setOutputImage(
+        tensorValuesToDataUrl(contentTensor, contentImageResolution),
+      );
       resetOptimizerProgress();
     };
 
@@ -675,6 +694,7 @@ export const useStyleTransferController =
     const clearModelCache = async (): Promise<void> => {
       const nextStatus = await clearCachedVggModelPacks();
       setModelCacheBytes(nextStatus.bytes);
+      setModelCachePackStatuses(nextStatus.packStatuses);
       setModelCacheState("ready");
       setWorkerStatus("Model cache cleared.");
     };
@@ -714,11 +734,7 @@ export const useStyleTransferController =
           updateOptimizerConfigWhenPaused(update, adamEpsilon, setAdamEpsilon),
         lbfgsMemory,
         setLbfgsMemory: (update) =>
-          updateOptimizerConfigWhenPaused(
-            update,
-            lbfgsMemory,
-            setLbfgsMemory,
-          ),
+          updateOptimizerConfigWhenPaused(update, lbfgsMemory, setLbfgsMemory),
         lbfgsEpsilon,
         setLbfgsEpsilon: (update) =>
           updateOptimizerConfigWhenPaused(
@@ -815,6 +831,7 @@ export const useStyleTransferController =
         runStats,
         modelCacheState,
         modelCacheBytes,
+        modelCachePackStatuses,
       },
       images: { contentImage, styleImage, outputImage },
       canRun,

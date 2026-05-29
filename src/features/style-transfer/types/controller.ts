@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { WorkerKernelOptimizationFlags } from "../../../types/worker-protocol/pipelines";
 import type { WorkerRunStats } from "../../../types/worker-protocol/pipelines";
+import type { ModelCachePackStatus } from "../modelCache";
 import type { VggPackName } from "../modelPacks";
 
 export type ResolutionPreset =
@@ -85,9 +86,7 @@ export interface StyleTransferControls {
   convForwardKernel: KernelConvForward;
   setConvForwardKernel: Dispatch<SetStateAction<KernelConvForward>>;
   convBackwardInputKernel: KernelConvBackwardInput;
-  setConvBackwardInputKernel: Dispatch<
-    SetStateAction<KernelConvBackwardInput>
-  >;
+  setConvBackwardInputKernel: Dispatch<SetStateAction<KernelConvBackwardInput>>;
   weightStorage: KernelWeightStorage;
   setWeightStorage: Dispatch<SetStateAction<KernelWeightStorage>>;
   kernelConfigSummary: string;
@@ -107,6 +106,7 @@ export interface StyleTransferStatus {
   runStats: WorkerRunStats | null;
   modelCacheState: "downloading" | "cached" | "ready";
   modelCacheBytes: number;
+  modelCachePackStatuses: ModelCachePackStatus[];
 }
 
 export interface StyleTransferImages {
