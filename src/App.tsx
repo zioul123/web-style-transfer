@@ -1,5 +1,5 @@
 import { Canvas, useLoader } from "@react-three/fiber";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { ReactElement } from "react";
 import { TextureLoader } from "three";
 import { useStyleTransferController } from "./features/style-transfer/hooks/useStyleTransferController";
@@ -16,6 +16,7 @@ import {
   VGG_PACK_OPTIONS,
   type VggPackName,
 } from "./features/style-transfer/modelPacks";
+import { assetUrl } from "./shared/assetUrls";
 
 const resolutionOptions: readonly ResolutionPreset[] = [
   "128x128",
@@ -139,7 +140,9 @@ function App() {
   const { controls, status, images, canRun, setIsRunning, onUpload } =
     useStyleTransferController();
   const { selectedPack, setSelectedPack } = controls;
+  const [showOptions, setShowOptions] = useState<boolean>(false);
   const cacheSizeMb = (status.modelCacheBytes / (1024 * 1024)).toFixed(2);
+  const benchmarkUrl = assetUrl("benchmark");
   const canUseAllModelPacks = isLocalhost();
   const modelPackOptions = canUseAllModelPacks
     ? VGG_PACK_OPTIONS
@@ -172,6 +175,24 @@ function App() {
         <p className="md:col-span-2 text-slate-300">{status.gpuInfo}</p>
       </section>
 
+      <section className="flex flex-col gap-3 rounded-xl border border-slate-700 bg-slate-900/60 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <button
+          className="rounded bg-slate-100 px-4 py-2 font-semibold text-slate-950"
+          type="button"
+          onClick={() => setShowOptions((value) => !value)}
+          aria-expanded={showOptions}
+        >
+          {showOptions ? "Hide options" : "Show options"}
+        </button>
+        <a
+          className="text-sm font-medium text-sky-300 underline underline-offset-4 hover:text-sky-200"
+          href={benchmarkUrl}
+        >
+          Benchmark settings for your device
+        </a>
+      </section>
+
+      {showOptions ? (
       <section className="grid gap-4 rounded-xl border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
         <label className="flex flex-col gap-1">
           Content image
@@ -525,6 +546,7 @@ function App() {
           Synchronize phase timings (profiling accuracy)
         </label>
       </section>
+      ) : null}
 
       <section className="flex items-center gap-4">
         <button
