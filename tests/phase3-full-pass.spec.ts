@@ -11,54 +11,15 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
 }) => {
   test.setTimeout(300000);
   await gotoStableApp(page);
-  const artifactReady = await page.evaluate(async () => {
-    const check = async (url: string): Promise<boolean> => {
-      const response = await fetch(url);
-      if (!response.ok) return false;
-      try {
-        JSON.parse(await response.text());
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    return (
-      (await check(
-        "/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json",
-      )) &&
-      (await check(
-        "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
-      ))
-    );
-  });
-
-  test.skip(
-    !artifactReady,
-    "Missing phase3 full-pass fixtures. Run python-reference/export_vgg19_phase3_full_pass.py first.",
-  );
-  if (!artifactReady) return;
 
   const result = await page.evaluate(
     async ({ reluLayers, poolLayers }) => {
-      const loadJson = async <T>(url: string): Promise<T> =>
-        JSON.parse(await (await fetch(url)).text()) as T;
-      const weights = await loadJson<
-        Record<string, number[] | [number, number, number, number]>
-      >("/vgg19-phase3-full-pass/vgg19_conv0_to_conv28_weights.json");
-      const fixture = await loadJson<{
-        inputShape: [number, number, number, number];
-        inputImageValues: number[];
-        contentImageValues: number[];
-        styleImageValues: number[];
-        mean: [number, number, number];
-        std: [number, number, number];
-        styleLayerIndices: number[];
-        contentLayerIndex: number;
-        expectedStyleLossByLayer: Record<string, number>;
-        expectedStyleLossTotal: number;
-        expectedContentLoss: number;
-        expectedTotalLoss: number;
-      }>("/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json");
+      const { loadFullPassArtifacts } =
+        await import("/tests/helpers/fullPassArtifacts.ts");
+      const artifactsResult = await loadFullPassArtifacts();
+      if (!artifactsResult.ok) return artifactsResult;
+      const { fixture, weights, modelSource, lossPrecision } =
+        artifactsResult.artifacts;
 
       const worker = new Worker(
         new URL("/src/styleTransfer.worker.ts", window.location.origin),
@@ -310,12 +271,15 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
         0,
       );
       return {
+        ok: true as const,
         init,
         styleLossByLayer,
         styleTotal,
         contentLoss,
         totalLoss: styleTotal + contentLoss,
         expected: fixture,
+        modelSource,
+        lossPrecision,
       };
     },
     {
@@ -323,6 +287,12 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
       poolLayers: VGG19_POOL_LAYER_INDICES_UP_TO_CONV5_1,
     },
   );
+
+  test.skip(
+    !result.ok && result.reason === "missing-fixtures",
+    result.ok ? "" : result.message,
+  );
+  if (!result.ok) return;
 
   const styleLayerPairs = Object.entries(
     result.expected.expectedStyleLossByLayer,
@@ -344,14 +314,20 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
   for (const [layerName, expectedLoss] of Object.entries(
     result.expected.expectedStyleLossByLayer,
   ))
-    expect(result.styleLossByLayer[layerName]).toBeCloseTo(expectedLoss, 4);
+    expect(result.styleLossByLayer[layerName]).toBeCloseTo(
+      expectedLoss,
+      result.lossPrecision,
+    );
   expect(result.styleTotal).toBeCloseTo(
     result.expected.expectedStyleLossTotal,
-    4,
+    result.lossPrecision,
   );
   expect(result.contentLoss).toBeCloseTo(
     result.expected.expectedContentLoss,
-    4,
+    result.lossPrecision,
   );
-  expect(result.totalLoss).toBeCloseTo(result.expected.expectedTotalLoss, 4);
+  expect(result.totalLoss).toBeCloseTo(
+    result.expected.expectedTotalLoss,
+    result.lossPrecision,
+  );
 });

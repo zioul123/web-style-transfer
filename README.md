@@ -120,24 +120,42 @@ Large generated fixtures and full model packs should not be committed unless the
 
 ## Testing
 
-Run all Playwright tests:
+The default test tiers are intentionally small enough to run in pull requests while still making the existing browser coverage visible:
+
+1. **Install and browser setup** installs locked npm dependencies plus Chromium and its system libraries.
+2. **Production build** runs TypeScript and Vite via `npm run build`.
+3. **Default Playwright suite** runs `npm test`, covering app boot, worker protocol, WebGPU kernel parity, committed fixture parity, and benchmark/optimization smoke paths.
+
+CI runs the same sequence on pull requests and pushes to `main`:
 
 ```bash
+npm ci
+npx playwright install chromium
+npx playwright install-deps chromium
+npm run build
 npm test
 ```
 
-Some tests skip automatically when large generated fixtures or optional full model packs are absent. To enable the full phase-3/full-style-transfer fixture tests, generate fixtures first:
+Use the same commands locally when validating a branch from a clean checkout. For day-to-day work after dependencies and browsers are installed, the most common local commands are:
+
+```bash
+npm run dev
+npm run build
+npm test
+```
+
+Some Playwright specs skip automatically when optional large generated weights or optional full model packs are absent. The default tier uses committed fixtures and model packs: first-pool, phase-4 backprop, LBFGS, the compact phase-3/full-style-transfer fixture, and the committed `int8-per-channel` model pack. Tests that can use either exact legacy fp32 weights or a manifest-backed pack choose the legacy fp32 JSON when it is present, then a local `fp32` pack, and finally the committed `int8-per-channel` pack with looser quantized-weight tolerances.
+
+CI intentionally does **not** generate VGG19 assets in the default pull-request job. Generating all phase-3/full-style-transfer outputs requires Python/PyTorch setup plus the pretrained VGG19 download, which is roughly 500 MB before generated outputs. The large legacy fp32 weights JSON remains uncommitted because it adds roughly 70 MB of rarely edited test data to normal clones; use the committed compact fixture plus `int8-per-channel` pack for PR coverage instead.
+
+To opt into exact legacy-fp32 full-pass tests locally, generate the legacy weights first, then run `npm test` again:
 
 ```bash
 python python-reference/export_vgg19_phase3_full_pass.py
+npm test
 ```
 
-In environments missing Playwright's Chromium system dependencies, install Chromium and dependencies first:
-
-```bash
-npx playwright install chromium
-npx playwright install-deps chromium
-```
+Do not commit generated large legacy weights or model packs unless they were already tracked or a task explicitly asks for them.
 
 Always run the production build before concluding code changes:
 
