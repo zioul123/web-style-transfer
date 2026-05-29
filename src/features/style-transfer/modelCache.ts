@@ -23,9 +23,16 @@ type CachedModelPackRecord = {
   updatedAtMs: number;
 };
 
+export type ModelCachePackStatus = {
+  tier: ModelCacheTier;
+  bytes: number;
+  updatedAtMs: number;
+};
+
 export type ModelCacheStatus = {
   bytes: number;
   packs: number;
+  packStatuses: ModelCachePackStatus[];
 };
 
 const hasIndexedDb = (): boolean => typeof indexedDB !== "undefined";
@@ -45,7 +52,7 @@ const openCacheDb = async (): Promise<IDBDatabase | null> => {
   });
 };
 
-const withStore = async <T,>(
+const withStore = async <T>(
   mode: IDBTransactionMode,
   run: (store: IDBObjectStore) => Promise<T>,
 ): Promise<T | null> => {
@@ -76,11 +83,16 @@ export const readCachedModelPack = async (
   cacheKey: string,
 ): Promise<CachedModelPackRecord | null> => {
   const record = await withStore("readonly", async (store) => {
-    return await new Promise<CachedModelPackRecord | null>((resolve, reject) => {
-      const request = store.get(cacheKey);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve((request.result as CachedModelPackRecord | undefined) ?? null);
-    });
+    return await new Promise<CachedModelPackRecord | null>(
+      (resolve, reject) => {
+        const request = store.get(cacheKey);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () =>
+          resolve(
+            (request.result as CachedModelPackRecord | undefined) ?? null,
+          );
+      },
+    );
   });
   return record;
 };
@@ -115,9 +127,17 @@ export const readModelCacheStatus = async (): Promise<ModelCacheStatus> => {
       request.onsuccess = () => {
         const rows = (request.result as CachedModelPackRecord[]) ?? [];
         const bytes = rows.reduce((acc, row) => acc + row.totalBytes, 0);
-        resolve({ bytes, packs: rows.length });
+        resolve({
+          bytes,
+          packs: rows.length,
+          packStatuses: rows.map((row) => ({
+            tier: row.tier,
+            bytes: row.totalBytes,
+            updatedAtMs: row.updatedAtMs,
+          })),
+        });
       };
     });
   });
-  return result ?? { bytes: 0, packs: 0 };
+  return result ?? { bytes: 0, packs: 0, packStatuses: [] };
 };

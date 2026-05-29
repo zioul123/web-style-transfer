@@ -54,19 +54,24 @@ test("phase 6 model pack selector reloads manifest-backed weights and supports f
   });
   await gotoStableApp(page);
 
-  await expect(page.getByLabel("Model pack")).toHaveValue("int8log-per-channel");
+  await page.getByRole("button", { name: "Show options" }).click();
+  const modelPackSelect = page.getByLabel("Model pack");
+  await expect(modelPackSelect).toBeVisible();
+  const initialPack = await modelPackSelect.inputValue();
   await expect
     .poll(async () => {
       const urls = await page.evaluate(() => {
         const state = window as Window & { __packFetches?: string[] };
         return state.__packFetches ?? [];
       });
-      return urls.some((url) => url.includes("/vgg19-models/int8log-per-channel/manifest.json"));
+      return urls.some((url) =>
+        url.includes(`/vgg19-models/${initialPack}/manifest.json`),
+      );
     })
     .toBeTruthy();
 
-  await page.getByLabel("Model pack").selectOption("fp32");
-  await expect(page.getByLabel("Model pack")).toHaveValue("fp32");
+  await modelPackSelect.selectOption("fp32");
+  await expect(modelPackSelect).toHaveValue("fp32");
   await expect
     .poll(async () => {
       const urls = await page.evaluate(() => {

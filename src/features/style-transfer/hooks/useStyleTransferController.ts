@@ -25,14 +25,39 @@ import {
   VGG_PACK_STORAGE_KEY,
   type VggPackName,
 } from "../modelPacks";
+import type { ModelCachePackStatus } from "../modelCache";
+
+const DEFAULT_CONTENT_IMAGE_URL = new URL(
+  "../../../../assets/madeira_900x1600.jpeg",
+  import.meta.url,
+).href;
+const DEFAULT_STYLE_IMAGE_URL = new URL(
+  "../../../../assets/starry_night_768x970.jpg",
+  import.meta.url,
+).href;
 
 const RESOLUTION_PRESETS: Record<ResolutionPreset, ImageResolution> = {
   "128x128": { width: 128, height: 128 },
-  "128x192": { width: 192, height: 128 },
-  "192x128": { width: 128, height: 192 },
+  "128x160": { width: 128, height: 160 },
+  "128x192": { width: 128, height: 192 },
+  "160x128": { width: 160, height: 128 },
+  "192x128": { width: 192, height: 128 },
   "256x256": { width: 256, height: 256 },
-  "256x384": { width: 384, height: 256 },
+  "256x320": { width: 256, height: 320 },
+  "256x384": { width: 256, height: 384 },
+  "320x256": { width: 320, height: 256 },
+  "384x256": { width: 384, height: 256 },
 };
+
+const AUTO_RESOLUTION_RATIOS = [
+  { ratio: 1, portrait: "128x128", landscape: "128x128" },
+  { ratio: 1.25, portrait: "128x160", landscape: "160x128" },
+  { ratio: 1.5, portrait: "128x192", landscape: "192x128" },
+] as const satisfies readonly {
+  readonly ratio: number;
+  readonly portrait: ResolutionPreset;
+  readonly landscape: ResolutionPreset;
+}[];
 
 const shapeForResolution = (
   resolution: ImageResolution,
@@ -49,16 +74,27 @@ const resolvePresetUpdate = (
 ): ResolutionPreset =>
   typeof update === "function" ? update(current) : update;
 
+const nearestResolutionPresetForImage = (
+  image: HTMLImageElement,
+): ResolutionPreset => {
+  const width = Math.max(1, image.naturalWidth || image.width);
+  const height = Math.max(1, image.naturalHeight || image.height);
+  const aspectRatio = Math.max(width, height) / Math.min(width, height);
+  const closest = AUTO_RESOLUTION_RATIOS.reduce((best, option) =>
+    Math.abs(option.ratio - aspectRatio) < Math.abs(best.ratio - aspectRatio)
+      ? option
+      : best,
+  );
+  return height >= width ? closest.portrait : closest.landscape;
+};
+
 const createMessageId = (): string =>
   `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const createOptimizationSessionId = (): string =>
   `style-transfer-session-${createMessageId()}`;
 
-const toResolvedState = <T,>(
-  update: SetStateAction<T>,
-  current: T,
-): T =>
+const toResolvedState = <T>(update: SetStateAction<T>, current: T): T =>
   typeof update === "function"
     ? (update as (previous: T) => T)(current)
     : update;
@@ -76,6 +112,18 @@ const readFileAsImage = (file: File): Promise<HTMLImageElement> =>
       reject(new Error(`Failed to load ${file.name}`));
     };
     image.src = objectUrl;
+  });
+
+const readUrlAsImage = (url: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = (): void => {
+      resolve(image);
+    };
+    image.onerror = (): void => {
+      reject(new Error(`Failed to load ${url}`));
+    };
+    image.src = url;
   });
 
 const imageToTensorValues = (
@@ -161,17 +209,19 @@ export const useStyleTransferController =
     );
     const [gpuInfo, setGpuInfo] = useState<string>("GPU details pending…");
     const [contentResolution, setContentResolution] =
-      useState<ResolutionPreset>("128x128");
-    const [styleResolution, setStyleResolution] =
       useState<ResolutionPreset>("128x192");
+    const [styleResolution, setStyleResolution] =
+      useState<ResolutionPreset>("128x160");
     const [stepsPerChunk, setStepsPerChunk] = useState<number>(10);
     const [contentWeight, setContentWeight] = useState<number>(1);
     const [styleWeight, setStyleWeight] = useState<number>(500000);
     const [learningRate, setLearningRate] = useState<number>(1);
-    const [selectedPack, setSelectedPackState] =
-      useState<VggPackName>(getInitialPackPreference);
-    const [optimizer, setOptimizer] =
-      useState<"sgd" | "adam" | "lbfgs">("lbfgs");
+    const [selectedPack, setSelectedPackState] = useState<VggPackName>(
+      getInitialPackPreference,
+    );
+    const [optimizer, setOptimizer] = useState<"sgd" | "adam" | "lbfgs">(
+      "lbfgs",
+    );
     const [adamBeta1, setAdamBeta1] = useState<number>(0.9);
     const [adamBeta2, setAdamBeta2] = useState<number>(0.999);
     const [adamEpsilon, setAdamEpsilon] = useState<number>(1e-8);
@@ -179,18 +229,19 @@ export const useStyleTransferController =
     const [lbfgsEpsilon, setLbfgsEpsilon] = useState<number>(1e-9);
     const [synchronizePhaseTimings, setSynchronizePhaseTimings] =
       useState<boolean>(false);
-    const [useCachedPipelines, setUseCachedPipelines] =
-      useState<boolean>(true);
+    const [useCachedPipelines, setUseCachedPipelines] = useState<boolean>(true);
     const [usePersistentWeightBuffers, setUsePersistentWeightBuffers] =
       useState<boolean>(true);
     const [useStepBufferPool, setUseStepBufferPool] = useState<boolean>(true);
     const [useVec4Pointwise, setUseVec4Pointwise] = useState<boolean>(true);
     const [usePoolBackwardScatter, setUsePoolBackwardScatter] =
       useState<boolean>(true);
-    const [gramKernel, setGramKernel] =
-      useState<KernelGramKernel>("symmetric-parallel-dot");
-    const [styleBackward, setStyleBackward] =
-      useState<KernelStyleBackward>("fused-from-gram-diff");
+    const [gramKernel, setGramKernel] = useState<KernelGramKernel>(
+      "symmetric-parallel-dot",
+    );
+    const [styleBackward, setStyleBackward] = useState<KernelStyleBackward>(
+      "fused-from-gram-diff",
+    );
     const [convForwardKernel, setConvForwardKernel] =
       useState<KernelConvForward>("scalar");
     const [convBackwardInputKernel, setConvBackwardInputKernel] =
@@ -211,8 +262,9 @@ export const useStyleTransferController =
     const [contentTensor, setContentTensor] = useState<number[] | null>(null);
     const [styleTensor, setStyleTensor] = useState<number[] | null>(null);
     const [inputTensor, setInputTensor] = useState<number[] | null>(null);
-    const [optimizationSessionId, setOptimizationSessionId] =
-      useState<string>(createOptimizationSessionId);
+    const [optimizationSessionId, setOptimizationSessionId] = useState<string>(
+      createOptimizationSessionId,
+    );
     const [runStats, setRunStats] = useState<
       import("../../../types").WorkerRunStats | null
     >(null);
@@ -220,6 +272,9 @@ export const useStyleTransferController =
       "downloading" | "cached" | "ready"
     >("downloading");
     const [modelCacheBytes, setModelCacheBytes] = useState<number>(0);
+    const [modelCachePackStatuses, setModelCachePackStatuses] = useState<
+      ModelCachePackStatus[]
+    >([]);
 
     const workerRef = useRef<Worker | null>(null);
     const contentImageResolution = RESOLUTION_PRESETS[contentResolution];
@@ -239,7 +294,8 @@ export const useStyleTransferController =
       if (usePoolBackwardScatter) flags.usePoolBackwardScatter = true;
       if (gramKernel !== "scalar") flags.gramKernel = gramKernel;
       if (styleBackward !== "two-pass") flags.styleBackward = styleBackward;
-      if (convForwardKernel !== "scalar") flags.convForwardKernel = convForwardKernel;
+      if (convForwardKernel !== "scalar")
+        flags.convForwardKernel = convForwardKernel;
       if (convBackwardInputKernel !== "scalar") {
         flags.convBackwardInputKernel = convBackwardInputKernel;
       }
@@ -265,10 +321,14 @@ export const useStyleTransferController =
       if (usePoolBackwardScatter) enabled.push("pool-scatter");
       if (useVec4Pointwise) enabled.push("vec4-pointwise");
       if (gramKernel !== "scalar") enabled.push(`gram=${gramKernel}`);
-      if (styleBackward !== "two-pass") enabled.push(`styleBackward=${styleBackward}`);
-      if (convForwardKernel !== "scalar") enabled.push(`convFwd=${convForwardKernel}`);
-      if (convBackwardInputKernel !== "scalar") enabled.push(`convBwdIn=${convBackwardInputKernel}`);
-      if (weightStorage !== "fp32") enabled.push(`weightStorage=${weightStorage}`);
+      if (styleBackward !== "two-pass")
+        enabled.push(`styleBackward=${styleBackward}`);
+      if (convForwardKernel !== "scalar")
+        enabled.push(`convFwd=${convForwardKernel}`);
+      if (convBackwardInputKernel !== "scalar")
+        enabled.push(`convBwdIn=${convBackwardInputKernel}`);
+      if (weightStorage !== "fp32")
+        enabled.push(`weightStorage=${weightStorage}`);
       return enabled.length === 0 ? "baseline" : enabled.join(", ");
     }, [
       convBackwardInputKernel,
@@ -297,21 +357,31 @@ export const useStyleTransferController =
       setOptimizationSessionId(createOptimizationSessionId());
     };
 
+    const resetOptimizerProgress = (): void => {
+      setIterations(0);
+      setLastLoss(null);
+      setRunStats(null);
+      setIsRunning(false);
+    };
+
     useEffect(() => {
       let isCurrent = true;
       const loadWeights = async (): Promise<void> => {
         setWorkerStatus(`Loading VGG19 weights pack: ${selectedPack}...`);
         setModelCacheState("downloading");
         try {
-          const nextWeights = await loadVgg19ManifestWeightsForPack(selectedPack);
+          const nextWeights =
+            await loadVgg19ManifestWeightsForPack(selectedPack);
           if (!isCurrent) return;
           setWeights(nextWeights.weights);
           setModelCacheState(nextWeights.state);
           setModelCacheBytes(nextWeights.cacheStatus.bytes);
+          setModelCachePackStatuses(nextWeights.cacheStatus.packStatuses);
           setWorkerStatus(`Loaded VGG19 weights pack: ${selectedPack}.`);
         } catch (error) {
           if (!isCurrent) return;
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           setWorkerStatus(
             `Failed to load VGG19 weights pack '${selectedPack}': ${message}`,
           );
@@ -327,6 +397,7 @@ export const useStyleTransferController =
       void (async (): Promise<void> => {
         const status = await getCachedVggModelPackStatus();
         setModelCacheBytes(status.bytes);
+        setModelCachePackStatuses(status.packStatuses);
       })();
     }, []);
 
@@ -349,7 +420,10 @@ export const useStyleTransferController =
             payload.ok ? payload.message : `Fallback: ${payload.message}`,
           );
         if (payload.type === "error") setWorkerStatus(payload.message);
-        if (payload.type === "clear-style-transfer-session-result" && !payload.ok)
+        if (
+          payload.type === "clear-style-transfer-session-result" &&
+          !payload.ok
+        )
           setWorkerStatus(payload.message);
         if (payload.type === "run-style-transfer-result") {
           if (!payload.ok) {
@@ -494,10 +568,7 @@ export const useStyleTransferController =
       setInputTensor(tensor);
       setContentImage(tensorValuesToDataUrl(tensor, resolution));
       setOutputImage(tensorValuesToDataUrl(tensor, resolution));
-      setIterations(0);
-      setLastLoss(null);
-      setRunStats(null);
-      setIsRunning(false);
+      resetOptimizerProgress();
     };
 
     const refreshStyleImage = (
@@ -508,11 +579,44 @@ export const useStyleTransferController =
       const tensor = imageToTensorValues(image, resolution);
       setStyleTensor(tensor);
       setStyleImage(tensorValuesToDataUrl(tensor, resolution));
-      setIterations(0);
-      setLastLoss(null);
-      setRunStats(null);
-      setIsRunning(false);
+      if (contentTensor !== null) {
+        setInputTensor(contentTensor);
+        setOutputImage(
+          tensorValuesToDataUrl(contentTensor, contentImageResolution),
+        );
+      }
+      resetOptimizerProgress();
     };
+
+    useEffect(() => {
+      let isCurrent = true;
+      void (async (): Promise<void> => {
+        const [defaultContentImage, defaultStyleImage] = await Promise.all([
+          readUrlAsImage(DEFAULT_CONTENT_IMAGE_URL),
+          readUrlAsImage(DEFAULT_STYLE_IMAGE_URL),
+        ]);
+        if (!isCurrent) return;
+        const nextContentResolution =
+          nearestResolutionPresetForImage(defaultContentImage);
+        const nextStyleResolution =
+          nearestResolutionPresetForImage(defaultStyleImage);
+        setContentSourceImage(defaultContentImage);
+        setStyleSourceImage(defaultStyleImage);
+        setContentResolution(nextContentResolution);
+        setStyleResolution(nextStyleResolution);
+        refreshContentImage(
+          defaultContentImage,
+          RESOLUTION_PRESETS[nextContentResolution],
+        );
+        refreshStyleImage(
+          defaultStyleImage,
+          RESOLUTION_PRESETS[nextStyleResolution],
+        );
+      })();
+      return () => {
+        isCurrent = false;
+      };
+    }, []);
 
     const updateContentResolution: Dispatch<
       SetStateAction<ResolutionPreset>
@@ -540,15 +644,19 @@ export const useStyleTransferController =
       if (file === undefined) return;
       const image = await readFileAsImage(file);
       if (target === "content") {
+        const nextPreset = nearestResolutionPresetForImage(image);
         setContentSourceImage(image);
-        refreshContentImage(image, contentImageResolution);
+        setContentResolution(nextPreset);
+        refreshContentImage(image, RESOLUTION_PRESETS[nextPreset]);
       } else {
+        const nextPreset = nearestResolutionPresetForImage(image);
         setStyleSourceImage(image);
-        refreshStyleImage(image, styleImageResolution);
+        setStyleResolution(nextPreset);
+        refreshStyleImage(image, RESOLUTION_PRESETS[nextPreset]);
       }
     };
 
-    const updateOptimizerConfigWhenPaused = <T,>(
+    const updateOptimizerConfigWhenPaused = <T>(
       update: SetStateAction<T>,
       current: T,
       setter: Dispatch<SetStateAction<T>>,
@@ -561,21 +669,17 @@ export const useStyleTransferController =
 
     const resetOptimizerState = (): void => {
       rotateOptimizationSession(true);
-      setIterations(0);
-      setLastLoss(null);
-      setRunStats(null);
-      setIsRunning(false);
+      resetOptimizerProgress();
     };
 
     const resetOutputImage = (): void => {
       if (contentTensor === null) return;
       rotateOptimizationSession(true);
       setInputTensor(contentTensor);
-      setOutputImage(tensorValuesToDataUrl(contentTensor, contentImageResolution));
-      setIterations(0);
-      setLastLoss(null);
-      setRunStats(null);
-      setIsRunning(false);
+      setOutputImage(
+        tensorValuesToDataUrl(contentTensor, contentImageResolution),
+      );
+      resetOptimizerProgress();
     };
 
     const setSelectedPack: Dispatch<SetStateAction<VggPackName>> = (update) => {
@@ -583,16 +687,14 @@ export const useStyleTransferController =
       if (nextPack === selectedPack) return;
       localStorage.setItem(VGG_PACK_STORAGE_KEY, nextPack);
       rotateOptimizationSession(true);
-      setIterations(0);
-      setLastLoss(null);
-      setRunStats(null);
-      setIsRunning(false);
+      resetOptimizerProgress();
       setSelectedPackState(nextPack);
     };
 
     const clearModelCache = async (): Promise<void> => {
       const nextStatus = await clearCachedVggModelPacks();
       setModelCacheBytes(nextStatus.bytes);
+      setModelCachePackStatuses(nextStatus.packStatuses);
       setModelCacheState("ready");
       setWorkerStatus("Model cache cleared.");
     };
@@ -632,11 +734,7 @@ export const useStyleTransferController =
           updateOptimizerConfigWhenPaused(update, adamEpsilon, setAdamEpsilon),
         lbfgsMemory,
         setLbfgsMemory: (update) =>
-          updateOptimizerConfigWhenPaused(
-            update,
-            lbfgsMemory,
-            setLbfgsMemory,
-          ),
+          updateOptimizerConfigWhenPaused(update, lbfgsMemory, setLbfgsMemory),
         lbfgsEpsilon,
         setLbfgsEpsilon: (update) =>
           updateOptimizerConfigWhenPaused(
@@ -733,6 +831,7 @@ export const useStyleTransferController =
         runStats,
         modelCacheState,
         modelCacheBytes,
+        modelCachePackStatuses,
       },
       images: { contentImage, styleImage, outputImage },
       canRun,

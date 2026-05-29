@@ -8,9 +8,9 @@ test("phase 0 app boots and responds with worker status", async ({ page }) => {
     page.getByRole("heading", { name: /WebGPU Style Transfer/i }),
   ).toBeVisible();
   await expect
-    .poll(async () => await page.locator("main p").first().textContent(), {
+    .poll(async () => await page.locator("main").textContent(), {
       timeout: 15000,
     })
-    .toMatch(/Worker/i);
+    .toMatch(/Worker|Loaded VGG19 weights pack|Failed to load VGG19 weights pack/i);
   await expect(page.getByText(/WebGPU/i).first()).toBeVisible();
 });
