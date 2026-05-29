@@ -26,6 +26,15 @@ import {
   type VggPackName,
 } from "../modelPacks";
 
+const DEFAULT_CONTENT_IMAGE_URL = new URL(
+  "../../../../assets/madeira_900x1600.jpeg",
+  import.meta.url,
+).href;
+const DEFAULT_STYLE_IMAGE_URL = new URL(
+  "../../../../assets/starry_night_768x970.jpg",
+  import.meta.url,
+).href;
+
 const RESOLUTION_PRESETS: Record<ResolutionPreset, ImageResolution> = {
   "128x128": { width: 128, height: 128 },
   "128x192": { width: 192, height: 128 },
@@ -76,6 +85,18 @@ const readFileAsImage = (file: File): Promise<HTMLImageElement> =>
       reject(new Error(`Failed to load ${file.name}`));
     };
     image.src = objectUrl;
+  });
+
+const readUrlAsImage = (url: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = (): void => {
+      resolve(image);
+    };
+    image.onerror = (): void => {
+      reject(new Error(`Failed to load ${url}`));
+    };
+    image.src = url;
   });
 
 const imageToTensorValues = (
@@ -513,6 +534,24 @@ export const useStyleTransferController =
       setRunStats(null);
       setIsRunning(false);
     };
+
+    useEffect(() => {
+      let isCurrent = true;
+      void (async (): Promise<void> => {
+        const [defaultContentImage, defaultStyleImage] = await Promise.all([
+          readUrlAsImage(DEFAULT_CONTENT_IMAGE_URL),
+          readUrlAsImage(DEFAULT_STYLE_IMAGE_URL),
+        ]);
+        if (!isCurrent) return;
+        setContentSourceImage(defaultContentImage);
+        setStyleSourceImage(defaultStyleImage);
+        refreshContentImage(defaultContentImage, contentImageResolution);
+        refreshStyleImage(defaultStyleImage, styleImageResolution);
+      })();
+      return () => {
+        isCurrent = false;
+      };
+    }, []);
 
     const updateContentResolution: Dispatch<
       SetStateAction<ResolutionPreset>
