@@ -5,10 +5,15 @@ import type { VggPackName } from "../modelPacks";
 
 export type ResolutionPreset =
   | "128x128"
+  | "128x160"
   | "128x192"
+  | "160x128"
   | "192x128"
   | "256x256"
-  | "256x384";
+  | "256x320"
+  | "256x384"
+  | "320x256"
+  | "384x256";
 export type ImageResolution = {
   readonly width: number;
   readonly height: number;

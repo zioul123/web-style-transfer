@@ -37,11 +37,26 @@ const DEFAULT_STYLE_IMAGE_URL = new URL(
 
 const RESOLUTION_PRESETS: Record<ResolutionPreset, ImageResolution> = {
   "128x128": { width: 128, height: 128 },
-  "128x192": { width: 192, height: 128 },
-  "192x128": { width: 128, height: 192 },
+  "128x160": { width: 128, height: 160 },
+  "128x192": { width: 128, height: 192 },
+  "160x128": { width: 160, height: 128 },
+  "192x128": { width: 192, height: 128 },
   "256x256": { width: 256, height: 256 },
-  "256x384": { width: 384, height: 256 },
+  "256x320": { width: 256, height: 320 },
+  "256x384": { width: 256, height: 384 },
+  "320x256": { width: 320, height: 256 },
+  "384x256": { width: 384, height: 256 },
 };
+
+const AUTO_RESOLUTION_RATIOS = [
+  { ratio: 1, portrait: "128x128", landscape: "128x128" },
+  { ratio: 1.25, portrait: "128x160", landscape: "160x128" },
+  { ratio: 1.5, portrait: "128x192", landscape: "192x128" },
+] as const satisfies readonly {
+  readonly ratio: number;
+  readonly portrait: ResolutionPreset;
+  readonly landscape: ResolutionPreset;
+}[];
 
 const shapeForResolution = (
   resolution: ImageResolution,
@@ -57,6 +72,20 @@ const resolvePresetUpdate = (
   current: ResolutionPreset,
 ): ResolutionPreset =>
   typeof update === "function" ? update(current) : update;
+
+const nearestResolutionPresetForImage = (
+  image: HTMLImageElement,
+): ResolutionPreset => {
+  const width = Math.max(1, image.naturalWidth || image.width);
+  const height = Math.max(1, image.naturalHeight || image.height);
+  const aspectRatio = Math.max(width, height) / Math.min(width, height);
+  const closest = AUTO_RESOLUTION_RATIOS.reduce((best, option) =>
+    Math.abs(option.ratio - aspectRatio) < Math.abs(best.ratio - aspectRatio)
+      ? option
+      : best,
+  );
+  return height >= width ? closest.portrait : closest.landscape;
+};
 
 const createMessageId = (): string =>
   `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -182,9 +211,9 @@ export const useStyleTransferController =
     );
     const [gpuInfo, setGpuInfo] = useState<string>("GPU details pending…");
     const [contentResolution, setContentResolution] =
-      useState<ResolutionPreset>("128x128");
-    const [styleResolution, setStyleResolution] =
       useState<ResolutionPreset>("128x192");
+    const [styleResolution, setStyleResolution] =
+      useState<ResolutionPreset>("128x160");
     const [stepsPerChunk, setStepsPerChunk] = useState<number>(10);
     const [contentWeight, setContentWeight] = useState<number>(1);
     const [styleWeight, setStyleWeight] = useState<number>(500000);
@@ -316,6 +345,13 @@ export const useStyleTransferController =
     const rotateOptimizationSession = (clearCurrent: boolean): void => {
       if (clearCurrent) clearWorkerSession(optimizationSessionId);
       setOptimizationSessionId(createOptimizationSessionId());
+    };
+
+    const resetOptimizerProgress = (): void => {
+      setIterations(0);
+      setLastLoss(null);
+      setRunStats(null);
+      setIsRunning(false);
     };
 
     useEffect(() => {
@@ -515,10 +551,7 @@ export const useStyleTransferController =
       setInputTensor(tensor);
       setContentImage(tensorValuesToDataUrl(tensor, resolution));
       setOutputImage(tensorValuesToDataUrl(tensor, resolution));
-      setIterations(0);
-      setLastLoss(null);
-      setRunStats(null);
-      setIsRunning(false);
+      resetOptimizerProgress();
     };
 
     const refreshStyleImage = (
@@ -529,10 +562,13 @@ export const useStyleTransferController =
       const tensor = imageToTensorValues(image, resolution);
       setStyleTensor(tensor);
       setStyleImage(tensorValuesToDataUrl(tensor, resolution));
-      setIterations(0);
-      setLastLoss(null);
-      setRunStats(null);
-      setIsRunning(false);
+      if (contentTensor !== null) {
+        setInputTensor(contentTensor);
+        setOutputImage(
+          tensorValuesToDataUrl(contentTensor, contentImageResolution),
+        );
+      }
+      resetOptimizerProgress();
     };
 
     useEffect(() => {
@@ -543,10 +579,22 @@ export const useStyleTransferController =
           readUrlAsImage(DEFAULT_STYLE_IMAGE_URL),
         ]);
         if (!isCurrent) return;
+        const nextContentResolution =
+          nearestResolutionPresetForImage(defaultContentImage);
+        const nextStyleResolution =
+          nearestResolutionPresetForImage(defaultStyleImage);
         setContentSourceImage(defaultContentImage);
         setStyleSourceImage(defaultStyleImage);
-        refreshContentImage(defaultContentImage, contentImageResolution);
-        refreshStyleImage(defaultStyleImage, styleImageResolution);
+        setContentResolution(nextContentResolution);
+        setStyleResolution(nextStyleResolution);
+        refreshContentImage(
+          defaultContentImage,
+          RESOLUTION_PRESETS[nextContentResolution],
+        );
+        refreshStyleImage(
+          defaultStyleImage,
+          RESOLUTION_PRESETS[nextStyleResolution],
+        );
       })();
       return () => {
         isCurrent = false;
@@ -579,11 +627,15 @@ export const useStyleTransferController =
       if (file === undefined) return;
       const image = await readFileAsImage(file);
       if (target === "content") {
+        const nextPreset = nearestResolutionPresetForImage(image);
         setContentSourceImage(image);
-        refreshContentImage(image, contentImageResolution);
+        setContentResolution(nextPreset);
+        refreshContentImage(image, RESOLUTION_PRESETS[nextPreset]);
       } else {
+        const nextPreset = nearestResolutionPresetForImage(image);
         setStyleSourceImage(image);
-        refreshStyleImage(image, styleImageResolution);
+        setStyleResolution(nextPreset);
+        refreshStyleImage(image, RESOLUTION_PRESETS[nextPreset]);
       }
     };
 
@@ -600,10 +652,7 @@ export const useStyleTransferController =
 
     const resetOptimizerState = (): void => {
       rotateOptimizationSession(true);
-      setIterations(0);
-      setLastLoss(null);
-      setRunStats(null);
-      setIsRunning(false);
+      resetOptimizerProgress();
     };
 
     const resetOutputImage = (): void => {
@@ -611,10 +660,7 @@ export const useStyleTransferController =
       rotateOptimizationSession(true);
       setInputTensor(contentTensor);
       setOutputImage(tensorValuesToDataUrl(contentTensor, contentImageResolution));
-      setIterations(0);
-      setLastLoss(null);
-      setRunStats(null);
-      setIsRunning(false);
+      resetOptimizerProgress();
     };
 
     const setSelectedPack: Dispatch<SetStateAction<VggPackName>> = (update) => {
@@ -622,10 +668,7 @@ export const useStyleTransferController =
       if (nextPack === selectedPack) return;
       localStorage.setItem(VGG_PACK_STORAGE_KEY, nextPack);
       rotateOptimizationSession(true);
-      setIterations(0);
-      setLastLoss(null);
-      setRunStats(null);
-      setIsRunning(false);
+      resetOptimizerProgress();
       setSelectedPackState(nextPack);
     };
 
