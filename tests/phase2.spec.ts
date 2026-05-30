@@ -1,6 +1,12 @@
-import { expect, test } from "@playwright/test";
-import type { WorkerRequest, WorkerResponse } from "../src/types";
+import { test } from "@playwright/test";
+import type { WorkerResponse } from "../src/types";
 import { gotoStableApp } from "./helpers/appPage";
+import { expectTensorCloseTo } from "./helpers/tensorAssertions";
+import {
+  createStyleTransferWorkerClient,
+  expectWebGpuInitOk,
+  expectWorkerTensorVectorResponse,
+} from "./helpers/workerClient";
 
 const inputShape = [1, 2, 4, 4] as const;
 const inputValues = [
@@ -53,96 +59,52 @@ test("phase 2 conv/relu/pool/normalize parity against pytorch references", async
   page,
 }) => {
   await gotoStableApp(page);
-  const result = await page.evaluate(
-    async ({
-      inputShapeArg,
-      inputValuesArg,
-      weightShapeArg,
-      weightValuesArg,
-      biasArg,
-      convExpectedArg,
-      reluExpectedArg,
-    }) => {
-      const worker = new Worker(
-        new URL("/src/styleTransfer.worker.ts", window.location.origin),
-        { type: "module" },
-      );
-      const ask = (payload: WorkerRequest): Promise<WorkerResponse> =>
-        new Promise((resolve) => {
-          const handler = (event: MessageEvent<WorkerResponse>): void => {
-            if (event.data.id === payload.id) {
-              worker.removeEventListener("message", handler);
-              resolve(event.data);
-            }
-          };
-          worker.addEventListener("message", handler);
-          worker.postMessage(payload);
-        });
-      const init = await ask({ type: "init-webgpu", id: "phase2-init" });
-      const conv = await ask({
-        type: "tensor-op",
-        id: "phase2-conv",
-        op: "conv2d-forward",
-        input: { shape: inputShapeArg, values: inputValuesArg },
-        weight: { shape: weightShapeArg, values: weightValuesArg },
-        bias: biasArg,
-      });
-      const relu = await ask({
-        type: "tensor-op",
-        id: "phase2-relu",
-        op: "relu-forward",
-        input: { shape: [1, 2, 4, 4], values: convExpectedArg },
-      });
-      const pool = await ask({
-        type: "tensor-op",
-        id: "phase2-pool",
-        op: "maxpool2d-forward",
-        input: { shape: [1, 2, 4, 4], values: reluExpectedArg },
-      });
-      const norm = await ask({
-        type: "tensor-op",
-        id: "phase2-norm",
-        op: "normalize-forward",
-        input: { shape: inputShapeArg, values: inputValuesArg },
-        mean: [0.485, 0.456],
-        std: [0.229, 0.224],
-      });
-      worker.terminate();
-      return { init, conv, relu, pool, norm };
-    },
-    {
-      inputShapeArg: inputShape,
-      inputValuesArg: inputValues,
-      weightShapeArg: weightShape,
-      weightValuesArg: weightValues,
-      biasArg: bias,
-      convExpectedArg: convExpected,
-      reluExpectedArg: reluExpected,
-    },
-  );
+  const workerClient = await createStyleTransferWorkerClient(page);
 
-  expect(result.init.type).toBe("webgpu-init-result");
-  if (result.init.type !== "webgpu-init-result")
-    throw new Error("Expected webgpu-init-result.");
-  expect(result.init.ok).toBeTruthy();
+  try {
+    const init = await workerClient.initWebGpu();
+    const conv = await workerClient.ask({
+      type: "tensor-op",
+      id: "phase2-conv",
+      op: "conv2d-forward",
+      input: { shape: inputShape, values: inputValues },
+      weight: { shape: weightShape, values: weightValues },
+      bias,
+    });
+    const relu = await workerClient.ask({
+      type: "tensor-op",
+      id: "phase2-relu",
+      op: "relu-forward",
+      input: { shape: [1, 2, 4, 4], values: convExpected },
+    });
+    const pool = await workerClient.ask({
+      type: "tensor-op",
+      id: "phase2-pool",
+      op: "maxpool2d-forward",
+      input: { shape: [1, 2, 4, 4], values: reluExpected },
+    });
+    const norm = await workerClient.ask({
+      type: "tensor-op",
+      id: "phase2-norm",
+      op: "normalize-forward",
+      input: { shape: inputShape, values: inputValues },
+      mean: [0.485, 0.456],
+      std: [0.229, 0.224],
+    });
 
-  const checks: Array<[WorkerResponse, number[]]> = [
-    [result.conv, convExpected],
-    [result.relu, reluExpected],
-    [result.pool, poolExpected],
-    [result.norm, normExpected],
-  ];
-  for (const [response, expectedValues] of checks) {
-    expect(response.type).toBe("tensor-op-result");
-    if (
-      response.type !== "tensor-op-result" ||
-      !response.ok ||
-      !("values" in response)
-    )
-      throw new Error("Expected tensor-op vector response.");
-    expect(response.values.length).toBe(expectedValues.length);
-    for (let i = 0; i < expectedValues.length; i += 1) {
-      expect(response.values[i]).toBeCloseTo(expectedValues[i], 5);
+    expectWebGpuInitOk(init);
+
+    const checks: Array<[WorkerResponse, number[]]> = [
+      [conv, convExpected],
+      [relu, reluExpected],
+      [pool, poolExpected],
+      [norm, normExpected],
+    ];
+    for (const [response, expectedValues] of checks) {
+      const vectorResponse = expectWorkerTensorVectorResponse(response);
+      expectTensorCloseTo(vectorResponse.values, expectedValues, 5);
     }
+  } finally {
+    await workerClient.dispose();
   }
 });
