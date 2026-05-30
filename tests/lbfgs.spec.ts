@@ -26,16 +26,16 @@ test("input LBFGS matches PyTorch max_iter=1 fixture trajectories", async ({
 }) => {
   await gotoStableApp(page);
   const result = await page.evaluate(async () => {
-    const fixtureResponse = await fetch("/lbfgs/lbfgs_fixture.json");
-    if (!fixtureResponse.ok)
+    const { fetchJsonOrNull } = await import("/tests/helpers/fixtures.ts");
+    const fixture = await fetchJsonOrNull<LbfgsFixture>(
+      "/lbfgs/lbfgs_fixture.json",
+    );
+    if (fixture === null)
       return { ok: false as const, reason: "missing-fixture" as const };
-    const fixture = (await fixtureResponse.json()) as LbfgsFixture;
-    const { createInputOptimizer } = await import(
-      "/src/ml/worker/pipelines/optimization/input-optimizer/createInputOptimizer.ts"
-    );
-    const { createCpuVectorOps } = await import(
-      "/src/ml/worker/pipelines/optimization/input-optimizer/cpuVectorOps.ts"
-    );
+    const { createInputOptimizer } =
+      await import("/src/ml/worker/pipelines/optimization/input-optimizer/createInputOptimizer.ts");
+    const { createCpuVectorOps } =
+      await import("/src/ml/worker/pipelines/optimization/input-optimizer/cpuVectorOps.ts");
     const multiplyMatrix = (
       matrix: number[][],
       values: Float32Array,
@@ -71,7 +71,10 @@ test("input LBFGS matches PyTorch max_iter=1 fixture trajectories", async ({
         const grad = multiplyMatrix(testCase.matrix, input, testCase.target);
         input = await optimizer.step(input, grad, expected.step);
         for (let i = 0; i < input.length; i += 1) {
-          maxDiff = Math.max(maxDiff, Math.abs(input[i] - expected.valuesAfter[i]));
+          maxDiff = Math.max(
+            maxDiff,
+            Math.abs(input[i] - expected.valuesAfter[i]),
+          );
         }
       }
       optimizer.dispose();

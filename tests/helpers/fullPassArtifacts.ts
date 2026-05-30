@@ -3,6 +3,7 @@ import {
   type Vgg19WeightsManifest,
   type Vgg19WeightsRecord,
 } from "../../src/ml/worker/models/vgg19/weights";
+import { fetchJsonOrNull } from "./fixtures";
 
 export type Phase3FullPassFixture = {
   inputShape: [number, number, number, number];
@@ -47,17 +48,6 @@ export type FullPassArtifactsResult =
 const fullPassBaseUrl = "/vgg19-phase3-full-pass";
 const modelBaseUrl = "/vgg19-models";
 
-const loadJson = async <T>(url: string): Promise<T | null> => {
-  const response = await fetch(url);
-  if (!response.ok) return null;
-  const text = await response.text();
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    return null;
-  }
-};
-
 const layerCacheToWeightsRecord = (
   layerCache: Awaited<ReturnType<typeof parseVgg19ManifestBackedLayerCache>>,
 ): Vgg19WeightsRecord => {
@@ -78,14 +68,14 @@ const layerCacheToWeightsRecord = (
 };
 
 const loadLegacyWeights = async (): Promise<Vgg19WeightsRecord | null> =>
-  loadJson<Vgg19WeightsRecord>(
+  fetchJsonOrNull<Vgg19WeightsRecord>(
     `${fullPassBaseUrl}/vgg19_conv0_to_conv28_weights.json`,
   );
 
 const loadManifestWeights = async (
   pack: "fp32" | "int8-per-channel",
 ): Promise<Vgg19WeightsRecord | null> => {
-  const manifest = await loadJson<Vgg19WeightsManifest>(
+  const manifest = await fetchJsonOrNull<Vgg19WeightsManifest>(
     `${modelBaseUrl}/${pack}/manifest.json`,
   );
   if (manifest === null) return null;
@@ -156,7 +146,7 @@ const tolerancesFor = (
 
 export const loadFullPassArtifacts =
   async (): Promise<FullPassArtifactsResult> => {
-    const fixture = await loadJson<Phase3FullPassFixture>(
+    const fixture = await fetchJsonOrNull<Phase3FullPassFixture>(
       `${fullPassBaseUrl}/vgg19_phase3_full_pass_fixture.json`,
     );
     if (fixture === null) {

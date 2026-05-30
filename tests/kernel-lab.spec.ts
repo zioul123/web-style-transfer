@@ -12,41 +12,25 @@ test("kernel lab smoke runs baseline and optimized storage rows", async ({
   test.setTimeout(300000);
   await gotoStableBenchmark(page);
   const availablePack = await page.evaluate(async () => {
-    const isRecord = (value: unknown): value is Record<string, unknown> =>
-      typeof value === "object" && value !== null;
-    const isShard = (value: unknown): value is { name: string } =>
-      isRecord(value) && typeof value.name === "string";
-    const isManifest = (
-      value: unknown,
-    ): value is { shards: Array<{ name: string }> } =>
-      isRecord(value) &&
-      Array.isArray(value.shards) &&
-      value.shards.every(isShard);
-    const loadJson = async (url: string): Promise<unknown | null> => {
-      const response = await fetch(url);
-      if (!response.ok) return null;
-      const text = await response.text();
-      try {
-        return JSON.parse(text) as unknown;
-      } catch {
-        return null;
-      }
-    };
-    const hasPack = async (pack: string): Promise<boolean> => {
-      const manifest = await loadJson(`/vgg19-models/${pack}/manifest.json`);
-      if (!isManifest(manifest)) return false;
-      const firstShard = manifest.shards[0];
-      if (firstShard === undefined) return false;
-      const shard = await fetch(`/vgg19-models/${pack}/${firstShard.name}`);
-      return shard.ok;
-    };
-
-    const fixture = await loadJson(
+    const { checkModelPackAvailability, fetchJsonOrNull } =
+      await import("/tests/helpers/fixtures.ts");
+    const fixture = await fetchJsonOrNull<unknown>(
       "/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json",
     );
     if (fixture === null) return null;
-    if (await hasPack("fp32")) return "fp32";
-    if (await hasPack("int8-per-channel")) return "int8-per-channel";
+
+    const fp32Availability = await checkModelPackAvailability(
+      "/vgg19-models",
+      "fp32",
+    );
+    if (fp32Availability.ok) return "fp32";
+
+    const int8Availability = await checkModelPackAvailability(
+      "/vgg19-models",
+      "int8-per-channel",
+    );
+    if (int8Availability.ok) return "int8-per-channel";
+
     return null;
   });
   test.skip(

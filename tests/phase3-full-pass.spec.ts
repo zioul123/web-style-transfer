@@ -1,5 +1,4 @@
 import { expect, test } from "@playwright/test";
-import type { WorkerRequest, WorkerResponse } from "../src/types";
 import {
   VGG19_POOL_LAYER_INDICES_UP_TO_CONV5_1,
   VGG19_RELU_LAYER_INDICES_UP_TO_CONV5_1,
@@ -16,48 +15,20 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
     async ({ reluLayers, poolLayers }) => {
       const { loadFullPassArtifacts } =
         await import("/tests/helpers/fullPassArtifacts.ts");
+      const {
+        createBrowserStyleTransferWorkerClient,
+        getTensorScalar,
+        getTensorValues,
+      } = await import("/tests/helpers/browserWorkerClient.ts");
       const artifactsResult = await loadFullPassArtifacts();
       if (!artifactsResult.ok) return artifactsResult;
       const { fixture, weights, modelSource, lossPrecision } =
         artifactsResult.artifacts;
 
-      const worker = new Worker(
-        new URL("/src/styleTransfer.worker.ts", window.location.origin),
-        { type: "module" },
-      );
-      const ask = (payload: WorkerRequest): Promise<WorkerResponse> =>
-        new Promise((resolve) => {
-          const handler = (event: MessageEvent<WorkerResponse>): void => {
-            if (event.data.id === payload.id) {
-              worker.removeEventListener("message", handler);
-              resolve(event.data);
-            }
-          };
-          worker.addEventListener("message", handler);
-          worker.postMessage(payload);
-        });
+      const workerClient = createBrowserStyleTransferWorkerClient();
 
-      const getValues = (response: WorkerResponse): number[] => {
-        if (
-          response.type !== "tensor-op-result" ||
-          !response.ok ||
-          !("values" in response)
-        )
-          throw new Error("Expected tensor values response");
-        return response.values;
-      };
-      const getScalar = (response: WorkerResponse): number => {
-        if (
-          response.type !== "tensor-op-result" ||
-          !response.ok ||
-          !("scalar" in response)
-        )
-          throw new Error("Expected scalar response");
-        return response.scalar;
-      };
-
-      const init = await ask({ type: "init-webgpu", id: "phase3-full-init" });
-      const normalizedInput = await ask({
+      const init = await workerClient.initWebGpu("phase3-full-init");
+      const normalizedInput = await workerClient.ask({
         type: "tensor-op",
         id: "phase3-full-norm-input",
         op: "normalize-forward",
@@ -65,7 +36,7 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
         mean: fixture.mean,
         std: fixture.std,
       });
-      const normalizedContent = await ask({
+      const normalizedContent = await workerClient.ask({
         type: "tensor-op",
         id: "phase3-full-norm-content",
         op: "normalize-forward",
@@ -76,7 +47,7 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
         mean: fixture.mean,
         std: fixture.std,
       });
-      const normalizedStyle = await ask({
+      const normalizedStyle = await workerClient.ask({
         type: "tensor-op",
         id: "phase3-full-norm-style",
         op: "normalize-forward",
@@ -91,9 +62,9 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
         fixture.inputShape;
       let currentStyleShape: [number, number, number, number] =
         fixture.inputShape;
-      let currentContentValues: number[] = getValues(normalizedContent);
-      let currentInputValues: number[] = getValues(normalizedInput);
-      let currentStyleValues: number[] = getValues(normalizedStyle);
+      let currentContentValues: number[] = getTensorValues(normalizedContent);
+      let currentInputValues: number[] = getTensorValues(normalizedInput);
+      let currentStyleValues: number[] = getTensorValues(normalizedStyle);
       const styleLossByLayer: Record<string, number> = {};
       let contentLoss = 0;
 
@@ -107,7 +78,7 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
           Array.isArray(biasValues) &&
           Array.isArray(weightShape)
         ) {
-          const convContent = await ask({
+          const convContent = await workerClient.ask({
             type: "tensor-op",
             id: `conv-c-${layerIndex}`,
             op: "conv2d-forward",
@@ -118,7 +89,7 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
             },
             bias: biasValues,
           });
-          const convInput = await ask({
+          const convInput = await workerClient.ask({
             type: "tensor-op",
             id: `conv-i-${layerIndex}`,
             op: "conv2d-forward",
@@ -129,7 +100,7 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
             },
             bias: biasValues,
           });
-          const convStyle = await ask({
+          const convStyle = await workerClient.ask({
             type: "tensor-op",
             id: `conv-s-${layerIndex}`,
             op: "conv2d-forward",
@@ -140,9 +111,9 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
             },
             bias: biasValues,
           });
-          currentContentValues = getValues(convContent);
-          currentInputValues = getValues(convInput);
-          currentStyleValues = getValues(convStyle);
+          currentContentValues = getTensorValues(convContent);
+          currentInputValues = getTensorValues(convInput);
+          currentStyleValues = getTensorValues(convStyle);
           currentContentShape = [
             1,
             weightShape[0],
@@ -163,8 +134,8 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
           ];
         }
         if (reluLayers.includes(layerIndex)) {
-          currentContentValues = getValues(
-            await ask({
+          currentContentValues = getTensorValues(
+            await workerClient.ask({
               type: "tensor-op",
               id: `relu-c-${layerIndex}`,
               op: "relu-forward",
@@ -174,16 +145,16 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
               },
             }),
           );
-          currentInputValues = getValues(
-            await ask({
+          currentInputValues = getTensorValues(
+            await workerClient.ask({
               type: "tensor-op",
               id: `relu-i-${layerIndex}`,
               op: "relu-forward",
               input: { shape: currentInputShape, values: currentInputValues },
             }),
           );
-          currentStyleValues = getValues(
-            await ask({
+          currentStyleValues = getTensorValues(
+            await workerClient.ask({
               type: "tensor-op",
               id: `relu-s-${layerIndex}`,
               op: "relu-forward",
@@ -192,8 +163,8 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
           );
         }
         if (layerIndex === fixture.contentLayerIndex) {
-          contentLoss = getScalar(
-            await ask({
+          contentLoss = getTensorScalar(
+            await workerClient.ask({
               type: "tensor-op",
               id: `content-${layerIndex}`,
               op: "content-loss",
@@ -206,8 +177,8 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
           );
         }
         if (fixture.styleLayerIndices.includes(layerIndex)) {
-          styleLossByLayer[`relu${layerIndex}`] = getScalar(
-            await ask({
+          styleLossByLayer[`relu${layerIndex}`] = getTensorScalar(
+            await workerClient.ask({
               type: "tensor-op",
               id: `style-${layerIndex}`,
               op: "style-loss",
@@ -217,8 +188,8 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
           );
         }
         if (poolLayers.includes(layerIndex)) {
-          currentContentValues = getValues(
-            await ask({
+          currentContentValues = getTensorValues(
+            await workerClient.ask({
               type: "tensor-op",
               id: `pool-c-${layerIndex}`,
               op: "maxpool2d-forward",
@@ -228,16 +199,16 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
               },
             }),
           );
-          currentInputValues = getValues(
-            await ask({
+          currentInputValues = getTensorValues(
+            await workerClient.ask({
               type: "tensor-op",
               id: `pool-i-${layerIndex}`,
               op: "maxpool2d-forward",
               input: { shape: currentInputShape, values: currentInputValues },
             }),
           );
-          currentStyleValues = getValues(
-            await ask({
+          currentStyleValues = getTensorValues(
+            await workerClient.ask({
               type: "tensor-op",
               id: `pool-s-${layerIndex}`,
               op: "maxpool2d-forward",
@@ -265,7 +236,7 @@ test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content los
         }
       }
 
-      worker.terminate();
+      workerClient.dispose();
       const styleTotal = Object.values(styleLossByLayer).reduce(
         (sum, value) => sum + value,
         0,

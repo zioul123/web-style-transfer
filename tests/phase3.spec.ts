@@ -1,6 +1,15 @@
 import { expect, test } from "@playwright/test";
-import type { WorkerRequest, WorkerResponse } from "../src/types";
 import { gotoStableApp } from "./helpers/appPage";
+import {
+  expectScalarCloseTo,
+  expectTensorCloseTo,
+} from "./helpers/tensorAssertions";
+import {
+  createStyleTransferWorkerClient,
+  expectWebGpuInitOk,
+  expectWorkerTensorScalarResponse,
+  expectWorkerTensorVectorResponse,
+} from "./helpers/workerClient";
 
 type Phase3Fixture = {
   inputShape: [number, number, number, number];
@@ -12,160 +21,99 @@ type Phase3Fixture = {
   expectedStyleLoss: number;
 };
 
+const fixture: Phase3Fixture = {
+  inputShape: [1, 2, 2, 2],
+  inputValues: [1, 2, 3, 4, 5, 6, 7, 8],
+  targetShape: [1, 2, 2, 2],
+  targetValues: [1.5, 1, 2.5, 3, 4, 5, 6, 7],
+  expectedGram: [3.75, 8.75, 8.75, 21.75],
+  expectedContentLoss: 0.8125,
+  expectedStyleLoss: 13.6494140625,
+};
+
 test("phase 3 reshape/gram/content/style-loss parity", async ({ page }) => {
   await gotoStableApp(page);
-  const fixture: Phase3Fixture = {
-    inputShape: [1, 2, 2, 2],
-    inputValues: [1, 2, 3, 4, 5, 6, 7, 8],
-    targetShape: [1, 2, 2, 2],
-    targetValues: [1.5, 1, 2.5, 3, 4, 5, 6, 7],
-    expectedGram: [3.75, 8.75, 8.75, 21.75],
-    expectedContentLoss: 0.8125,
-    expectedStyleLoss: 13.6494140625,
-  };
+  const workerClient = await createStyleTransferWorkerClient(page);
 
-  const result = await page.evaluate(async (fixtureArg) => {
-    const worker = new Worker(
-      new URL("/src/styleTransfer.worker.ts", window.location.origin),
-      { type: "module" },
-    );
-    const ask = (payload: WorkerRequest): Promise<WorkerResponse> =>
-      new Promise((resolve) => {
-        const handler = (event: MessageEvent<WorkerResponse>): void => {
-          if (event.data.id === payload.id) {
-            worker.removeEventListener("message", handler);
-            resolve(event.data);
-          }
-        };
-        worker.addEventListener("message", handler);
-        worker.postMessage(payload);
-      });
-
-    const init = await ask({ type: "init-webgpu", id: "phase3-init" });
-    const reshape = await ask({
+  try {
+    const init = await workerClient.initWebGpu();
+    const reshape = await workerClient.ask({
       type: "tensor-op",
       id: "phase3-reshape",
       op: "reshape-chw-flatten",
-      input: { shape: fixtureArg.inputShape, values: fixtureArg.inputValues },
+      input: { shape: fixture.inputShape, values: fixture.inputValues },
     });
-    const gram = await ask({
+    const gram = await workerClient.ask({
       type: "tensor-op",
       id: "phase3-gram",
       op: "gram-matrix",
-      input: { shape: fixtureArg.inputShape, values: fixtureArg.inputValues },
+      input: { shape: fixture.inputShape, values: fixture.inputValues },
     });
-    const contentLoss = await ask({
+    const contentLoss = await workerClient.ask({
       type: "tensor-op",
       id: "phase3-content-loss",
       op: "content-loss",
-      input: { shape: fixtureArg.inputShape, values: fixtureArg.inputValues },
-      target: {
-        shape: fixtureArg.targetShape,
-        values: fixtureArg.targetValues,
-      },
+      input: { shape: fixture.inputShape, values: fixture.inputValues },
+      target: { shape: fixture.targetShape, values: fixture.targetValues },
     });
-    const styleLoss = await ask({
+    const styleLoss = await workerClient.ask({
       type: "tensor-op",
       id: "phase3-style-loss",
       op: "style-loss",
-      input: { shape: fixtureArg.inputShape, values: fixtureArg.inputValues },
-      target: {
-        shape: fixtureArg.targetShape,
-        values: fixtureArg.targetValues,
-      },
+      input: { shape: fixture.inputShape, values: fixture.inputValues },
+      target: { shape: fixture.targetShape, values: fixture.targetValues },
     });
-    const weightedContentLoss = await ask({
+    const weightedContentLoss = await workerClient.ask({
       type: "tensor-op",
       id: "phase3-content-loss-weighted",
       op: "content-loss",
-      input: { shape: fixtureArg.inputShape, values: fixtureArg.inputValues },
-      target: {
-        shape: fixtureArg.targetShape,
-        values: fixtureArg.targetValues,
-      },
+      input: { shape: fixture.inputShape, values: fixture.inputValues },
+      target: { shape: fixture.targetShape, values: fixture.targetValues },
       contentWeight: 3.0,
     });
-    const weightedStyleLoss = await ask({
+    const weightedStyleLoss = await workerClient.ask({
       type: "tensor-op",
       id: "phase3-style-loss-weighted",
       op: "style-loss",
-      input: { shape: fixtureArg.inputShape, values: fixtureArg.inputValues },
-      target: {
-        shape: fixtureArg.targetShape,
-        values: fixtureArg.targetValues,
-      },
+      input: { shape: fixture.inputShape, values: fixture.inputValues },
+      target: { shape: fixture.targetShape, values: fixture.targetValues },
       styleWeight: 5.0,
     });
-    worker.terminate();
-    return {
-      init,
-      reshape,
-      gram,
-      contentLoss,
-      styleLoss,
-      weightedContentLoss,
-      weightedStyleLoss,
-    };
-  }, fixture);
 
-  expect(result.init.type).toBe("webgpu-init-result");
-  if (result.init.type !== "webgpu-init-result")
-    throw new Error("Expected webgpu-init-result");
-  expect(result.init.ok).toBeTruthy();
+    expectWebGpuInitOk(init);
 
-  if (
-    result.reshape.type !== "tensor-op-result" ||
-    !result.reshape.ok ||
-    !("values" in result.reshape)
-  )
-    throw new Error("reshape failed");
-  expect(result.reshape.values).toEqual(fixture.inputValues);
+    const reshapeResponse = expectWorkerTensorVectorResponse(reshape);
+    expect(reshapeResponse.values).toEqual(fixture.inputValues);
 
-  if (
-    result.gram.type !== "tensor-op-result" ||
-    !result.gram.ok ||
-    !("values" in result.gram)
-  )
-    throw new Error("gram failed");
-  fixture.expectedGram.forEach((value, index) =>
-    expect(result.gram.values[index]).toBeCloseTo(value, 5),
-  );
+    const gramResponse = expectWorkerTensorVectorResponse(gram);
+    expectTensorCloseTo(gramResponse.values, fixture.expectedGram, 5);
 
-  if (
-    result.contentLoss.type !== "tensor-op-result" ||
-    !result.contentLoss.ok ||
-    !("scalar" in result.contentLoss)
-  )
-    throw new Error("content loss failed");
-  expect(result.contentLoss.scalar).toBeCloseTo(fixture.expectedContentLoss, 6);
+    const contentLossResponse = expectWorkerTensorScalarResponse(contentLoss);
+    expectScalarCloseTo(
+      contentLossResponse.scalar,
+      fixture.expectedContentLoss,
+      6,
+    );
 
-  if (
-    result.styleLoss.type !== "tensor-op-result" ||
-    !result.styleLoss.ok ||
-    !("scalar" in result.styleLoss)
-  )
-    throw new Error("style loss failed");
-  expect(result.styleLoss.scalar).toBeCloseTo(fixture.expectedStyleLoss, 6);
+    const styleLossResponse = expectWorkerTensorScalarResponse(styleLoss);
+    expectScalarCloseTo(styleLossResponse.scalar, fixture.expectedStyleLoss, 6);
 
-  if (
-    result.weightedContentLoss.type !== "tensor-op-result" ||
-    !result.weightedContentLoss.ok ||
-    !("scalar" in result.weightedContentLoss)
-  )
-    throw new Error("weighted content loss failed");
-  expect(result.weightedContentLoss.scalar).toBeCloseTo(
-    fixture.expectedContentLoss * 3.0,
-    6,
-  );
+    const weightedContentLossResponse =
+      expectWorkerTensorScalarResponse(weightedContentLoss);
+    expectScalarCloseTo(
+      weightedContentLossResponse.scalar,
+      fixture.expectedContentLoss * 3.0,
+      6,
+    );
 
-  if (
-    result.weightedStyleLoss.type !== "tensor-op-result" ||
-    !result.weightedStyleLoss.ok ||
-    !("scalar" in result.weightedStyleLoss)
-  )
-    throw new Error("weighted style loss failed");
-  expect(result.weightedStyleLoss.scalar).toBeCloseTo(
-    fixture.expectedStyleLoss * 5.0,
-    6,
-  );
+    const weightedStyleLossResponse =
+      expectWorkerTensorScalarResponse(weightedStyleLoss);
+    expectScalarCloseTo(
+      weightedStyleLossResponse.scalar,
+      fixture.expectedStyleLoss * 5.0,
+      6,
+    );
+  } finally {
+    await workerClient.dispose();
+  }
 });

@@ -1,196 +1,131 @@
-import { expect, test } from "@playwright/test";
-import type { WorkerRequest, WorkerResponse } from "../src/types";
+import { test } from "@playwright/test";
 import { gotoStableApp } from "./helpers/appPage";
+import {
+  firstPoolFixtureMissingMessage,
+  type VggFirstPoolArtifactsResult,
+  type VggFirstPoolCaseFixture,
+} from "./helpers/fixtures";
+import { expectTensorCloseTo } from "./helpers/tensorAssertions";
+import {
+  createStyleTransferWorkerClient,
+  expectWebGpuInitOk,
+  expectWorkerTensorVectorResponse,
+} from "./helpers/workerClient";
 
-type VggWeightsFixture = {
-  conv1WeightShape: [number, number, number, number];
-  conv1WeightValues: number[];
-  conv1BiasValues: number[];
-  conv2WeightShape: [number, number, number, number];
-  conv2WeightValues: number[];
-  conv2BiasValues: number[];
-  conv3WeightShape: [number, number, number, number];
-  conv3WeightValues: number[];
-  conv3BiasValues: number[];
-};
-
-type VggCaseFixture = {
-  inputValues: number[];
+type VggFirstPoolParityCaseFixture = VggFirstPoolCaseFixture & {
   normalizedValues: number[];
-  mean: [number, number, number];
-  std: [number, number, number];
-  expectedShape: [number, number, number, number];
   expectedValues: number[];
 };
 
+const isVggFirstPoolParityCaseFixture = (
+  caseData: VggFirstPoolCaseFixture,
+): caseData is VggFirstPoolParityCaseFixture =>
+  Array.isArray(caseData.normalizedValues) &&
+  Array.isArray(caseData.expectedValues);
+
 test("phase 2 vgg19 truncated parity through first pool", async ({ page }) => {
   await gotoStableApp(page);
-  const artifact = await page.evaluate(async () => {
-    const loadJson = async (url: string): Promise<unknown | null> => {
-      const response = await fetch(url);
-      if (!response.ok) return null;
-      const text = await response.text();
-      try {
-        return JSON.parse(text);
-      } catch {
-        return null;
-      }
-    };
-    const weights = await loadJson(
-      "/vgg19-first-pool/vgg19_first_pool_weights.json",
-    );
-    if (weights === null)
-      return { ok: false as const, reason: "weights-missing" as const };
-    const caseData = await loadJson(
-      "/vgg19-first-pool/vgg19_first_pool_case_madeira16.json",
-    );
-    if (caseData === null)
-      return { ok: false as const, reason: "case-missing" as const };
-    return {
-      ok: true as const,
-      weights,
-      caseData,
-    };
-  });
-
-  test.skip(
-    !artifact.ok,
-    "Missing VGG19 export fixtures. Run python-reference/export_vgg19_first_pool.py first.",
+  const artifact: VggFirstPoolArtifactsResult = await page.evaluate(
+    async () => {
+      const { loadVggFirstPoolArtifacts } =
+        await import("/tests/helpers/fixtures.ts");
+      return loadVggFirstPoolArtifacts();
+    },
   );
+
+  test.skip(!artifact.ok, firstPoolFixtureMissingMessage);
   if (!artifact.ok) return;
 
-  const { weights, caseData } = artifact as {
-    ok: true;
-    weights: VggWeightsFixture;
-    caseData: VggCaseFixture;
-  };
-  const result = await page.evaluate(
-    async ({ weightsArg, caseArg }) => {
-      const worker = new Worker(
-        new URL("/src/styleTransfer.worker.ts", window.location.origin),
-        { type: "module" },
-      );
-      const ask = (payload: WorkerRequest): Promise<WorkerResponse> =>
-        new Promise((resolve) => {
-          const handler = (event: MessageEvent<WorkerResponse>): void => {
-            if (event.data.id === payload.id) {
-              worker.removeEventListener("message", handler);
-              resolve(event.data);
-            }
-          };
-          worker.addEventListener("message", handler);
-          worker.postMessage(payload);
-        });
+  const { weights, caseData } = artifact;
+  if (!isVggFirstPoolParityCaseFixture(caseData)) {
+    throw new Error(
+      "First-pool parity case fixture is missing expected values.",
+    );
+  }
+  const workerClient = await createStyleTransferWorkerClient(page);
 
-      const init = await ask({ type: "init-webgpu", id: "phase2-vgg-init" });
+  try {
+    const init = await workerClient.initWebGpu();
+    const norm = await workerClient.ask({
+      type: "tensor-op",
+      id: "phase2-vgg-norm",
+      op: "normalize-forward",
+      input: { shape: caseData.inputShape, values: caseData.inputValues },
+      mean: caseData.mean,
+      std: caseData.std,
+    });
+    const conv1 = await workerClient.ask({
+      type: "tensor-op",
+      id: "phase2-vgg-conv1",
+      op: "conv2d-forward",
+      input: { shape: caseData.inputShape, values: caseData.normalizedValues },
+      weight: {
+        shape: weights.conv1WeightShape,
+        values: weights.conv1WeightValues,
+      },
+      bias: weights.conv1BiasValues,
+    });
+    const conv1Values = expectWorkerTensorVectorResponse(conv1).values;
+    const relu1 = await workerClient.ask({
+      type: "tensor-op",
+      id: "phase2-vgg-relu1",
+      op: "relu-forward",
+      input: { shape: [1, 64, 16, 16], values: conv1Values },
+    });
+    const relu1Values = expectWorkerTensorVectorResponse(relu1).values;
+    const conv2 = await workerClient.ask({
+      type: "tensor-op",
+      id: "phase2-vgg-conv2",
+      op: "conv2d-forward",
+      input: { shape: [1, 64, 16, 16], values: relu1Values },
+      weight: {
+        shape: weights.conv2WeightShape,
+        values: weights.conv2WeightValues,
+      },
+      bias: weights.conv2BiasValues,
+    });
+    const conv2Values = expectWorkerTensorVectorResponse(conv2).values;
+    const relu2 = await workerClient.ask({
+      type: "tensor-op",
+      id: "phase2-vgg-relu2",
+      op: "relu-forward",
+      input: { shape: [1, 64, 16, 16], values: conv2Values },
+    });
+    const relu2Values = expectWorkerTensorVectorResponse(relu2).values;
+    const pool1 = await workerClient.ask({
+      type: "tensor-op",
+      id: "phase2-vgg-pool1",
+      op: "maxpool2d-forward",
+      input: { shape: [1, 64, 16, 16], values: relu2Values },
+    });
+    const pool1Values = expectWorkerTensorVectorResponse(pool1).values;
+    const conv3 = await workerClient.ask({
+      type: "tensor-op",
+      id: "phase2-vgg-conv3",
+      op: "conv2d-forward",
+      input: { shape: [1, 64, 8, 8], values: pool1Values },
+      weight: {
+        shape: weights.conv3WeightShape,
+        values: weights.conv3WeightValues,
+      },
+      bias: weights.conv3BiasValues,
+    });
+    const conv3Values = expectWorkerTensorVectorResponse(conv3).values;
+    const relu3 = await workerClient.ask({
+      type: "tensor-op",
+      id: "phase2-vgg-relu3",
+      op: "relu-forward",
+      input: { shape: [1, 128, 8, 8], values: conv3Values },
+    });
 
-      const vectorValues = (
-        response: WorkerResponse,
-        label: string,
-      ): number[] => {
-        if (
-          response.type !== "tensor-op-result" ||
-          !response.ok ||
-          !("values" in response)
-        ) {
-          throw new Error(`${label} did not return tensor values`);
-        }
-        return response.values;
-      };
-      const norm = await ask({
-        type: "tensor-op",
-        id: "phase2-vgg-norm",
-        op: "normalize-forward",
-        input: { shape: caseArg.inputShape, values: caseArg.inputValues },
-        mean: caseArg.mean,
-        std: caseArg.std,
-      });
-
-      const conv1 = await ask({
-        type: "tensor-op",
-        id: "phase2-vgg-conv1",
-        op: "conv2d-forward",
-        input: { shape: caseArg.inputShape, values: caseArg.normalizedValues },
-        weight: {
-          shape: weightsArg.conv1WeightShape,
-          values: weightsArg.conv1WeightValues,
-        },
-        bias: weightsArg.conv1BiasValues,
-      });
-      const conv1Values = vectorValues(conv1, "conv1");
-      const relu1 = await ask({
-        type: "tensor-op",
-        id: "phase2-vgg-relu1",
-        op: "relu-forward",
-        input: { shape: [1, 64, 16, 16], values: conv1Values },
-      });
-      const relu1Values = vectorValues(relu1, "relu1");
-      const conv2 = await ask({
-        type: "tensor-op",
-        id: "phase2-vgg-conv2",
-        op: "conv2d-forward",
-        input: { shape: [1, 64, 16, 16], values: relu1Values },
-        weight: {
-          shape: weightsArg.conv2WeightShape,
-          values: weightsArg.conv2WeightValues,
-        },
-        bias: weightsArg.conv2BiasValues,
-      });
-      const conv2Values = vectorValues(conv2, "conv2");
-      const relu2 = await ask({
-        type: "tensor-op",
-        id: "phase2-vgg-relu2",
-        op: "relu-forward",
-        input: { shape: [1, 64, 16, 16], values: conv2Values },
-      });
-      const relu2Values = vectorValues(relu2, "relu2");
-      const pool1 = await ask({
-        type: "tensor-op",
-        id: "phase2-vgg-pool1",
-        op: "maxpool2d-forward",
-        input: { shape: [1, 64, 16, 16], values: relu2Values },
-      });
-      const pool1Values = vectorValues(pool1, "pool1");
-      const conv3 = await ask({
-        type: "tensor-op",
-        id: "phase2-vgg-conv3",
-        op: "conv2d-forward",
-        input: { shape: [1, 64, 8, 8], values: pool1Values },
-        weight: {
-          shape: weightsArg.conv3WeightShape,
-          values: weightsArg.conv3WeightValues,
-        },
-        bias: weightsArg.conv3BiasValues,
-      });
-      const conv3Values = vectorValues(conv3, "conv3");
-      const relu3 = await ask({
-        type: "tensor-op",
-        id: "phase2-vgg-relu3",
-        op: "relu-forward",
-        input: { shape: [1, 128, 8, 8], values: conv3Values },
-      });
-
-      worker.terminate();
-      return { init, norm, relu3 };
-    },
-    { weightsArg: weights, caseArg: caseData },
-  );
-
-  expect(result.init.type).toBe("webgpu-init-result");
-  if (
-    result.norm.type !== "tensor-op-result" ||
-    !result.norm.ok ||
-    !("values" in result.norm)
-  )
-    throw new Error("normalize-forward failed");
-  if (
-    result.relu3.type !== "tensor-op-result" ||
-    !result.relu3.ok ||
-    !("values" in result.relu3)
-  )
-    throw new Error("vgg run failed");
-
-  for (let i = 0; i < caseData.expectedValues.length; i += 1) {
-    expect(result.relu3.values[i]).toBeCloseTo(caseData.expectedValues[i], 4);
+    expectWebGpuInitOk(init);
+    expectWorkerTensorVectorResponse(norm);
+    expectTensorCloseTo(
+      expectWorkerTensorVectorResponse(relu3).values,
+      caseData.expectedValues,
+      4,
+    );
+  } finally {
+    await workerClient.dispose();
   }
 });

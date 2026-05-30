@@ -1,6 +1,11 @@
-import { expect, test } from "@playwright/test";
-import type { WorkerRequest, WorkerResponse } from "../src/types";
+import { test } from "@playwright/test";
+import type { WorkerResponse } from "../src/types";
 import { gotoStableApp } from "./helpers/appPage";
+import { expectTensorCloseTo } from "./helpers/tensorAssertions";
+import {
+  expectWebGpuInitOk,
+  expectWorkerTensorVectorResponse,
+} from "./helpers/workerClient";
 
 type BackwardFixtureEntry = {
   shape?: [number, number, number, number];
@@ -34,32 +39,19 @@ test("phase 4 backward parity by layer + tiny e2e input gradient", async ({
   await gotoStableApp(page);
 
   const result = await page.evaluate(async () => {
-    const loadJson = async <T>(url: string): Promise<T> => {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`Failed ${url}`);
-      return (await res.json()) as T;
-    };
-    const fixture = await loadJson<Phase4Fixture>(
+    const { fetchJsonOrNull } = await import("/tests/helpers/fixtures.ts");
+    const { createBrowserStyleTransferWorkerClient } =
+      await import("/tests/helpers/browserWorkerClient.ts");
+    const fixture = await fetchJsonOrNull<Phase4Fixture>(
       "/phase4-backprop/phase4_backprop_fixture.json",
     );
-    const worker = new Worker(
-      new URL("/src/styleTransfer.worker.ts", window.location.origin),
-      { type: "module" },
-    );
-    const ask = (payload: WorkerRequest): Promise<WorkerResponse> =>
-      new Promise((resolve) => {
-        const handler = (event: MessageEvent<WorkerResponse>): void => {
-          if (event.data.id === payload.id) {
-            worker.removeEventListener("message", handler);
-            resolve(event.data);
-          }
-        };
-        worker.addEventListener("message", handler);
-        worker.postMessage(payload);
-      });
-    const init = await ask({ type: "init-webgpu", id: "p4-init" });
+    if (fixture === null) {
+      return { ok: false as const, reason: "missing-fixture" as const };
+    }
+    const workerClient = createBrowserStyleTransferWorkerClient();
+    const init = await workerClient.initWebGpu("p4-init");
     const relu = fixture.relu;
-    const reluBackward = await ask({
+    const reluBackward = await workerClient.ask({
       type: "tensor-op",
       id: "p4-relu",
       op: "relu-backward",
@@ -67,7 +59,7 @@ test("phase 4 backward parity by layer + tiny e2e input gradient", async ({
       gradOut: { shape: relu.input, values: relu.gradOutValues },
     });
     const pool = fixture.pool;
-    const poolBackward = await ask({
+    const poolBackward = await workerClient.ask({
       type: "tensor-op",
       id: "p4-pool",
       op: "maxpool2d-backward",
@@ -75,7 +67,7 @@ test("phase 4 backward parity by layer + tiny e2e input gradient", async ({
       gradOut: { shape: pool.gradOut, values: pool.gradOutValues },
     });
     const norm = fixture.normalize;
-    const normBackward = await ask({
+    const normBackward = await workerClient.ask({
       type: "tensor-op",
       id: "p4-norm",
       op: "normalize-backward",
@@ -84,7 +76,7 @@ test("phase 4 backward parity by layer + tiny e2e input gradient", async ({
       std: norm.std,
     });
     const conv = fixture.convBackwardInput;
-    const convBackward = await ask({
+    const convBackward = await workerClient.ask({
       type: "tensor-op",
       id: "p4-conv",
       op: "conv2d-backward-input",
@@ -93,7 +85,7 @@ test("phase 4 backward parity by layer + tiny e2e input gradient", async ({
       weight: { shape: conv.weightShape, values: conv.weightValues },
     });
     const gram = fixture.gramBackward;
-    const gramBackward = await ask({
+    const gramBackward = await workerClient.ask({
       type: "tensor-op",
       id: "p4-gram",
       op: "gram-backward",
@@ -101,14 +93,14 @@ test("phase 4 backward parity by layer + tiny e2e input gradient", async ({
       gradOut: { shape: gram.gradOutShape, values: gram.gradOutValues },
     });
     const content = fixture.contentLossBackward;
-    const contentBackward = await ask({
+    const contentBackward = await workerClient.ask({
       type: "tensor-op",
       id: "p4-content",
       op: "content-loss-backward",
       input: { shape: content.shape, values: content.inputValues },
       target: { shape: content.shape, values: content.targetValues },
     });
-    const weightedContentBackward = await ask({
+    const weightedContentBackward = await workerClient.ask({
       type: "tensor-op",
       id: "p4-content-weighted",
       op: "content-loss-backward",
@@ -117,14 +109,14 @@ test("phase 4 backward parity by layer + tiny e2e input gradient", async ({
       contentWeight: 2.5,
     });
     const style = fixture.styleLossBackward;
-    const styleBackward = await ask({
+    const styleBackward = await workerClient.ask({
       type: "tensor-op",
       id: "p4-style",
       op: "style-loss-backward",
       input: { shape: style.shape, values: style.inputValues },
       target: { shape: style.shape, values: style.targetValues },
     });
-    const weightedStyleBackward = await ask({
+    const weightedStyleBackward = await workerClient.ask({
       type: "tensor-op",
       id: "p4-style-weighted",
       op: "style-loss-backward",
@@ -133,8 +125,9 @@ test("phase 4 backward parity by layer + tiny e2e input gradient", async ({
       styleWeight: 7.0,
     });
 
-    worker.terminate();
+    workerClient.dispose();
     return {
+      ok: true as const,
       init,
       fixture,
       reluBackward,
@@ -149,7 +142,13 @@ test("phase 4 backward parity by layer + tiny e2e input gradient", async ({
     };
   });
 
-  expect(result.init.type).toBe("webgpu-init-result");
+  test.skip(
+    !result.ok && result.reason === "missing-fixture",
+    "Missing phase 4 fixture. Run python-reference/export_phase4_backprop_fixtures.py.",
+  );
+  if (!result.ok) return;
+
+  expectWebGpuInitOk(result.init);
   const checks: Array<[WorkerResponse, number[]]> = [
     [result.reluBackward, result.fixture.relu.expectedGradIn],
     [result.poolBackward, result.fixture.pool.expectedGradIn],
@@ -172,15 +171,7 @@ test("phase 4 backward parity by layer + tiny e2e input gradient", async ({
     ],
   ];
   for (const [response, expected] of checks) {
-    expect(response.type).toBe("tensor-op-result");
-    if (
-      response.type !== "tensor-op-result" ||
-      !response.ok ||
-      !("values" in response)
-    )
-      throw new Error("bad response");
-    expected.forEach((value, index) =>
-      expect(response.values[index]).toBeCloseTo(value, 4),
-    );
+    const vectorResponse = expectWorkerTensorVectorResponse(response);
+    expectTensorCloseTo(vectorResponse.values, expected, 4);
   }
 });
