@@ -1,4 +1,9 @@
-import type { WorkerResponse, WorkerRunStats, WorkerTensor } from "../../../types";
+import type {
+  WorkerGpuDispatchCoverageRecord,
+  WorkerResponse,
+  WorkerRunStats,
+  WorkerTensor,
+} from "../../../types";
 
 export const postResponse = (response: WorkerResponse): void => {
   self.postMessage(response);
@@ -23,7 +28,10 @@ export const sendPongResponse = (id: string, timestamp: number): void => {
   postResponse({ type: "pong", id, timestamp });
 };
 
-export const sendTensorRoundtripResult = (id: string, tensor: WorkerTensor): void => {
+export const sendTensorRoundtripResult = (
+  id: string,
+  tensor: WorkerTensor,
+): void => {
   postResponse({
     type: "tensor-roundtrip-result",
     id,
@@ -79,6 +87,26 @@ export const sendTensorOpError = (
   });
 };
 
+export const sendGpuDispatchCoverageResult = (
+  id: string,
+  snapshot: {
+    enabled: boolean;
+    records: WorkerGpuDispatchCoverageRecord[];
+  },
+): void => {
+  postResponse({
+    type: "gpu-dispatch-coverage-result",
+    id,
+    ok: true,
+    enabled: snapshot.enabled,
+    records: snapshot.records,
+  });
+};
+
+export const sendResetGpuDispatchCoverageResult = (id: string): void => {
+  postResponse({ type: "reset-gpu-dispatch-coverage-result", id, ok: true });
+};
+
 export const sendWebGpuInitResult = (
   id: string,
   ok: boolean,
@@ -90,7 +118,23 @@ export const sendWebGpuInitResult = (
 export const sendRunFirstPoolOptimizerResult = (
   id: string,
   result:
-    | { ok: true; losses: number[]; finalValues: number[]; stats?: { elapsedMs: number; avgStepMs: number; forwardMs: number; lossMs: number; backwardMs: number; updateMs: number; readbackMs: number; mandatoryReadbackMs: number; diagnosticsReadbackMs: number; steps: number } }
+    | {
+        ok: true;
+        losses: number[];
+        finalValues: number[];
+        stats?: {
+          elapsedMs: number;
+          avgStepMs: number;
+          forwardMs: number;
+          lossMs: number;
+          backwardMs: number;
+          updateMs: number;
+          readbackMs: number;
+          mandatoryReadbackMs: number;
+          diagnosticsReadbackMs: number;
+          steps: number;
+        };
+      }
     | { ok: false; message: string },
 ): void => {
   postResponse({ type: "run-first-pool-optimizer-result", id, ...result });

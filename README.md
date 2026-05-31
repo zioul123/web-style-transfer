@@ -163,6 +163,29 @@ npm test
 
 Do not commit generated large legacy weights or model packs unless they were already tracked or a task explicitly asks for them.
 
+### Coverage reporting
+
+`npm test` collects coverage artifacts automatically under `coverage/` while the Chromium Playwright suite runs. The generated outputs include:
+
+- `coverage/raw/*.json`: per-test Chromium JavaScript coverage plus test-only WebGPU dispatch records.
+- `coverage/coverage-summary.json`: machine-readable aggregate coverage summary.
+- `coverage/summary.md`: Markdown summary for quick review in terminals or CI artifacts.
+- `coverage/index.html`: a browsable HTML summary.
+
+You can regenerate the aggregate summary from existing raw artifacts without rerunning tests:
+
+```bash
+npm run coverage:report
+```
+
+Coverage limitations are intentional:
+
+- JavaScript coverage is collected from Chromium/V8 through Playwright, so it is best used as a browser-integration signal rather than a cross-browser guarantee.
+- Worker WebGPU shader coverage is reported as dispatched pipeline/path labels and workgroup counts. This shows which runtime/kernel paths tests exercised.
+- The report does **not** claim WGSL source-line coverage. Browser WebGPU APIs do not expose shader line execution coverage, so shader coverage should be read as dispatch coverage only.
+
+GitHub Actions uploads the full `coverage/` directory as the `coverage` artifact after the Playwright job, even when tests fail.
+
 Always run the production build before concluding code changes:
 
 ```bash

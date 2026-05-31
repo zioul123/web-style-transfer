@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./helpers/coverage";
 import {
   VGG19_POOL_LAYER_INDICES_UP_TO_CONV5_1,
   VGG19_RELU_LAYER_INDICES_UP_TO_CONV5_1,

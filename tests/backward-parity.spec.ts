@@ -1,4 +1,4 @@
-import { test } from "@playwright/test";
+import { test } from "./helpers/coverage";
 import type { WorkerResponse } from "../src/types";
 import { gotoStableApp } from "./helpers/appPage";
 import { expectTensorCloseTo } from "./helpers/tensorAssertions";
