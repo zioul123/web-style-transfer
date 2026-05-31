@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { gotoStableApp } from "./helpers/appPage";
 
-test("phase 0 app boots and responds with worker status", async ({ page }) => {
+test("app boots and responds with worker status", async ({ page }) => {
   await gotoStableApp(page);
 
   await expect(
@@ -11,6 +11,8 @@ test("phase 0 app boots and responds with worker status", async ({ page }) => {
     .poll(async () => await page.locator("main").textContent(), {
       timeout: 15000,
     })
-    .toMatch(/Worker|Loaded VGG19 weights pack|Failed to load VGG19 weights pack/i);
+    .toMatch(
+      /Worker|Loaded VGG19 weights pack|Failed to load VGG19 weights pack/i,
+    );
   await expect(page.getByText(/WebGPU/i).first()).toBeVisible();
 });

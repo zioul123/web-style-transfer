@@ -23,7 +23,10 @@ const isVggFirstPoolParityCaseFixture = (
   Array.isArray(caseData.normalizedValues) &&
   Array.isArray(caseData.expectedValues);
 
-test("phase 2 vgg19 truncated parity through first pool", async ({ page }) => {
+test("vgg19 truncated forward pass matches pytorch through first pool", async ({
+  page,
+}) => {
+  test.setTimeout(120000);
   await gotoStableApp(page);
   const artifact: VggFirstPoolArtifactsResult = await page.evaluate(
     async () => {

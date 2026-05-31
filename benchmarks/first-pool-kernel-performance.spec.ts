@@ -1,10 +1,9 @@
 import { expect, test } from "@playwright/test";
 import type { WorkerRequest } from "../src/types";
-import { gotoStableApp } from "./helpers/appPage";
-import { firstPoolFixtureMissingMessage } from "./helpers/fixtures";
+import { gotoStableApp } from "../tests/helpers/appPage";
+import { firstPoolFixtureMissingMessage } from "../tests/helpers/fixtures";
 
-// Use this for benchmarking.
-test.skip("phase 5 benchmark: fused first-pool path is not slower than unfused by large margin", async ({
+test("first-pool fused kernel path is not slower than unfused by a large margin", async ({
   page,
 }) => {
   test.setTimeout(300000);

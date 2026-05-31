@@ -10,7 +10,8 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "preview": "vite preview",
-    "test": "playwright test"
+    "test": "playwright test",
+    "benchmark": "playwright test --config playwright.benchmark.config.ts"
   },
   "lint-staged": {
     "*.{js,jsx,ts,tsx,json,css,md,html,yml,yaml}": "prettier --write"

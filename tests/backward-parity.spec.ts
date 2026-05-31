@@ -32,7 +32,7 @@ type Phase4Fixture = {
   styleLossBackward: BackwardFixtureEntry;
 };
 
-test("phase 4 backward parity by layer + tiny e2e input gradient", async ({
+test("backward kernels match layer and tiny e2e input-gradient references", async ({
   page,
 }) => {
   test.setTimeout(120000);

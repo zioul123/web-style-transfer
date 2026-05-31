@@ -38,7 +38,7 @@ const makeWorkerMseTensor = (
   ),
 });
 
-test("phase 1 exhaustive scalar/tensor op coverage", async ({ page }) => {
+test("tensor ops cover scalar and tensor operands", async ({ page }) => {
   await gotoStableApp(page);
   const workerClient = await createStyleTransferWorkerClient(page);
 
@@ -197,7 +197,9 @@ test("phase 1 exhaustive scalar/tensor op coverage", async ({ page }) => {
   }
 });
 
-test("phase 1 mse GPU reduction parity for >64 lengths", async ({ page }) => {
+test("mse GPU reduction matches CPU references for >64 lengths", async ({
+  page,
+}) => {
   await gotoStableApp(page);
   const workerClient = await createStyleTransferWorkerClient(page);
 

@@ -31,7 +31,9 @@ const fixture: Phase3Fixture = {
   expectedStyleLoss: 13.6494140625,
 };
 
-test("phase 3 reshape/gram/content/style-loss parity", async ({ page }) => {
+test("style loss ops match reshape gram content and style references", async ({
+  page,
+}) => {
   await gotoStableApp(page);
   const workerClient = await createStyleTransferWorkerClient(page);
 

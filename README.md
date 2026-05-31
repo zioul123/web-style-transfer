@@ -124,7 +124,7 @@ The default test tiers are intentionally small enough to run in pull requests wh
 
 1. **Install and browser setup** installs locked npm dependencies plus Chromium and its system libraries.
 2. **Production build** runs TypeScript and Vite via `npm run build`.
-3. **Default Playwright suite** runs `npm test`, covering app boot, worker protocol, WebGPU kernel parity, committed fixture parity, and benchmark/optimization smoke paths.
+3. **Default Playwright suite** runs `npm test`, covering app boot, worker protocol, WebGPU kernel parity, committed fixture parity, and optimization correctness paths. Performance-oriented `/benchmark` and kernel-lab smoke tests live in `benchmarks/` and are excluded from default CI.
 
 CI runs the same sequence on pull requests and pushes to `main`:
 
@@ -134,6 +134,12 @@ npx playwright install chromium
 npx playwright install-deps chromium
 npm run build
 npm test
+```
+
+Run optional benchmark and kernel-lab specs separately when validating performance-sensitive changes:
+
+```bash
+npm run benchmark
 ```
 
 Use the same commands locally when validating a branch from a clean checkout. For day-to-day work after dependencies and browsers are installed, the most common local commands are:

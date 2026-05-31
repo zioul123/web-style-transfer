@@ -161,7 +161,7 @@ const runFirstPoolOptimizerInBrowser = async ({
   }
 };
 
-test("phase 5 optimizer loop decreases first-pool graph objective", async ({
+test("first-pool optimizer loop returns finite nonnegative losses", async ({
   page,
 }) => {
   test.setTimeout(300000);
@@ -191,7 +191,7 @@ test("phase 5 optimizer loop decreases first-pool graph objective", async ({
   expect(result.losses.at(-1) ?? -1).toBeGreaterThanOrEqual(0);
 });
 
-test("phase 5 first-pool optimizer supports non-16x16 dynamic spatial shape", async ({
+test("first-pool optimizer supports non-16x16 dynamic spatial shape", async ({
   page,
 }) => {
   test.setTimeout(300000);
