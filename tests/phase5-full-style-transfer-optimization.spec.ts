@@ -65,38 +65,33 @@ test("phase 5 full style transfer endpoint returns losses", async ({
     const artifactsResult = await loadFullPassArtifacts();
     if (!artifactsResult.ok) return artifactsResult;
     const { fixture, weights } = artifactsResult.artifacts;
-    const { createBrowserStyleTransferWorkerClient } =
+    const { askRunStyleTransfer, withBrowserStyleTransferWorkerClient } =
       await import("/tests/helpers/browserWorkerClient.ts");
-    const workerClient = createBrowserStyleTransferWorkerClient();
-    await workerClient.initWebGpu("phase5-full-init");
-    const out = await workerClient.ask({
-      type: "run-style-transfer",
-      id: "phase5-full-run",
-      inputShape: fixture.inputShape,
-      inputImageValues: fixture.inputImageValues,
-      contentImageValues: fixture.contentImageValues,
-      styleImageValues: fixture.styleImageValues,
-      mean: fixture.mean,
-      std: fixture.std,
-      styleLayerIndices: fixture.styleLayerIndices,
-      contentLayerIndex: fixture.contentLayerIndex,
-      weights,
-      contentWeight: 1,
-      styleWeight: 1,
-      learningRate: 0.01,
-      steps: 5,
-      optimizer: "sgd",
-    });
-    workerClient.dispose();
-    if (out.type !== "run-style-transfer-result")
-      return { ok: false as const, reason: "wrong-response" as const };
-    if (!out.ok)
-      return {
-        ok: false as const,
-        reason: "worker-failed" as const,
-        message: out.message,
-      };
-    return { ok: true as const, losses: out.losses };
+    const runResult = await withBrowserStyleTransferWorkerClient(
+      async (workerClient) => {
+        await workerClient.initWebGpu("phase5-full-init");
+        return askRunStyleTransfer(workerClient, {
+          type: "run-style-transfer",
+          id: "phase5-full-run",
+          inputShape: fixture.inputShape,
+          inputImageValues: fixture.inputImageValues,
+          contentImageValues: fixture.contentImageValues,
+          styleImageValues: fixture.styleImageValues,
+          mean: fixture.mean,
+          std: fixture.std,
+          styleLayerIndices: fixture.styleLayerIndices,
+          contentLayerIndex: fixture.contentLayerIndex,
+          weights,
+          contentWeight: 1,
+          styleWeight: 1,
+          learningRate: 0.01,
+          steps: 5,
+          optimizer: "sgd",
+        });
+      },
+    );
+    if (!runResult.ok) return runResult;
+    return { ok: true as const, losses: runResult.response.losses };
   });
   test.skip(
     !result.ok && result.reason === "missing-fixtures",
@@ -133,43 +128,38 @@ test("phase 5 full style transfer supports rectangular style shape", async ({
     const inputImageValues = makeValues(3 * 16 * 16, 0);
     const contentImageValues = Array.from(inputImageValues);
     const styleImageValues = makeValues(3 * 16 * 24, 0.7);
-    const { createBrowserStyleTransferWorkerClient } =
+    const { askRunStyleTransfer, withBrowserStyleTransferWorkerClient } =
       await import("/tests/helpers/browserWorkerClient.ts");
-    const workerClient = createBrowserStyleTransferWorkerClient();
-    await workerClient.initWebGpu("phase5-rect-style-init");
-    const out = await workerClient.ask({
-      type: "run-style-transfer",
-      id: "phase5-rect-style-run",
-      optimizer: "lbfgs",
-      inputShape,
-      contentShape: inputShape,
-      styleShape,
-      inputImageValues,
-      contentImageValues,
-      styleImageValues,
-      mean: [0.485, 0.456, 0.406],
-      std: [0.229, 0.224, 0.225],
-      styleLayerIndices: [1, 6, 11, 20, 29],
-      contentLayerIndex: 22,
-      weights,
-      contentWeight: 1,
-      styleWeight: 1,
-      learningRate: 1e-5,
-      steps: 1,
-    });
-    workerClient.dispose();
-    if (out.type !== "run-style-transfer-result")
-      return { ok: false as const, reason: "wrong-response" as const };
-    if (!out.ok)
-      return {
-        ok: false as const,
-        reason: "worker-failed" as const,
-        message: out.message,
-      };
+    const runResult = await withBrowserStyleTransferWorkerClient(
+      async (workerClient) => {
+        await workerClient.initWebGpu("phase5-rect-style-init");
+        return askRunStyleTransfer(workerClient, {
+          type: "run-style-transfer",
+          id: "phase5-rect-style-run",
+          optimizer: "lbfgs",
+          inputShape,
+          contentShape: inputShape,
+          styleShape,
+          inputImageValues,
+          contentImageValues,
+          styleImageValues,
+          mean: [0.485, 0.456, 0.406],
+          std: [0.229, 0.224, 0.225],
+          styleLayerIndices: [1, 6, 11, 20, 29],
+          contentLayerIndex: 22,
+          weights,
+          contentWeight: 1,
+          styleWeight: 1,
+          learningRate: 1e-5,
+          steps: 1,
+        });
+      },
+    );
+    if (!runResult.ok) return runResult;
     return {
       ok: true as const,
-      losses: out.losses,
-      finalValuesLength: out.finalValues.length,
+      losses: runResult.response.losses,
+      finalValuesLength: runResult.response.finalValues.length,
       expectedLength: inputImageValues.length,
     };
   });
@@ -208,40 +198,35 @@ test("phase 5 run-style-transfer first-step gradient matches pytorch oracle", as
         ok: false as const,
         reason: "missing-gradient-fixture" as const,
       };
-    const { createBrowserStyleTransferWorkerClient } =
+    const { askRunStyleTransfer, withBrowserStyleTransferWorkerClient } =
       await import("/tests/helpers/browserWorkerClient.ts");
-    const workerClient = createBrowserStyleTransferWorkerClient();
-    await workerClient.initWebGpu("phase5-grad-init");
     const learningRate = 1e-5;
-    const out = await workerClient.ask({
-      type: "run-style-transfer",
-      id: "phase5-grad-run",
-      inputShape: fixture.inputShape,
-      inputImageValues: fixture.inputImageValues,
-      contentImageValues: fixture.contentImageValues,
-      styleImageValues: fixture.styleImageValues,
-      mean: fixture.mean,
-      std: fixture.std,
-      styleLayerIndices: fixture.styleLayerIndices,
-      contentLayerIndex: fixture.contentLayerIndex,
-      weights,
-      optimizer: "sgd",
-      contentWeight: 1,
-      styleWeight: 1,
-      learningRate,
-      steps: 1,
-    });
-    workerClient.dispose();
-    if (out.type !== "run-style-transfer-result")
-      return { ok: false as const, reason: "wrong-response" as const };
-    if (!out.ok)
-      return {
-        ok: false as const,
-        reason: "worker-failed" as const,
-        message: out.message,
-      };
+    const runResult = await withBrowserStyleTransferWorkerClient(
+      async (workerClient) => {
+        await workerClient.initWebGpu("phase5-grad-init");
+        return askRunStyleTransfer(workerClient, {
+          type: "run-style-transfer",
+          id: "phase5-grad-run",
+          inputShape: fixture.inputShape,
+          inputImageValues: fixture.inputImageValues,
+          contentImageValues: fixture.contentImageValues,
+          styleImageValues: fixture.styleImageValues,
+          mean: fixture.mean,
+          std: fixture.std,
+          styleLayerIndices: fixture.styleLayerIndices,
+          contentLayerIndex: fixture.contentLayerIndex,
+          weights,
+          optimizer: "sgd",
+          contentWeight: 1,
+          styleWeight: 1,
+          learningRate,
+          steps: 1,
+        });
+      },
+    );
+    if (!runResult.ok) return runResult;
     const gradOracle = fixture.expectedGradients.total as number[];
-    const gradObserved = out.finalValues.map(
+    const gradObserved = runResult.response.finalValues.map(
       (value: number, index: number) =>
         (fixture.inputImageValues[index] - value) / learningRate,
     );
@@ -306,43 +291,38 @@ test("phase 5 weighted first-step gradient composes content and style gradients"
         ok: false as const,
         reason: "missing-gradient-fixture" as const,
       };
-    const { createBrowserStyleTransferWorkerClient } =
+    const { askRunStyleTransfer, withBrowserStyleTransferWorkerClient } =
       await import("/tests/helpers/browserWorkerClient.ts");
-    const workerClient = createBrowserStyleTransferWorkerClient();
-    await workerClient.initWebGpu("phase5-weighted-grad-init");
     const learningRate = 1e-5;
     const contentWeight = 2.5;
     const styleWeight = 7;
-    const out = await workerClient.ask({
-      type: "run-style-transfer",
-      id: "phase5-weighted-grad-run",
-      inputShape: fixture.inputShape,
-      inputImageValues: fixture.inputImageValues,
-      contentImageValues: fixture.contentImageValues,
-      styleImageValues: fixture.styleImageValues,
-      mean: fixture.mean,
-      std: fixture.std,
-      styleLayerIndices: fixture.styleLayerIndices,
-      contentLayerIndex: fixture.contentLayerIndex,
-      weights,
-      optimizer: "sgd",
-      contentWeight,
-      styleWeight,
-      learningRate,
-      steps: 1,
-    });
-    workerClient.dispose();
-    if (out.type !== "run-style-transfer-result")
-      return { ok: false as const, reason: "wrong-response" as const };
-    if (!out.ok)
-      return {
-        ok: false as const,
-        reason: "worker-failed" as const,
-        message: out.message,
-      };
+    const runResult = await withBrowserStyleTransferWorkerClient(
+      async (workerClient) => {
+        await workerClient.initWebGpu("phase5-weighted-grad-init");
+        return askRunStyleTransfer(workerClient, {
+          type: "run-style-transfer",
+          id: "phase5-weighted-grad-run",
+          inputShape: fixture.inputShape,
+          inputImageValues: fixture.inputImageValues,
+          contentImageValues: fixture.contentImageValues,
+          styleImageValues: fixture.styleImageValues,
+          mean: fixture.mean,
+          std: fixture.std,
+          styleLayerIndices: fixture.styleLayerIndices,
+          contentLayerIndex: fixture.contentLayerIndex,
+          weights,
+          optimizer: "sgd",
+          contentWeight,
+          styleWeight,
+          learningRate,
+          steps: 1,
+        });
+      },
+    );
+    if (!runResult.ok) return runResult;
     const contentGrad = fixture.expectedGradients.content;
     const styleByLayer = fixture.expectedGradients.styleByLayer;
-    const gradObserved = out.finalValues.map(
+    const gradObserved = runResult.response.finalValues.map(
       (value: number, index: number) =>
         (fixture.inputImageValues[index] - value) / learningRate,
     );
@@ -396,10 +376,8 @@ test("phase 5 style transfer supports adam and lbfgs", async ({ page }) => {
     const artifactsResult = await loadFullPassArtifacts();
     if (!artifactsResult.ok) return artifactsResult;
     const { fixture, weights } = artifactsResult.artifacts;
-    const { createBrowserStyleTransferWorkerClient } =
+    const { askRunStyleTransfer, withBrowserStyleTransferWorkerClient } =
       await import("/tests/helpers/browserWorkerClient.ts");
-    const workerClient = createBrowserStyleTransferWorkerClient();
-    await workerClient.initWebGpu("phase5-optimizers-init");
     const common = {
       type: "run-style-transfer" as const,
       inputShape: fixture.inputShape,
@@ -429,32 +407,28 @@ test("phase 5 style transfer supports adam and lbfgs", async ({ page }) => {
       finalLoss: number;
       finalValuesLength: number;
     }[] = [];
-    for (const testCase of cases) {
-      const run = await workerClient.ask({
-        ...common,
-        id: `phase5-optimizer-${testCase.id}`,
-        optimizer: testCase.optimizer,
-        steps: testCase.steps,
-      });
-      if (run.type !== "run-style-transfer-result") {
-        workerClient.dispose();
-        return { ok: false as const, reason: "wrong-response" as const };
-      }
-      if (!run.ok) {
-        workerClient.dispose();
-        return {
-          ok: false as const,
-          reason: "worker-failed" as const,
-          message: run.message,
-        };
-      }
-      results.push({
-        id: testCase.id,
-        finalLoss: run.losses[run.losses.length - 1],
-        finalValuesLength: run.finalValues.length,
-      });
-    }
-    workerClient.dispose();
+    const runFailure = await withBrowserStyleTransferWorkerClient(
+      async (workerClient) => {
+        await workerClient.initWebGpu("phase5-optimizers-init");
+        for (const testCase of cases) {
+          const run = await askRunStyleTransfer(workerClient, {
+            ...common,
+            id: `phase5-optimizer-${testCase.id}`,
+            optimizer: testCase.optimizer,
+            steps: testCase.steps,
+          });
+          if (!run.ok) return run;
+          results.push({
+            id: testCase.id,
+            finalLoss:
+              run.response.losses[run.response.losses.length - 1] ?? Number.NaN,
+            finalValuesLength: run.response.finalValues.length,
+          });
+        }
+        return null;
+      },
+    );
+    if (runFailure !== null) return runFailure;
     return {
       ok: true as const,
       results,
@@ -548,10 +522,8 @@ test("phase 5 fused conv+relu op matches separate ops", async ({ page }) => {
   test.setTimeout(120000);
   await gotoStableApp(page);
   const result = await page.evaluate(async () => {
-    const { createBrowserStyleTransferWorkerClient } =
+    const { withBrowserStyleTransferWorkerClient } =
       await import("/tests/helpers/browserWorkerClient.ts");
-    const workerClient = createBrowserStyleTransferWorkerClient();
-    await workerClient.initWebGpu("phase5-fused-init");
     const input = Array.from(
       { length: 3 * 8 * 8 },
       (_, i) => Math.sin(i * 0.13) * 0.5,
@@ -561,39 +533,45 @@ test("phase 5 fused conv+relu op matches separate ops", async ({ page }) => {
       (_, i) => Math.cos(i * 0.07) * 0.1,
     );
     const bias = [0.01, -0.02, 0.03, -0.04];
-    const conv = await workerClient.ask({
-      type: "tensor-op",
-      id: "phase5-fused-conv",
-      op: "conv2d-forward",
-      input: { shape: [1, 3, 8, 8], values: input },
-      weight: { shape: [4, 3, 3, 3], values: weight },
-      bias,
+    return withBrowserStyleTransferWorkerClient(async (workerClient) => {
+      await workerClient.initWebGpu("phase5-fused-init");
+      const conv = await workerClient.ask({
+        type: "tensor-op",
+        id: "phase5-fused-conv",
+        op: "conv2d-forward",
+        input: { shape: [1, 3, 8, 8], values: input },
+        weight: { shape: [4, 3, 3, 3], values: weight },
+        bias,
+      });
+      if (conv.type !== "tensor-op-result" || !conv.ok || !("values" in conv))
+        return { ok: false as const, reason: "conv-failed" as const };
+      const relu = await workerClient.ask({
+        type: "tensor-op",
+        id: "phase5-fused-relu",
+        op: "relu-forward",
+        input: { shape: [1, 4, 8, 8], values: conv.values },
+      });
+      const fused = await workerClient.ask({
+        type: "tensor-op",
+        id: "phase5-fused-fused",
+        op: "conv2d-relu-forward",
+        input: { shape: [1, 3, 8, 8], values: input },
+        weight: { shape: [4, 3, 3, 3], values: weight },
+        bias,
+      });
+      if (relu.type !== "tensor-op-result" || !relu.ok || !("values" in relu))
+        return { ok: false as const, reason: "relu-failed" as const };
+      if (
+        fused.type !== "tensor-op-result" ||
+        !fused.ok ||
+        !("values" in fused)
+      )
+        return { ok: false as const, reason: "fused-failed" as const };
+      let maxDiff = 0;
+      for (let i = 0; i < relu.values.length; i += 1)
+        maxDiff = Math.max(maxDiff, Math.abs(relu.values[i] - fused.values[i]));
+      return { ok: true as const, maxDiff };
     });
-    if (conv.type !== "tensor-op-result" || !conv.ok || !("values" in conv))
-      return { ok: false as const, reason: "conv-failed" as const };
-    const relu = await workerClient.ask({
-      type: "tensor-op",
-      id: "phase5-fused-relu",
-      op: "relu-forward",
-      input: { shape: [1, 4, 8, 8], values: conv.values },
-    });
-    const fused = await workerClient.ask({
-      type: "tensor-op",
-      id: "phase5-fused-fused",
-      op: "conv2d-relu-forward",
-      input: { shape: [1, 3, 8, 8], values: input },
-      weight: { shape: [4, 3, 3, 3], values: weight },
-      bias,
-    });
-    workerClient.dispose();
-    if (relu.type !== "tensor-op-result" || !relu.ok || !("values" in relu))
-      return { ok: false as const, reason: "relu-failed" as const };
-    if (fused.type !== "tensor-op-result" || !fused.ok || !("values" in fused))
-      return { ok: false as const, reason: "fused-failed" as const };
-    let maxDiff = 0;
-    for (let i = 0; i < relu.values.length; i += 1)
-      maxDiff = Math.max(maxDiff, Math.abs(relu.values[i] - fused.values[i]));
-    return { ok: true as const, maxDiff };
   });
   if (!result.ok) throw new Error(result.reason);
   expect(result.maxDiff).toBeLessThan(1e-4);
@@ -610,16 +588,15 @@ test("phase 6 style-transfer supports gram/style kernel variants", async ({
     const artifactsResult = await loadFullPassArtifacts();
     if (!artifactsResult.ok) return artifactsResult;
     const { fixture, weights } = artifactsResult.artifacts;
-    const { createBrowserStyleTransferWorkerClient } =
+    const { askRunStyleTransfer, withBrowserStyleTransferWorkerClient } =
       await import("/tests/helpers/browserWorkerClient.ts");
-    const workerClient = createBrowserStyleTransferWorkerClient();
-    await workerClient.initWebGpu("phase6-kernel-variant-init");
     const runVariant = async (
+      workerClient: Parameters<typeof askRunStyleTransfer>[0],
       id: string,
       gramKernel: "parallel-dot" | "symmetric-parallel-dot",
       styleBackward: "two-pass" | "fused-from-gram-diff",
     ): Promise<{ ok: true; loss: number } | { ok: false; reason: string }> => {
-      const out = await workerClient.ask({
+      const out = await askRunStyleTransfer(workerClient, {
         type: "run-style-transfer",
         id,
         inputShape: fixture.inputShape,
@@ -642,33 +619,37 @@ test("phase 6 style-transfer supports gram/style kernel variants", async ({
           usePersistentWeightBuffers: true,
         },
       });
-      if (
-        out.type !== "run-style-transfer-result" ||
-        !out.ok ||
-        out.losses.length === 0
-      ) {
+      if (!out.ok) {
         return {
           ok: false,
-          reason:
-            out.type === "run-style-transfer-result"
-              ? out.message
-              : "wrong-response",
+          reason: out.reason === "worker-failed" ? out.message : out.reason,
         };
       }
-      return { ok: true, loss: out.losses[0] };
+      if (out.response.losses.length === 0) {
+        return { ok: false, reason: "missing-loss" };
+      }
+      return { ok: true, loss: out.response.losses[0] };
     };
 
-    const variantA = await runVariant(
-      "phase6-kernel-variant-a",
-      "parallel-dot",
-      "two-pass",
+    const [variantA, variantB] = await withBrowserStyleTransferWorkerClient(
+      async (workerClient) => {
+        await workerClient.initWebGpu("phase6-kernel-variant-init");
+        return [
+          await runVariant(
+            workerClient,
+            "phase6-kernel-variant-a",
+            "parallel-dot",
+            "two-pass",
+          ),
+          await runVariant(
+            workerClient,
+            "phase6-kernel-variant-b",
+            "symmetric-parallel-dot",
+            "fused-from-gram-diff",
+          ),
+        ] as const;
+      },
     );
-    const variantB = await runVariant(
-      "phase6-kernel-variant-b",
-      "symmetric-parallel-dot",
-      "fused-from-gram-diff",
-    );
-    workerClient.dispose();
     if (!variantA.ok) return variantA;
     if (!variantB.ok) return variantB;
     return {
@@ -701,10 +682,11 @@ test("phase 6 kernel flags preserve baseline semantics and support fp16-storage"
     const artifactsResult = await loadFullPassArtifacts();
     if (!artifactsResult.ok) return artifactsResult;
     const { fixture, weights } = artifactsResult.artifacts;
-    const { createBrowserStyleTransferWorkerClient } =
-      await import("/tests/helpers/browserWorkerClient.ts");
-    const workerClient = createBrowserStyleTransferWorkerClient();
-    await workerClient.initWebGpu("phase6-kernel-storage-init");
+    const {
+      askRunStyleTransfer,
+      validateRunStyleTransferResult,
+      withBrowserStyleTransferWorkerClient,
+    } = await import("/tests/helpers/browserWorkerClient.ts");
     type RunStyleRequest = Extract<
       WorkerRequest,
       { type: "run-style-transfer" }
@@ -728,29 +710,39 @@ test("phase 6 kernel flags preserve baseline semantics and support fp16-storage"
       optimizer: "sgd",
     });
     const runVariant = async (
+      workerClient: Parameters<typeof askRunStyleTransfer>[0],
       id: string,
       kernelFlags?: RunStyleRequest["kernelFlags"],
     ): Promise<
       | { ok: true; loss: number; finalValues: number[] }
       | { ok: false; reason: string }
     > => {
-      const out = await workerClient.ask({ ...baseRequest(id), kernelFlags });
-      if (out.type !== "run-style-transfer-result")
-        return { ok: false, reason: "wrong-response" };
-      if (!out.ok) return { ok: false, reason: out.message };
+      const out = await askRunStyleTransfer(workerClient, {
+        ...baseRequest(id),
+        kernelFlags,
+      });
+      if (!out.ok) {
+        return {
+          ok: false,
+          reason: out.reason === "worker-failed" ? out.message : out.reason,
+        };
+      }
       return {
         ok: true,
-        loss: out.losses[0] ?? Number.NaN,
-        finalValues: out.finalValues,
+        loss: out.response.losses[0] ?? Number.NaN,
+        finalValues: out.response.finalValues,
       };
     };
     const runFailure = async (
+      workerClient: Parameters<typeof askRunStyleTransfer>[0],
       id: string,
       kernelFlags: RunStyleRequest["kernelFlags"],
     ): Promise<string> => {
-      const out = await workerClient.ask({ ...baseRequest(id), kernelFlags });
-      if (out.type !== "run-style-transfer-result") return "wrong-response";
-      return out.ok ? "unexpected-success" : out.message;
+      const out = validateRunStyleTransferResult(
+        await workerClient.ask({ ...baseRequest(id), kernelFlags }),
+      );
+      if (out.ok) return "unexpected-success";
+      return out.reason === "worker-failed" ? out.message : out.reason;
     };
     const meanAbsDelta = (
       a: readonly number[],
@@ -762,34 +754,63 @@ test("phase 6 kernel flags preserve baseline semantics and support fp16-storage"
       return total / a.length;
     };
 
-    const baseline = await runVariant("phase6-kernel-baseline-default");
-    const explicitPooled = await runVariant("phase6-kernel-explicit-pooled", {
-      useStepBufferPool: true,
+    const {
+      baseline,
+      explicitPooled,
+      fp16,
+      tiledMessage,
+      spatialBackwardMessage,
+      fp16WithoutPersistentMessage,
+      int8Message,
+    } = await withBrowserStyleTransferWorkerClient(async (workerClient) => {
+      await workerClient.initWebGpu("phase6-kernel-storage-init");
+      return {
+        baseline: await runVariant(
+          workerClient,
+          "phase6-kernel-baseline-default",
+        ),
+        explicitPooled: await runVariant(
+          workerClient,
+          "phase6-kernel-explicit-pooled",
+          {
+            useStepBufferPool: true,
+          },
+        ),
+        fp16: await runVariant(workerClient, "phase6-kernel-fp16-storage", {
+          usePersistentWeightBuffers: true,
+          weightStorage: "fp16-storage",
+        }),
+        tiledMessage: await runFailure(
+          workerClient,
+          "phase6-kernel-unsupported-tiled",
+          {
+            convForwardKernel: "tiled-spatial",
+          },
+        ),
+        spatialBackwardMessage: await runFailure(
+          workerClient,
+          "phase6-kernel-unsupported-spatial-backward",
+          {
+            convBackwardInputKernel: "spatial-vec4",
+          },
+        ),
+        fp16WithoutPersistentMessage: await runFailure(
+          workerClient,
+          "phase6-kernel-fp16-without-persistent",
+          {
+            weightStorage: "fp16-storage",
+          },
+        ),
+        int8Message: await runFailure(
+          workerClient,
+          "phase6-kernel-int8-storage",
+          {
+            usePersistentWeightBuffers: true,
+            weightStorage: "int8-dequant-experimental",
+          },
+        ),
+      };
     });
-    const fp16 = await runVariant("phase6-kernel-fp16-storage", {
-      usePersistentWeightBuffers: true,
-      weightStorage: "fp16-storage",
-    });
-    const tiledMessage = await runFailure("phase6-kernel-unsupported-tiled", {
-      convForwardKernel: "tiled-spatial",
-    });
-    const spatialBackwardMessage = await runFailure(
-      "phase6-kernel-unsupported-spatial-backward",
-      {
-        convBackwardInputKernel: "spatial-vec4",
-      },
-    );
-    const fp16WithoutPersistentMessage = await runFailure(
-      "phase6-kernel-fp16-without-persistent",
-      {
-        weightStorage: "fp16-storage",
-      },
-    );
-    const int8Message = await runFailure("phase6-kernel-int8-storage", {
-      usePersistentWeightBuffers: true,
-      weightStorage: "int8-dequant-experimental",
-    });
-    workerClient.dispose();
     if (!baseline.ok) return baseline;
     if (!explicitPooled.ok) return explicitPooled;
     if (!fp16.ok) return fp16;

@@ -20,16 +20,20 @@ export const runContentLossBackwardBuffer = async (
   return ownedBuffer(
     useVec4 && count % 4 === 0
       ? runUnaryShaderToBufferWithDispatch(
-        gpuDevice,
-        makeMseBackwardVec4Shader(count / 4, count),
-        input.buffer,
-        count,
-        count / 4,
-        [{ binding: 1, resource: { buffer: target.buffer } }],
-      )
-      : runUnaryShaderToBuffer(gpuDevice, makeMseBackwardShader(count), input.buffer, count, [
-        { binding: 1, resource: { buffer: target.buffer } },
-      ]),
+          gpuDevice,
+          makeMseBackwardVec4Shader(count / 4, count),
+          input.buffer,
+          count,
+          count / 4,
+          [{ binding: 1, resource: { buffer: target.buffer } }],
+        )
+      : runUnaryShaderToBuffer(
+          gpuDevice,
+          makeMseBackwardShader(count),
+          input.buffer,
+          count,
+          [{ binding: 1, resource: { buffer: target.buffer } }],
+        ),
   );
 };
 
@@ -43,14 +47,21 @@ export const runContentLossBackward = async (
   ) => Promise<Float32Array>,
   input: Float32Array,
   target: Float32Array,
-  _BUFFER_USAGE_STORAGE_COPY_DST_VALUE: number,
 ): Promise<Float32Array> => {
   if (input.length !== target.length) return new Float32Array(input.length);
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
   const inputBuffer = uploadToOwnedBuffer(gpuDevice, input);
   const targetBuffer = uploadToOwnedBuffer(gpuDevice, target);
-  const outputBuffer = await runContentLossBackwardBuffer(inputBuffer, targetBuffer, input.length);
-  const output = await readGpuBufferToArray(gpuDevice, outputBuffer.buffer, input.length);
+  const outputBuffer = await runContentLossBackwardBuffer(
+    inputBuffer,
+    targetBuffer,
+    input.length,
+  );
+  const output = await readGpuBufferToArray(
+    gpuDevice,
+    outputBuffer.buffer,
+    input.length,
+  );
   releaseOwnedBuffer(inputBuffer);
   releaseOwnedBuffer(targetBuffer);
   releaseOwnedBuffer(outputBuffer);

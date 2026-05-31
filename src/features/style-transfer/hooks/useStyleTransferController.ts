@@ -600,18 +600,41 @@ export const useStyleTransferController =
           nearestResolutionPresetForImage(defaultContentImage);
         const nextStyleResolution =
           nearestResolutionPresetForImage(defaultStyleImage);
+        const nextContentImageResolution =
+          RESOLUTION_PRESETS[nextContentResolution];
+        const nextStyleImageResolution =
+          RESOLUTION_PRESETS[nextStyleResolution];
+        const defaultContentTensor = imageToTensorValues(
+          defaultContentImage,
+          nextContentImageResolution,
+        );
+        const defaultStyleTensor = imageToTensorValues(
+          defaultStyleImage,
+          nextStyleImageResolution,
+        );
         setContentSourceImage(defaultContentImage);
         setStyleSourceImage(defaultStyleImage);
         setContentResolution(nextContentResolution);
         setStyleResolution(nextStyleResolution);
-        refreshContentImage(
-          defaultContentImage,
-          RESOLUTION_PRESETS[nextContentResolution],
+        setContentTensor(defaultContentTensor);
+        setStyleTensor(defaultStyleTensor);
+        setInputTensor(defaultContentTensor);
+        setContentImage(
+          tensorValuesToDataUrl(
+            defaultContentTensor,
+            nextContentImageResolution,
+          ),
         );
-        refreshStyleImage(
-          defaultStyleImage,
-          RESOLUTION_PRESETS[nextStyleResolution],
+        setStyleImage(
+          tensorValuesToDataUrl(defaultStyleTensor, nextStyleImageResolution),
         );
+        setOutputImage(
+          tensorValuesToDataUrl(
+            defaultContentTensor,
+            nextContentImageResolution,
+          ),
+        );
+        resetOptimizerProgress();
       })();
       return () => {
         isCurrent = false;
