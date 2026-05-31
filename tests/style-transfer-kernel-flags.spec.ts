@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./helpers/coverage";
 import type { WorkerRequest } from "../src/types";
 import { gotoStableApp } from "./helpers/appPage";
 

@@ -11,7 +11,8 @@
     "format:check": "prettier . --check",
     "preview": "vite preview",
     "test": "playwright test",
-    "benchmark": "playwright test --config playwright.benchmark.config.ts"
+    "benchmark": "playwright test --config playwright.benchmark.config.ts",
+    "coverage:report": "node scripts/generate-coverage-report.mjs"
   },
   "lint-staged": {
     "*.{js,jsx,ts,tsx,json,css,md,html,yml,yaml}": "prettier --write"

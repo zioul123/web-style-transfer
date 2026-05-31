@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./helpers/coverage";
 import { gotoStableApp } from "./helpers/appPage";
 
 test("run-style-transfer first-step gradient matches pytorch oracle", async ({

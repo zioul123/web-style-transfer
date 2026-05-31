@@ -1,4 +1,7 @@
-const pipelineCacheByDevice = new WeakMap<GPUDevice, Map<string, GPUComputePipeline>>();
+const pipelineCacheByDevice = new WeakMap<
+  GPUDevice,
+  Map<string, GPUComputePipeline>
+>();
 
 // WebGPU pipeline creation is expensive. We keep one cache per device and
 // key by operation signature so hot math kernels can be reused across steps.
@@ -15,6 +18,7 @@ export const getOrCreateComputePipeline = (
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
   const created = gpuDevice.createComputePipeline({
+    label: key,
     layout: "auto",
     compute: {
       module: gpuDevice.createShaderModule({ code }),

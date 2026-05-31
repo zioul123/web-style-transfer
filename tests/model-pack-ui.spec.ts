@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./helpers/coverage";
 import { gotoStableApp } from "./helpers/appPage";
 
 test("model pack selector reloads manifest-backed weights and supports fp32", async ({

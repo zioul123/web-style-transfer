@@ -3,6 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests",
   testIgnore: ["**/benchmarks/**"],
+  globalTeardown: "./tests/helpers/coverageTeardown.ts",
   webServer: {
     command: "npm run dev -- --host 127.0.0.1 --port 4173",
     env: {

@@ -7,10 +7,16 @@ import {
   clearStyleTransferSession,
   runStyleTransfer,
 } from "../pipelines/optimization/styleTransferPipeline";
+import {
+  getGpuDispatchCoverageSnapshot,
+  resetGpuDispatchRecording,
+} from "../runtime/dispatchRecorder";
 import { initWebGpu } from "./initWebGpu";
 import {
   sendClearStyleTransferSessionResult,
+  sendGpuDispatchCoverageResult,
   sendPongResponse,
+  sendResetGpuDispatchCoverageResult,
   sendRunFirstPoolOptimizerResult,
   sendRunStyleTransferResult,
   sendTensorRoundtripError,
@@ -32,6 +38,18 @@ export const routeWorkerMessage = (
         sendWorkerErrorResponse(payload.id, error),
       );
       break;
+    case "get-gpu-dispatch-coverage": {
+      sendGpuDispatchCoverageResult(
+        payload.id,
+        getGpuDispatchCoverageSnapshot(),
+      );
+      break;
+    }
+    case "reset-gpu-dispatch-coverage": {
+      resetGpuDispatchRecording();
+      sendResetGpuDispatchCoverageResult(payload.id);
+      break;
+    }
     case "tensor-roundtrip": {
       try {
         const tensor = createTensor(

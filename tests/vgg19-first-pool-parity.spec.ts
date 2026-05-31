@@ -1,4 +1,4 @@
-import { test } from "@playwright/test";
+import { test } from "./helpers/coverage";
 import { gotoStableApp } from "./helpers/appPage";
 import {
   firstPoolFixtureMissingMessage,
