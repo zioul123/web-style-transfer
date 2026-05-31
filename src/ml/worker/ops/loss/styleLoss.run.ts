@@ -42,7 +42,11 @@ export const runStyleLossTermsFromTargetGramBuffer = async (
     size: 2 * Uint32Array.BYTES_PER_ELEMENT,
     usage: BUFFER_USAGE_UNIFORM_COPY_DST,
   });
-  gpuDevice.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([channels, spatial]));
+  gpuDevice.queue.writeBuffer(
+    uniformBuffer,
+    0,
+    new Uint32Array([channels, spatial]),
+  );
   const pairCount = (channels * (channels + 1)) / 2;
   const termsElementCount =
     gramKernel === "symmetric-parallel-dot" ? pairCount : gramCount;
@@ -255,8 +259,6 @@ export const runStyleLossBackward = async (
   input: Float32Array,
   shape: readonly [number, number, number, number],
   target: Float32Array,
-  _BUFFER_USAGE_STORAGE_COPY_DST: number,
-  _BUFFER_USAGE_UNIFORM_COPY_DST: number,
 ): Promise<Float32Array> => {
   const inputBuffer = uploadToOwnedBuffer(gpuDevice, input);
   const targetBuffer = uploadToOwnedBuffer(gpuDevice, target);
@@ -267,8 +269,16 @@ export const runStyleLossBackward = async (
     targetGram,
     shape[1] * shape[1],
   );
-  const gradInBuffer = await runGramBackwardBuffer(inputBuffer, shape, gramGrad);
-  const out = await readGpuBufferToArray(gpuDevice, gradInBuffer.buffer, input.length);
+  const gradInBuffer = await runGramBackwardBuffer(
+    inputBuffer,
+    shape,
+    gramGrad,
+  );
+  const out = await readGpuBufferToArray(
+    gpuDevice,
+    gradInBuffer.buffer,
+    input.length,
+  );
   releaseOwnedBuffer(inputBuffer);
   releaseOwnedBuffer(targetBuffer);
   releaseOwnedBuffer(inputGram);

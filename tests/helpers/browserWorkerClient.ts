@@ -76,3 +76,51 @@ export const getTensorScalar = (
   }
   return response.scalar;
 };
+
+export type RunStyleTransferRequest = Extract<
+  WorkerRequest,
+  { type: "run-style-transfer" }
+>;
+
+export type RunStyleTransferSuccessResponse = Extract<
+  WorkerResponse,
+  { type: "run-style-transfer-result"; ok: true }
+>;
+
+export type RunStyleTransferResult =
+  | { ok: true; response: RunStyleTransferSuccessResponse }
+  | { ok: false; reason: "wrong-response" }
+  | { ok: false; reason: "worker-failed"; message: string };
+
+export const validateRunStyleTransferResult = (
+  response: WorkerResponse,
+): RunStyleTransferResult => {
+  if (response.type !== "run-style-transfer-result") {
+    return { ok: false, reason: "wrong-response" };
+  }
+  if (!response.ok) {
+    return {
+      ok: false,
+      reason: "worker-failed",
+      message: response.message,
+    };
+  }
+  return { ok: true, response };
+};
+
+export const askRunStyleTransfer = async (
+  workerClient: BrowserStyleTransferWorkerClient,
+  payload: RunStyleTransferRequest,
+): Promise<RunStyleTransferResult> =>
+  validateRunStyleTransferResult(await workerClient.ask(payload));
+
+export const withBrowserStyleTransferWorkerClient = async <T>(
+  callback: (workerClient: BrowserStyleTransferWorkerClient) => Promise<T>,
+): Promise<T> => {
+  const workerClient = createBrowserStyleTransferWorkerClient();
+  try {
+    return await callback(workerClient);
+  } finally {
+    workerClient.dispose();
+  }
+};

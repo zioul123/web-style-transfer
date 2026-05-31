@@ -20,8 +20,15 @@ import {
 
 const getMaxPoolDims = (
   shape: readonly [number, number, number, number],
-): { channels: number; inHeight: number; inWidth: number; outHeight: number; outWidth: number } => {
-  if (shape[0] !== 1) throw new Error("maxpool2d currently expects batch size 1.");
+): {
+  channels: number;
+  inHeight: number;
+  inWidth: number;
+  outHeight: number;
+  outWidth: number;
+} => {
+  if (shape[0] !== 1)
+    throw new Error("maxpool2d currently expects batch size 1.");
   const channels: number = shape[1];
   const inHeight: number = shape[2];
   const inWidth: number = shape[3];
@@ -34,7 +41,8 @@ export const runMaxPool2dForwardBuffer = async (
   input: GpuBufferRef,
   shape: readonly [number, number, number, number],
 ): Promise<GpuBufferRef> => {
-  const { channels, inHeight, inWidth, outHeight, outWidth } = getMaxPoolDims(shape);
+  const { channels, inHeight, inWidth, outHeight, outWidth } =
+    getMaxPoolDims(shape);
   const gpuDevice = getGpuDevice();
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
   const outCount: number = channels * outHeight * outWidth;
@@ -68,13 +76,16 @@ export const runMaxPool2dForward = async (
   ) => Promise<Float32Array>,
   input: Float32Array,
   shape: readonly [number, number, number, number],
-  _BUFFER_USAGE_UNIFORM_COPY_DST: number,
 ): Promise<Float32Array> => {
   const inputBuffer = uploadToOwnedBuffer(getGpuDevice(), input);
   const outputBuffer = await runMaxPool2dForwardBuffer(inputBuffer, shape);
   const { channels, outHeight, outWidth } = getMaxPoolDims(shape);
   const outCount = channels * outHeight * outWidth;
-  const output = await readGpuBufferToArray(getGpuDevice(), outputBuffer.buffer, outCount);
+  const output = await readGpuBufferToArray(
+    getGpuDevice(),
+    outputBuffer.buffer,
+    outCount,
+  );
   releaseOwnedBuffer(inputBuffer);
   releaseOwnedBuffer(outputBuffer);
   return output;
@@ -86,7 +97,8 @@ export const runMaxPool2dBackwardBuffer = async (
   gradOut: GpuBufferRef,
   useScatter: boolean = false,
 ): Promise<GpuBufferRef> => {
-  const { channels, inHeight, inWidth, outHeight, outWidth } = getMaxPoolDims(shape);
+  const { channels, inHeight, inWidth, outHeight, outWidth } =
+    getMaxPoolDims(shape);
   const gpuDevice = getGpuDevice();
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
   const uniformBuffer: GPUBuffer = gpuDevice.createBuffer({
@@ -96,7 +108,16 @@ export const runMaxPool2dBackwardBuffer = async (
   gpuDevice.queue.writeBuffer(
     uniformBuffer,
     0,
-    new Uint32Array([channels, inHeight, inWidth, outHeight, outWidth, 0, 0, 0]),
+    new Uint32Array([
+      channels,
+      inHeight,
+      inWidth,
+      outHeight,
+      outWidth,
+      0,
+      0,
+      0,
+    ]),
   );
   if (!useScatter) {
     return ownedBuffer(
@@ -155,8 +176,6 @@ export const runMaxPool2dBackward = async (
   input: Float32Array,
   shape: readonly [number, number, number, number],
   gradOut: Float32Array,
-  _BUFFER_USAGE_STORAGE_COPY_DST: number,
-  _BUFFER_USAGE_UNIFORM_COPY_DST: number,
 ): Promise<Float32Array> => {
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
   const inputBuffer = uploadToOwnedBuffer(gpuDevice, input);
@@ -166,7 +185,11 @@ export const runMaxPool2dBackward = async (
     shape,
     gradOutBuffer,
   );
-  const output = await readGpuBufferToArray(gpuDevice, outputBuffer.buffer, input.length);
+  const output = await readGpuBufferToArray(
+    gpuDevice,
+    outputBuffer.buffer,
+    input.length,
+  );
   releaseOwnedBuffer(inputBuffer);
   releaseOwnedBuffer(gradOutBuffer);
   releaseOwnedBuffer(outputBuffer);

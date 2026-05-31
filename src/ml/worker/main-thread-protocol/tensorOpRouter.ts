@@ -94,7 +94,6 @@ export const routeTensorOp = async (
         runUnary,
         input.values,
         input.shape,
-        BUFFER_USAGE_UNIFORM_COPY_DST,
       );
       sendTensorOpResult(payload.id, { values: output });
       return;
@@ -108,8 +107,6 @@ export const routeTensorOp = async (
         input.shape,
         payload.mean,
         payload.std,
-        BUFFER_USAGE_STORAGE_COPY_DST,
-        BUFFER_USAGE_UNIFORM_COPY_DST,
       );
       sendTensorOpResult(payload.id, { values: output });
       return;
@@ -126,7 +123,6 @@ export const routeTensorOp = async (
         runUnary,
         input.values,
         input.shape,
-        BUFFER_USAGE_UNIFORM_COPY_DST,
       );
       sendTensorOpResult(payload.id, { values: output });
       return;
@@ -184,8 +180,6 @@ export const routeTensorOp = async (
         input.values,
         input.shape,
         gradOut.values,
-        BUFFER_USAGE_STORAGE_COPY_DST,
-        BUFFER_USAGE_UNIFORM_COPY_DST,
       );
       sendTensorOpResult(payload.id, { values: gradIn });
       return;
@@ -201,8 +195,6 @@ export const routeTensorOp = async (
         gradOut.values,
         gradOut.shape,
         payload.std,
-        BUFFER_USAGE_STORAGE_COPY_DST,
-        BUFFER_USAGE_UNIFORM_COPY_DST,
       );
       sendTensorOpResult(payload.id, { values: gradIn });
       return;
@@ -232,7 +224,6 @@ export const routeTensorOp = async (
         runUnary,
         input.values,
         target.values,
-        BUFFER_USAGE_STORAGE_COPY_DST,
       );
       const contentWeight: number = payload.contentWeight ?? 1;
       const weightedGradIn =
@@ -260,8 +251,6 @@ export const routeTensorOp = async (
         input.values,
         input.shape,
         gradOut.values,
-        BUFFER_USAGE_STORAGE_COPY_DST,
-        BUFFER_USAGE_UNIFORM_COPY_DST,
       );
       sendTensorOpResult(payload.id, { values: gradIn });
       return;
@@ -275,8 +264,6 @@ export const routeTensorOp = async (
         input.values,
         input.shape,
         target.values,
-        BUFFER_USAGE_STORAGE_COPY_DST,
-        BUFFER_USAGE_UNIFORM_COPY_DST,
       );
       const styleWeight: number = payload.styleWeight ?? 1;
       const weightedGradIn =
@@ -300,14 +287,12 @@ export const routeTensorOp = async (
         runUnary,
         input.values,
         input.shape,
-        BUFFER_USAGE_UNIFORM_COPY_DST,
       );
       const targetGram = await runGramMatrix(
         getGpuDevice(),
         runUnary,
         target.values,
         target.shape,
-        BUFFER_USAGE_UNIFORM_COPY_DST,
       );
       const mse = await runMse(
         getGpuDevice(),
