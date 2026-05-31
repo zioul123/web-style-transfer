@@ -1,8 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
-  testDir: "./tests",
-  testIgnore: ["**/benchmarks/**"],
+  testDir: "./benchmarks",
   webServer: {
     command: "npm run dev -- --host 127.0.0.1 --port 4173",
     env: {

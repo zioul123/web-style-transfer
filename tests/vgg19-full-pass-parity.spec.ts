@@ -5,7 +5,7 @@ import {
 } from "../src/ml/constants/vgg19";
 import { gotoStableApp } from "./helpers/appPage";
 
-test("phase 3 full vgg19 pass parity through conv5_1 style + relu4_2 content losses", async ({
+test("vgg19 full pass matches conv5_1 style and relu4_2 content losses", async ({
   page,
 }) => {
   test.setTimeout(300000);

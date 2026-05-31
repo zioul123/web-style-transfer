@@ -214,10 +214,9 @@ Playwright is used for integration, worker, and WebGPU parity coverage. The suit
 - Full phase-3 forward/loss parity checks when fixtures are present.
 - Backward parity checks with committed phase-4 fixture data.
 - Full style-transfer endpoint checks when optional fixtures/model packs are present.
-- LBFGS and benchmark utility tests.
-- Kernel-lab smoke tests when optional benchmark fixtures are present.
+- LBFGS utility tests in the default correctness suite.
 
-The tests are designed to skip optional large-fixture paths rather than fail a fresh checkout.
+Performance-oriented benchmark specs, including pack-acceptance threshold helpers and kernel-lab smoke checks, live under `benchmarks/` and run with `npm run benchmark` instead of default CI. The tests are designed to skip optional large-fixture paths rather than fail a fresh checkout.
 
 ## Known follow-ups
 

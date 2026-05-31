@@ -55,7 +55,7 @@ const normExpected = [
   20.285715103149414, -26.589284896850586, 24.75, -31.053569793701172,
 ];
 
-test("phase 2 conv/relu/pool/normalize parity against pytorch references", async ({
+test("vgg ops match pytorch references for conv/relu/pool/normalize", async ({
   page,
 }) => {
   await gotoStableApp(page);
