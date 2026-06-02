@@ -89,6 +89,8 @@ type KernelLabRow = {
 
 type MetricSummary = { mean: number; p50: number; p95: number };
 
+type PackSkippedRow = { pack: VggPackName; reason: string };
+
 type BenchmarkRunSummary = {
   runs: number;
   elapsedMs: MetricSummary;
@@ -265,6 +267,9 @@ export const BenchmarkApp = (): ReactElement => {
   const [packAcceptance, setPackAcceptance] = useState<
     PackAcceptanceRow[] | null
   >(null);
+  const [packSkippedRows, setPackSkippedRows] = useState<
+    PackSkippedRow[] | null
+  >(null);
   const [kernelLabRows, setKernelLabRows] = useState<KernelLabRow[] | null>(
     null,
   );
@@ -297,6 +302,7 @@ export const BenchmarkApp = (): ReactElement => {
     setSummary(null);
     setPackComparison(null);
     setPackAcceptance(null);
+    setPackSkippedRows(null);
     setKernelLabRows(null);
   };
 
@@ -622,7 +628,7 @@ export const BenchmarkApp = (): ReactElement => {
     );
     await initializeWorker(worker);
     const comparisonRows: PackComparisonRow[] = [];
-    const skippedPacks: string[] = [];
+    const skippedPacks: PackSkippedRow[] = [];
 
     for (const option of VGG_PACK_OPTIONS) {
       const pack = option.name;
@@ -631,9 +637,10 @@ export const BenchmarkApp = (): ReactElement => {
       try {
         weightsResult = await loadManifestWeights(pack);
       } catch (error) {
-        skippedPacks.push(
-          `${pack}: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        skippedPacks.push({
+          pack,
+          reason: error instanceof Error ? error.message : String(error),
+        });
         continue;
       }
 
@@ -671,9 +678,13 @@ export const BenchmarkApp = (): ReactElement => {
       });
     }
 
+    setPackSkippedRows(skippedPacks);
     if (!comparisonRows.some((row) => row.pack === "fp32")) {
+      const skippedSummary = skippedPacks
+        .map((row) => `${row.pack}: ${row.reason}`)
+        .join("; ");
       throw new Error(
-        `Pack acceptance requires an available fp32 baseline. Skipped: ${skippedPacks.join("; ")}`,
+        `Pack acceptance requires an available fp32 baseline. Skipped: ${skippedSummary}`,
       );
     }
     setPackComparison(comparisonRows);
@@ -825,7 +836,7 @@ export const BenchmarkApp = (): ReactElement => {
             }}
             type="button"
           >
-            Full style transfer
+            Full pipeline timing
           </button>
           <button
             className={`px-4 py-2 ${activeTab === "first-pool" ? "bg-emerald-500 text-black" : "bg-slate-900 text-slate-200"}`}
@@ -878,6 +889,11 @@ export const BenchmarkApp = (): ReactElement => {
         </section>
       ) : activeTab === "full-style" ? (
         <section className="grid gap-3 rounded border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
+          <p className="text-sm text-slate-300 md:col-span-3">
+            Full pipeline timing runs the style-transfer pipeline with the first
+            available quantized pack. Use Kernel speed for kernel-setting
+            comparisons and Pack acceptance for fp32-vs-pack checks.
+          </p>
           <label className="flex flex-col gap-1">
             Steps
             <input
@@ -1200,6 +1216,18 @@ export const BenchmarkApp = (): ReactElement => {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+        {packSkippedRows === null || packSkippedRows.length === 0 ? null : (
+          <div className="mt-4 rounded border border-amber-500/40 bg-amber-950/30 p-3 text-sm text-amber-100">
+            <h3 className="mb-2 font-semibold">Skipped packs</h3>
+            <ul className="space-y-1">
+              {packSkippedRows.map((row) => (
+                <li key={row.pack}>
+                  <span className="font-medium">{row.pack}</span>: {row.reason}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
         {packAcceptance === null ? null : (
