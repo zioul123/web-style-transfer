@@ -60,10 +60,9 @@ This is the main seam for future UI/component extraction.
 
 The benchmark route is selected when the path after the Vite base starts with `/benchmark`. It provides:
 
-- First-pool optimization benchmarks.
-- Full-style-transfer benchmark runs.
+- Kernel-lab variants for experimental optimization flags and speed comparisons.
 - Model-pack comparison and acceptance helpers.
-- Kernel-lab variants for experimental optimization flags.
+- First-pool optimization benchmarks.
 
 Some benchmark flows require optional fixtures or model packs that are not committed by default.
 

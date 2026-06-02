@@ -52,11 +52,7 @@ type Phase3FullPassFixture = {
   contentLayerIndex: number;
 };
 
-type BenchmarkTab =
-  | "kernel-lab"
-  | "pack-acceptance"
-  | "full-style"
-  | "first-pool";
+type BenchmarkTab = "kernel-lab" | "pack-acceptance" | "first-pool";
 
 const BENCHMARK_QUANTIZED_PACK_PRIORITY: readonly VggPackName[] = [
   "int4log-experimental",
@@ -290,11 +286,10 @@ export const BenchmarkApp = (): ReactElement => {
     useState<boolean>(false);
   const [debugReadbackGrad, setDebugReadbackGrad] = useState<boolean>(false);
 
-  const [fullSteps, setFullSteps] = useState<number>(1);
-  const [fullRuns, setFullRuns] = useState<number>(3);
+  const [fullSteps] = useState<number>(1);
   const [fullLearningRate, setFullLearningRate] = useState<number>(1e-5);
-  const [fullContentWeight, setFullContentWeight] = useState<number>(1);
-  const [fullStyleWeight, setFullStyleWeight] = useState<number>(1);
+  const [fullContentWeight] = useState<number>(1);
+  const [fullStyleWeight] = useState<number>(1);
   const [kernelLabSteps, setKernelLabSteps] = useState<number>(1);
 
   const clearResults = (): void => {
@@ -691,81 +686,6 @@ export const BenchmarkApp = (): ReactElement => {
     setPackAcceptance(buildPackAcceptanceRows(comparisonRows));
   };
 
-  const runFullStyleBenchmark = async (worker: Worker): Promise<void> => {
-    setStatus("Loading full style-transfer fixtures...");
-    const fixture = await loadJson<Phase3FullPassFixture>(
-      assetUrl("vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json"),
-    );
-    setStatus("Loading quantized VGG19 weights for full style benchmark...");
-    const weightsResult = await loadFirstAvailableManifestWeights(
-      BENCHMARK_QUANTIZED_PACK_PRIORITY,
-    );
-    const resolvedWeights = weightsResult.weights;
-    await initializeWorker(worker);
-    const cappedRuns = Math.max(1, Math.floor(fullRuns));
-    const runStats: WorkerRunStats[] = [];
-    let lastResult: BenchmarkResult | null = null;
-
-    for (let runIndex = 0; runIndex < cappedRuns; runIndex += 1) {
-      setStatus(
-        `Running full style-transfer benchmark (${runIndex + 1}/${cappedRuns})...`,
-      );
-      const optimized = await askWorker(worker, {
-        type: "run-style-transfer",
-        id: `benchmark-full-style-${runIndex}`,
-        optimizer: "sgd",
-        inputShape: fixture.inputShape,
-        inputImageValues: fixture.inputImageValues,
-        contentImageValues: fixture.contentImageValues,
-        styleImageValues: fixture.styleImageValues,
-        mean: fixture.mean,
-        std: fixture.std,
-        styleLayerIndices: fixture.styleLayerIndices,
-        contentLayerIndex: fixture.contentLayerIndex,
-        weights: resolvedWeights,
-        contentWeight: fullContentWeight,
-        styleWeight: fullStyleWeight,
-        learningRate: fullLearningRate,
-        steps: fullSteps,
-      });
-      if (optimized.type !== "run-style-transfer-result") {
-        throw new Error("Unexpected full style-transfer run response");
-      }
-      if (!optimized.ok) throw new Error(optimized.message);
-      lastResult = {
-        losses: optimized.losses,
-        stats: optimized.stats,
-        pack: weightsResult.pack,
-      };
-      runStats.push(optimized.stats);
-    }
-
-    if (lastResult !== null) setResult(lastResult);
-    if (runStats.length > 0) {
-      const finalStats = runStats[runStats.length - 1];
-      const finalLoss = lastResult?.losses.at(-1) ?? 0;
-      setPackComparison([
-        {
-          pack: weightsResult.pack,
-          elapsedMs: finalStats.elapsedMs,
-          avgStepMs: finalStats.avgStepMs,
-          finalLoss,
-          downloadSizeBytes: weightsResult.stats.downloadSizeBytes,
-        },
-      ]);
-      const perf = performance as Performance & {
-        memory?: { usedJSHeapSize: number };
-      };
-      setSummary({
-        ...summarizeRuns(runStats),
-        downloadSizeBytes: weightsResult.stats.downloadSizeBytes,
-        decodeLoadMs: weightsResult.stats.decodeLoadMs,
-        firstIterationMs: runStats[0].avgStepMs,
-        peakMemoryBytes: perf.memory?.usedJSHeapSize,
-      });
-    }
-  };
-
   const runBenchmark = async (): Promise<void> => {
     setIsRunning(true);
     clearResults();
@@ -780,8 +700,6 @@ export const BenchmarkApp = (): ReactElement => {
         await runKernelLabBenchmark(worker);
       } else if (activeTab === "pack-acceptance") {
         await runPackAcceptanceBenchmark(worker);
-      } else if (activeTab === "full-style") {
-        await runFullStyleBenchmark(worker);
       } else {
         await runFirstPoolBenchmark(worker);
       }
@@ -827,16 +745,6 @@ export const BenchmarkApp = (): ReactElement => {
             type="button"
           >
             Pack acceptance
-          </button>
-          <button
-            className={`px-4 py-2 ${activeTab === "full-style" ? "bg-emerald-500 text-black" : "bg-slate-900 text-slate-200"}`}
-            onClick={() => {
-              setActiveTab("full-style");
-              clearResults();
-            }}
-            type="button"
-          >
-            Full pipeline timing
           </button>
           <button
             className={`px-4 py-2 ${activeTab === "first-pool" ? "bg-emerald-500 text-black" : "bg-slate-900 text-slate-200"}`}
@@ -886,63 +794,6 @@ export const BenchmarkApp = (): ReactElement => {
           compares final loss against the fp32 baseline. It is separate from
           kernel speed measurements so the default benchmark does not download
           fp32 weights.
-        </section>
-      ) : activeTab === "full-style" ? (
-        <section className="grid gap-3 rounded border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
-          <p className="text-sm text-slate-300 md:col-span-3">
-            Full pipeline timing runs the style-transfer pipeline with the first
-            available quantized pack. Use Kernel speed for kernel-setting
-            comparisons and Pack acceptance for fp32-vs-pack checks.
-          </p>
-          <label className="flex flex-col gap-1">
-            Steps
-            <input
-              min={1}
-              type="number"
-              value={fullSteps}
-              onChange={(event) => setFullSteps(Number(event.target.value))}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            Runs
-            <input
-              min={1}
-              type="number"
-              value={fullRuns}
-              onChange={(event) => setFullRuns(Number(event.target.value))}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            Learning rate
-            <input
-              step={0.00001}
-              type="number"
-              value={fullLearningRate}
-              onChange={(event) =>
-                setFullLearningRate(Number(event.target.value))
-              }
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            Content weight
-            <input
-              type="number"
-              value={fullContentWeight}
-              onChange={(event) =>
-                setFullContentWeight(Number(event.target.value))
-              }
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            Style weight
-            <input
-              type="number"
-              value={fullStyleWeight}
-              onChange={(event) =>
-                setFullStyleWeight(Number(event.target.value))
-              }
-            />
-          </label>
         </section>
       ) : (
         <section className="grid gap-3 rounded border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
@@ -1172,9 +1023,7 @@ export const BenchmarkApp = (): ReactElement => {
         {packComparison === null ? null : (
           <div className="mt-6 overflow-x-auto">
             <h3 className="mb-2 text-sm font-semibold text-slate-200">
-              {activeTab === "pack-acceptance"
-                ? "Pack acceptance comparison"
-                : "Benchmark weight pack (first available quantized)"}
+              Pack acceptance comparison
             </h3>
             <table className="w-full min-w-[620px] border-collapse text-left text-sm">
               <thead className="text-slate-300">
