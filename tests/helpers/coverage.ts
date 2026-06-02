@@ -1,14 +1,13 @@
 import { expect, test as base } from "@playwright/test";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { WorkerGpuDispatchCoverageRecord } from "../../src/types";
-
-type CoverageWorkerClientEntry = {
-  worker: Worker;
+type WorkerGpuDispatchCoverageRecord = {
+  label: string;
+  workgroups: readonly [number, number, number];
+  count: number;
 };
 
 type CoverageBrowserWindow = Window & {
-  __styleTransferWorkerClients?: Record<string, CoverageWorkerClientEntry>;
   __styleTransferDispatchCoverage?: WorkerGpuDispatchCoverageRecord[];
 };
 
@@ -36,46 +35,12 @@ const sanitizeSegment = (value: string): string =>
 const getArtifactPath = (testId: string): string =>
   path.join(rawCoverageDir, `${sanitizeSegment(testId)}.json`);
 
-const collectRegisteredWorkerDispatchCoverage = async (
+const collectDispatchCoverage = async (
   page: import("@playwright/test").Page,
 ): Promise<WorkerGpuDispatchCoverageRecord[]> =>
-  page.evaluate(async () => {
+  page.evaluate(() => {
     const browserWindow: CoverageBrowserWindow = window;
-    const records: WorkerGpuDispatchCoverageRecord[] = [
-      ...(browserWindow.__styleTransferDispatchCoverage ?? []),
-    ];
-    const entries = Object.entries(
-      browserWindow.__styleTransferWorkerClients ?? {},
-    );
-    await Promise.all(
-      entries.map(
-        async ([clientId, entry]): Promise<void> =>
-          new Promise<void>((resolve) => {
-            const requestId = `coverage-${clientId}-${Date.now()}`;
-            const timeoutId = window.setTimeout(resolve, 500);
-            const handler = (event: MessageEvent): void => {
-              if (
-                event.data?.type !== "gpu-dispatch-coverage-result" ||
-                event.data.id !== requestId
-              ) {
-                return;
-              }
-              window.clearTimeout(timeoutId);
-              entry.worker.removeEventListener("message", handler);
-              if (Array.isArray(event.data.records)) {
-                records.push(...event.data.records);
-              }
-              resolve();
-            };
-            entry.worker.addEventListener("message", handler);
-            entry.worker.postMessage({
-              type: "get-gpu-dispatch-coverage",
-              id: requestId,
-            });
-          }),
-      ),
-    );
-    return records;
+    return browserWindow.__styleTransferDispatchCoverage ?? [];
   });
 
 export const test = base.extend<{ page: import("@playwright/test").Page }>({
@@ -87,7 +52,7 @@ export const test = base.extend<{ page: import("@playwright/test").Page }>({
     } finally {
       const [js, gpuDispatch] = await Promise.all([
         page.coverage.stopJSCoverage(),
-        collectRegisteredWorkerDispatchCoverage(page),
+        collectDispatchCoverage(page),
       ]);
       const artifact: TestCoverageArtifact = {
         testId: testInfo.testId,

@@ -1,8 +1,4 @@
-import type {
-  WorkerGpuDispatchCoverageRecord,
-  WorkerRequest,
-  WorkerResponse,
-} from "../../src/types";
+import type { WorkerRequest, WorkerResponse } from "../../src/types";
 
 export type BrowserStyleTransferWorkerClient = {
   initWebGpu: (id?: string) => Promise<WorkerResponse>;
@@ -12,9 +8,47 @@ export type BrowserStyleTransferWorkerClient = {
   dispose: () => Promise<void>;
 };
 
+type WorkerGpuDispatchCoverageRecord = {
+  label: string;
+  workgroups: readonly [number, number, number];
+  count: number;
+};
+
+type WorkerGpuDispatchCoverageMessage = {
+  type: "__gpu-dispatch-coverage";
+  label: string;
+  workgroups: readonly [number, number, number];
+};
+
 type BrowserWindowWithDispatchCoverage = Window & {
   __styleTransferDispatchCoverage?: WorkerGpuDispatchCoverageRecord[];
 };
+
+const recordGpuDispatchCoverage = (
+  message: WorkerGpuDispatchCoverageMessage,
+): void => {
+  const browserWindow: BrowserWindowWithDispatchCoverage = window;
+  browserWindow.__styleTransferDispatchCoverage ??= [];
+  const existing = browserWindow.__styleTransferDispatchCoverage.find(
+    (record): boolean =>
+      record.label === message.label &&
+      record.workgroups.join("x") === message.workgroups.join("x"),
+  );
+  if (existing !== undefined) {
+    existing.count += 1;
+    return;
+  }
+  browserWindow.__styleTransferDispatchCoverage.push({
+    label: message.label,
+    workgroups: message.workgroups,
+    count: 1,
+  });
+};
+
+const isGpuDispatchCoverageMessage = (
+  message: WorkerResponse | WorkerGpuDispatchCoverageMessage,
+): message is WorkerGpuDispatchCoverageMessage =>
+  message.type === "__gpu-dispatch-coverage";
 
 const makeRequestId = (prefix: string): string =>
   `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -29,13 +63,29 @@ export const createBrowserStyleTransferWorkerClient =
       { type: "module" },
     );
 
+    worker.addEventListener(
+      "message",
+      (
+        event: MessageEvent<WorkerResponse | WorkerGpuDispatchCoverageMessage>,
+      ): void => {
+        if (isGpuDispatchCoverageMessage(event.data)) {
+          recordGpuDispatchCoverage(event.data);
+        }
+      },
+    );
+
     const ask = (
       payload: WorkerRequest | Record<string, unknown>,
     ): Promise<WorkerResponse> =>
       new Promise((resolve) => {
         const expectedId =
           typeof payload.id === "string" ? payload.id : undefined;
-        const handler = (event: MessageEvent<WorkerResponse>): void => {
+        const handler = (
+          event: MessageEvent<
+            WorkerResponse | WorkerGpuDispatchCoverageMessage
+          >,
+        ): void => {
+          if (isGpuDispatchCoverageMessage(event.data)) return;
           if (
             expectedId === undefined ||
             event.data.id === expectedId ||
@@ -53,40 +103,8 @@ export const createBrowserStyleTransferWorkerClient =
       id = makeRequestId("init-webgpu"),
     ): Promise<WorkerResponse> => ask({ type: "init-webgpu", id });
 
-    const collectCoverage = async (): Promise<void> => {
-      const requestId = makeRequestId("dispose-coverage");
-      const records = await new Promise<WorkerGpuDispatchCoverageRecord[]>(
-        (resolve) => {
-          const timeoutId = window.setTimeout(() => resolve([]), 500);
-          const handler = (event: MessageEvent<WorkerResponse>): void => {
-            if (
-              event.data.type !== "gpu-dispatch-coverage-result" ||
-              event.data.id !== requestId
-            ) {
-              return;
-            }
-            window.clearTimeout(timeoutId);
-            worker.removeEventListener("message", handler);
-            resolve(event.data.records);
-          };
-          worker.addEventListener("message", handler);
-          worker.postMessage({
-            type: "get-gpu-dispatch-coverage",
-            id: requestId,
-          });
-        },
-      );
-      const browserWindow: BrowserWindowWithDispatchCoverage = window;
-      browserWindow.__styleTransferDispatchCoverage ??= [];
-      browserWindow.__styleTransferDispatchCoverage.push(...records);
-    };
-
     const dispose = async (): Promise<void> => {
-      try {
-        await collectCoverage();
-      } finally {
-        worker.terminate();
-      }
+      worker.terminate();
     };
 
     return { initWebGpu, ask, dispose };

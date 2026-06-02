@@ -1,103 +1,13 @@
 /// <reference lib="webworker" />
 
-export type GpuDispatchRecord = {
+type DispatchRecord = {
+  type: "__gpu-dispatch-coverage";
   label: string;
   workgroups: readonly [number, number, number];
-  count: number;
-};
-
-export type GpuDispatchCoverageSnapshot = {
-  enabled: boolean;
-  records: GpuDispatchRecord[];
-};
-
-type DispatchRecorderState = {
-  enabled: boolean;
-  patched: boolean;
-  records: Map<string, GpuDispatchRecord>;
-  patchedDevices: WeakSet<GPUDevice>;
 };
 
 type CoverageComputePassEncoder = GPUComputePassEncoder & {
-  __styleTransferCurrentPipelineLabel?: string;
-};
-
-type DispatchRecorderGlobal = typeof globalThis & {
-  __styleTransferDispatchRecorder?: DispatchRecorderState;
-};
-
-const getRecorderGlobal = (): DispatchRecorderGlobal => globalThis;
-
-const makeRecordKey = (
-  label: string,
-  workgroups: readonly [number, number, number],
-): string => `${label}|${workgroups[0]}x${workgroups[1]}x${workgroups[2]}`;
-
-const getRecorderState = (): DispatchRecorderState => {
-  const recorderGlobal = getRecorderGlobal();
-  recorderGlobal.__styleTransferDispatchRecorder ??= {
-    enabled: false,
-    patched: false,
-    records: new Map<string, GpuDispatchRecord>(),
-    patchedDevices: new WeakSet<GPUDevice>(),
-  };
-  return recorderGlobal.__styleTransferDispatchRecorder;
-};
-
-const recordDispatch = (
-  state: DispatchRecorderState,
-  label: string,
-  workgroups: readonly [number, number, number],
-): void => {
-  const key = makeRecordKey(label, workgroups);
-  const existing = state.records.get(key);
-  if (existing !== undefined) {
-    state.records.set(key, { ...existing, count: existing.count + 1 });
-    return;
-  }
-  state.records.set(key, { label, workgroups, count: 1 });
-};
-
-const patchGpuComputePassPrototype = (state: DispatchRecorderState): void => {
-  if (state.patched) return;
-  if (typeof GPUComputePassEncoder === "undefined") return;
-
-  const originalSetPipeline = GPUComputePassEncoder.prototype.setPipeline;
-  GPUComputePassEncoder.prototype.setPipeline = function setPipelineWithLabel(
-    this: CoverageComputePassEncoder,
-    pipeline: GPUComputePipeline,
-  ): void {
-    this.__styleTransferCurrentPipelineLabel =
-      pipeline.label || "unlabeled-pipeline";
-    originalSetPipeline.call(this, pipeline);
-  };
-
-  const originalDispatchWorkgroups =
-    GPUComputePassEncoder.prototype.dispatchWorkgroups;
-  GPUComputePassEncoder.prototype.dispatchWorkgroups =
-    function dispatchWorkgroupsWithCoverage(
-      this: CoverageComputePassEncoder,
-      workgroupCountX: number,
-      workgroupCountY: number = 1,
-      workgroupCountZ: number = 1,
-    ): void {
-      const latestState = getRecorderState();
-      if (latestState.enabled) {
-        recordDispatch(
-          latestState,
-          this.__styleTransferCurrentPipelineLabel ?? "pipeline-not-set",
-          [workgroupCountX, workgroupCountY, workgroupCountZ],
-        );
-      }
-      originalDispatchWorkgroups.call(
-        this,
-        workgroupCountX,
-        workgroupCountY,
-        workgroupCountZ,
-      );
-    };
-
-  state.patched = true;
+  __styleTransferPipelineLabel?: string;
 };
 
 const getPipelineLabelFromStack = (): string => {
@@ -116,45 +26,65 @@ const getPipelineLabelFromStack = (): string => {
   return match[2] === undefined ? match[1] : `${match[1]}:${match[2]}`;
 };
 
-export const patchGpuDeviceForDispatchRecording = (device: GPUDevice): void => {
-  const state = getRecorderState();
-  if (state.patchedDevices.has(device)) return;
-  const originalCreateComputePipeline =
-    device.createComputePipeline.bind(device);
-  device.createComputePipeline = (
-    descriptor: GPUComputePipelineDescriptor,
-  ): GPUComputePipeline => {
-    descriptor.label ||= getPipelineLabelFromStack();
-    return originalCreateComputePipeline(descriptor);
+const postDispatchRecord = (
+  label: string,
+  workgroups: readonly [number, number, number],
+): void => {
+  const record: DispatchRecord = {
+    type: "__gpu-dispatch-coverage",
+    label,
+    workgroups,
   };
-  state.patchedDevices.add(device);
+  self.postMessage(record);
 };
 
-export const enableGpuDispatchRecording = (): void => {
-  const state = getRecorderState();
-  state.enabled = true;
-  patchGpuComputePassPrototype(state);
-};
+export const installGpuDispatchRecorder = (): void => {
+  if (typeof GPUComputePassEncoder === "undefined") return;
 
-export const resetGpuDispatchRecording = (): void => {
-  const state = getRecorderState();
-  state.records.clear();
-};
+  const originalSetPipeline = GPUComputePassEncoder.prototype.setPipeline;
+  GPUComputePassEncoder.prototype.setPipeline = function setPipelineWithLabel(
+    this: CoverageComputePassEncoder,
+    pipeline: GPUComputePipeline,
+  ): void {
+    this.__styleTransferPipelineLabel = pipeline.label || "unlabeled-pipeline";
+    originalSetPipeline.call(this, pipeline);
+  };
 
-export const getGpuDispatchCoverageSnapshot =
-  (): GpuDispatchCoverageSnapshot => {
-    const state = getRecorderState();
-    return {
-      enabled: state.enabled,
-      records: Array.from(state.records.values()).sort((a, b) =>
-        a.label.localeCompare(b.label),
-      ),
+  const originalDispatchWorkgroups =
+    GPUComputePassEncoder.prototype.dispatchWorkgroups;
+  GPUComputePassEncoder.prototype.dispatchWorkgroups =
+    function dispatchWorkgroupsWithCoverage(
+      this: CoverageComputePassEncoder,
+      workgroupCountX: number,
+      workgroupCountY: number = 1,
+      workgroupCountZ: number = 1,
+    ): void {
+      postDispatchRecord(
+        this.__styleTransferPipelineLabel ?? "pipeline-not-set",
+        [workgroupCountX, workgroupCountY, workgroupCountZ],
+      );
+      originalDispatchWorkgroups.call(
+        this,
+        workgroupCountX,
+        workgroupCountY,
+        workgroupCountZ,
+      );
     };
-  };
 
-export const maybeEnableGpuDispatchRecordingFromLocation = (): void => {
-  const scopeLocation = self.location;
-  if (scopeLocation.search.includes("dispatchCoverage=1")) {
-    enableGpuDispatchRecording();
-  }
+  const originalRequestDevice = GPUAdapter.prototype.requestDevice;
+  GPUAdapter.prototype.requestDevice = async function requestDeviceWithCoverage(
+    this: GPUAdapter,
+    descriptor?: GPUDeviceDescriptor,
+  ): Promise<GPUDevice> {
+    const device = await originalRequestDevice.call(this, descriptor);
+    const originalCreateComputePipeline =
+      device.createComputePipeline.bind(device);
+    device.createComputePipeline = (
+      pipelineDescriptor: GPUComputePipelineDescriptor,
+    ): GPUComputePipeline => {
+      pipelineDescriptor.label ||= getPipelineLabelFromStack();
+      return originalCreateComputePipeline(pipelineDescriptor);
+    };
+    return device;
+  };
 };

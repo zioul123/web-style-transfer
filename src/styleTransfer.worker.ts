@@ -1,7 +1,10 @@
 /// <reference lib="webworker" />
 
 import { mountMessageRouter } from "./ml/worker/main-thread-protocol/messageRouter";
-import { maybeEnableGpuDispatchRecordingFromLocation } from "./ml/worker/runtime/dispatchRecorder";
+import { installGpuDispatchRecorder } from "./ml/worker/runtime/dispatchRecorder";
 
-maybeEnableGpuDispatchRecordingFromLocation();
+if (self.location.search.includes("dispatchCoverage=1")) {
+  installGpuDispatchRecorder();
+}
+
 mountMessageRouter();

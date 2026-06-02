@@ -168,11 +168,12 @@ Do not commit generated large legacy weights or model packs unless they were alr
 `npm test` collects coverage artifacts automatically under `coverage/` while the Chromium Playwright suite runs. The generated outputs include:
 
 - `coverage/raw/*.json`: per-test Chromium JavaScript coverage plus test-only WebGPU dispatch records.
-- `coverage/coverage-summary.json`: machine-readable aggregate coverage summary.
-- `coverage/summary.md`: Markdown summary for quick review in terminals or CI artifacts.
-- `coverage/index.html`: a browsable HTML summary.
+- `coverage/index.html`: a small landing page linking to the generated reports.
+- `coverage/js/index.html`: Monocart's browsable Chromium/V8 JavaScript coverage report.
+- `coverage/coverage-summary.json`, `coverage/summary.md`, and `coverage/js/lcov.info`: machine-readable and text JavaScript coverage summaries.
+- `coverage/dispatch-summary.md` and `coverage/dispatch-summary.json`: GPU shader/path dispatch coverage summaries.
 
-You can regenerate the aggregate summary from existing raw artifacts without rerunning tests:
+To view the previous local run, open `coverage/index.html` in a browser, follow the JavaScript coverage link, and read `coverage/dispatch-summary.md` for GPU dispatch coverage. If you only have raw artifacts, regenerate the summaries without rerunning tests:
 
 ```bash
 npm run coverage:report
@@ -180,7 +181,7 @@ npm run coverage:report
 
 Coverage limitations are intentional:
 
-- JavaScript coverage is collected from Chromium/V8 through Playwright, so it is best used as a browser-integration signal rather than a cross-browser guarantee.
+- JavaScript coverage is collected from Chromium/V8 through Playwright and reported with `monocart-coverage-reports`, so it is best used as a browser-integration signal rather than a cross-browser guarantee.
 - Worker WebGPU shader coverage is reported as dispatched pipeline/path labels and workgroup counts. This shows which runtime/kernel paths tests exercised.
 - The report does **not** claim WGSL source-line coverage. Browser WebGPU APIs do not expose shader line execution coverage, so shader coverage should be read as dispatch coverage only.
 

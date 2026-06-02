@@ -7,8 +7,19 @@ import {
   type WorkerTensorOpErrorResponse,
   type WorkerTensorScalarOpResponse,
   type WorkerTensorVectorOpResponse,
-  type WorkerGpuDispatchCoverageRecord,
 } from "../../src/types";
+
+type WorkerGpuDispatchCoverageRecord = {
+  label: string;
+  workgroups: readonly [number, number, number];
+  count: number;
+};
+
+type WorkerGpuDispatchCoverageMessage = {
+  type: "__gpu-dispatch-coverage";
+  label: string;
+  workgroups: readonly [number, number, number];
+};
 
 type BrowserWorkerClientEntry = {
   worker: Worker;
@@ -41,15 +52,39 @@ export const createStyleTransferWorkerClient = async (
     ({ clientIdArg, registryName }) => {
       const browserWindow: BrowserWindowWithWorkerClients = window;
       browserWindow[registryName] ??= {};
-      browserWindow[registryName][clientIdArg] = {
-        worker: new Worker(
-          new URL(
-            "/src/styleTransfer.worker.ts?dispatchCoverage=1",
-            window.location.origin,
-          ),
-          { type: "module" },
+      const worker = new Worker(
+        new URL(
+          "/src/styleTransfer.worker.ts?dispatchCoverage=1",
+          window.location.origin,
         ),
-      };
+        { type: "module" },
+      );
+      worker.addEventListener(
+        "message",
+        (
+          event: MessageEvent<
+            WorkerResponse | WorkerGpuDispatchCoverageMessage
+          >,
+        ): void => {
+          if (event.data.type !== "__gpu-dispatch-coverage") return;
+          browserWindow.__styleTransferDispatchCoverage ??= [];
+          const existing = browserWindow.__styleTransferDispatchCoverage.find(
+            (record): boolean =>
+              record.label === event.data.label &&
+              record.workgroups.join("x") === event.data.workgroups.join("x"),
+          );
+          if (existing !== undefined) {
+            existing.count += 1;
+            return;
+          }
+          browserWindow.__styleTransferDispatchCoverage.push({
+            label: event.data.label,
+            workgroups: event.data.workgroups,
+            count: 1,
+          });
+        },
+      );
+      browserWindow[registryName][clientIdArg] = { worker };
     },
     { clientIdArg: clientId, registryName: workerClientRegistryName },
   );
@@ -68,7 +103,12 @@ export const createStyleTransferWorkerClient = async (
         return new Promise<WorkerResponse>((resolve) => {
           const expectedId =
             typeof payloadArg.id === "string" ? payloadArg.id : undefined;
-          const handler = (event: MessageEvent<WorkerResponse>): void => {
+          const handler = (
+            event: MessageEvent<
+              WorkerResponse | WorkerGpuDispatchCoverageMessage
+            >,
+          ): void => {
+            if (event.data.type === "__gpu-dispatch-coverage") return;
             if (
               expectedId === undefined ||
               event.data.id === expectedId ||
@@ -94,36 +134,10 @@ export const createStyleTransferWorkerClient = async (
 
   const dispose = async (): Promise<void> => {
     await page.evaluate(
-      async ({ clientIdArg, registryName }) => {
+      ({ clientIdArg, registryName }) => {
         const browserWindow: BrowserWindowWithWorkerClients = window;
         const entry = browserWindow[registryName]?.[clientIdArg];
         if (entry === undefined) return;
-        const requestId = `dispose-coverage-${clientIdArg}-${Date.now()}`;
-        const records = await new Promise<WorkerGpuDispatchCoverageRecord[]>(
-          (resolve) => {
-            const timeoutId = window.setTimeout(() => resolve([]), 500);
-            const handler = (event: MessageEvent): void => {
-              if (
-                event.data?.type !== "gpu-dispatch-coverage-result" ||
-                event.data.id !== requestId
-              ) {
-                return;
-              }
-              window.clearTimeout(timeoutId);
-              entry.worker.removeEventListener("message", handler);
-              resolve(
-                Array.isArray(event.data.records) ? event.data.records : [],
-              );
-            };
-            entry.worker.addEventListener("message", handler);
-            entry.worker.postMessage({
-              type: "get-gpu-dispatch-coverage",
-              id: requestId,
-            });
-          },
-        );
-        browserWindow.__styleTransferDispatchCoverage ??= [];
-        browserWindow.__styleTransferDispatchCoverage.push(...records);
         entry.worker.terminate();
         delete browserWindow[registryName]?.[clientIdArg];
       },

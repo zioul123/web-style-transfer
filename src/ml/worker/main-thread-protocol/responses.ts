@@ -1,5 +1,4 @@
 import type {
-  WorkerGpuDispatchCoverageRecord,
   WorkerResponse,
   WorkerRunStats,
   WorkerTensor,
@@ -85,26 +84,6 @@ export const sendTensorOpError = (
     ok: false,
     message: getErrorMessage(error, fallbackMessage),
   });
-};
-
-export const sendGpuDispatchCoverageResult = (
-  id: string,
-  snapshot: {
-    enabled: boolean;
-    records: WorkerGpuDispatchCoverageRecord[];
-  },
-): void => {
-  postResponse({
-    type: "gpu-dispatch-coverage-result",
-    id,
-    ok: true,
-    enabled: snapshot.enabled,
-    records: snapshot.records,
-  });
-};
-
-export const sendResetGpuDispatchCoverageResult = (id: string): void => {
-  postResponse({ type: "reset-gpu-dispatch-coverage-result", id, ok: true });
 };
 
 export const sendWebGpuInitResult = (

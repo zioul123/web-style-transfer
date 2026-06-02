@@ -1,6 +1,5 @@
 import { reusableBufferPool } from "../runtime/bufferPool";
 import { clearGpuDevice, setGpuDevice } from "../runtime/deviceState";
-import { patchGpuDeviceForDispatchRecording } from "../runtime/dispatchRecorder";
 import { sendWebGpuInitResult } from "./responses";
 
 export const initWebGpu = async (id: string): Promise<void> => {
@@ -22,7 +21,6 @@ export const initWebGpu = async (id: string): Promise<void> => {
   }
 
   const device = await adapter.requestDevice();
-  patchGpuDeviceForDispatchRecording(device);
   setGpuDevice(device);
   reusableBufferPool.clear();
   sendWebGpuInitResult(
