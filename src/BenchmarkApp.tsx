@@ -1,6 +1,7 @@
 import { useState, type ReactElement } from "react";
 import {
   buildPackAcceptanceRows,
+  type PackAcceptanceRow,
   type PackComparisonRow,
 } from "./features/style-transfer/benchmark/packAcceptance";
 import { assetUrl, vgg19ModelUrl } from "./shared/assetUrls";
@@ -51,7 +52,14 @@ type Phase3FullPassFixture = {
   contentLayerIndex: number;
 };
 
-type BenchmarkTab = "first-pool" | "full-style" | "kernel-lab";
+type BenchmarkTab = "kernel-lab" | "pack-acceptance" | "first-pool";
+
+const BENCHMARK_QUANTIZED_PACK_PRIORITY: readonly VggPackName[] = [
+  "int4log-experimental",
+  "int8-per-channel",
+  "int8log-per-channel",
+  "int4-experimental",
+];
 
 type BenchmarkStats = WorkerFirstPoolBenchmarkStats | WorkerRunStats;
 
@@ -76,6 +84,8 @@ type KernelLabRow = {
 };
 
 type MetricSummary = { mean: number; p50: number; p95: number };
+
+type PackSkippedRow = { pack: VggPackName; reason: string };
 
 type BenchmarkRunSummary = {
   runs: number;
@@ -242,7 +252,7 @@ const formatMetric = (metric: MetricSummary | undefined): string =>
     : `${metric.mean.toFixed(2)} / ${metric.p50.toFixed(2)} / ${metric.p95.toFixed(2)}`;
 
 export const BenchmarkApp = (): ReactElement => {
-  const [activeTab, setActiveTab] = useState<BenchmarkTab>("first-pool");
+  const [activeTab, setActiveTab] = useState<BenchmarkTab>("kernel-lab");
   const [status, setStatus] = useState<string>("Ready");
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [result, setResult] = useState<BenchmarkResult | null>(null);
@@ -250,11 +260,12 @@ export const BenchmarkApp = (): ReactElement => {
   const [packComparison, setPackComparison] = useState<
     PackComparisonRow[] | null
   >(null);
-  const [packAcceptance, setPackAcceptance] = useState<Array<{
-    pack: VggPackName;
-    verdict: "pass" | "fail";
-    reason: string;
-  }> | null>(null);
+  const [packAcceptance, setPackAcceptance] = useState<
+    PackAcceptanceRow[] | null
+  >(null);
+  const [packSkippedRows, setPackSkippedRows] = useState<
+    PackSkippedRow[] | null
+  >(null);
   const [kernelLabRows, setKernelLabRows] = useState<KernelLabRow[] | null>(
     null,
   );
@@ -275,11 +286,10 @@ export const BenchmarkApp = (): ReactElement => {
     useState<boolean>(false);
   const [debugReadbackGrad, setDebugReadbackGrad] = useState<boolean>(false);
 
-  const [fullSteps, setFullSteps] = useState<number>(1);
-  const [fullRuns, setFullRuns] = useState<number>(3);
+  const [fullSteps] = useState<number>(1);
   const [fullLearningRate, setFullLearningRate] = useState<number>(1e-5);
-  const [fullContentWeight, setFullContentWeight] = useState<number>(1);
-  const [fullStyleWeight, setFullStyleWeight] = useState<number>(1);
+  const [fullContentWeight] = useState<number>(1);
+  const [fullStyleWeight] = useState<number>(1);
   const [kernelLabSteps, setKernelLabSteps] = useState<number>(1);
 
   const clearResults = (): void => {
@@ -287,6 +297,7 @@ export const BenchmarkApp = (): ReactElement => {
     setSummary(null);
     setPackComparison(null);
     setPackAcceptance(null);
+    setPackSkippedRows(null);
     setKernelLabRows(null);
   };
 
@@ -295,10 +306,9 @@ export const BenchmarkApp = (): ReactElement => {
     const fixture = await loadJson<Phase3FullPassFixture>(
       assetUrl("vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json"),
     );
-    const baselineWeights = await loadFirstAvailableManifestWeights([
-      "fp32",
-      "int8-per-channel",
-    ]);
+    const baselineWeights = await loadFirstAvailableManifestWeights(
+      BENCHMARK_QUANTIZED_PACK_PRIORITY,
+    );
     const weights = baselineWeights.weights;
     const baselineName = kernelLabBaselineName(baselineWeights.pack);
     await initializeWorker(worker);
@@ -606,79 +616,33 @@ export const BenchmarkApp = (): ReactElement => {
     if (runStats.length > 0) setSummary(summarizeRuns(runStats));
   };
 
-  const runFullStyleBenchmark = async (worker: Worker): Promise<void> => {
-    setStatus("Loading full style-transfer fixtures...");
+  const runPackAcceptanceBenchmark = async (worker: Worker): Promise<void> => {
+    setStatus("Loading full style-transfer fixtures for pack acceptance...");
     const fixture = await loadJson<Phase3FullPassFixture>(
       assetUrl("vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json"),
     );
-    const packs: VggPackName[] = VGG_PACK_OPTIONS.map((option) => option.name);
-    const comparisonRows: PackComparisonRow[] = [];
-    let finalWeightsResult: Record<
-      string,
-      number[] | [number, number, number, number]
-    > | null = null;
-    for (const pack of packs) {
-      try {
-        setStatus(`Loading ${pack} weights for pack comparison...`);
-        const weightsResult = await loadManifestWeights(pack);
-        if (pack === "fp32") finalWeightsResult = weightsResult.weights;
-        await initializeWorker(worker);
-        setStatus(`Running pack comparison for ${pack}...`);
-        const singleRun = await askWorker(worker, {
-          type: "run-style-transfer",
-          id: `benchmark-full-style-compare-${pack}`,
-          optimizer: "sgd",
-          inputShape: fixture.inputShape,
-          inputImageValues: fixture.inputImageValues,
-          contentImageValues: fixture.contentImageValues,
-          styleImageValues: fixture.styleImageValues,
-          mean: fixture.mean,
-          std: fixture.std,
-          styleLayerIndices: fixture.styleLayerIndices,
-          contentLayerIndex: fixture.contentLayerIndex,
-          weights: weightsResult.weights,
-          contentWeight: fullContentWeight,
-          styleWeight: fullStyleWeight,
-          learningRate: fullLearningRate,
-          steps: fullSteps,
-        });
-        if (singleRun.type !== "run-style-transfer-result") {
-          throw new Error(`Unexpected worker response type: ${singleRun.type}`);
-        }
-        if (!singleRun.ok) {
-          throw new Error(singleRun.message);
-        }
-        comparisonRows.push({
-          pack,
-          elapsedMs: singleRun.stats.elapsedMs,
-          avgStepMs: singleRun.stats.avgStepMs,
-          finalLoss: singleRun.losses.at(-1) ?? 0,
-          downloadSizeBytes: weightsResult.stats.downloadSizeBytes,
-        });
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        throw new Error(`Pack comparison failed for ${pack}: ${errorMessage}`, {
-          cause: error,
-        });
-      }
-    }
-    setPackComparison(comparisonRows);
-    setPackAcceptance(buildPackAcceptanceRows(comparisonRows));
-    const fp32WeightsResult = await loadManifestWeights("fp32");
-    const resolvedWeights = finalWeightsResult ?? fp32WeightsResult.weights;
     await initializeWorker(worker);
-    const cappedRuns = Math.max(1, Math.floor(fullRuns));
-    const runStats: WorkerRunStats[] = [];
-    let lastResult: BenchmarkResult | null = null;
+    const comparisonRows: PackComparisonRow[] = [];
+    const skippedPacks: PackSkippedRow[] = [];
 
-    for (let runIndex = 0; runIndex < cappedRuns; runIndex += 1) {
-      setStatus(
-        `Running full style-transfer benchmark (${runIndex + 1}/${cappedRuns})...`,
-      );
-      const optimized = await askWorker(worker, {
+    for (const option of VGG_PACK_OPTIONS) {
+      const pack = option.name;
+      setStatus(`Loading ${pack} weights for pack acceptance...`);
+      let weightsResult: Awaited<ReturnType<typeof loadManifestWeights>>;
+      try {
+        weightsResult = await loadManifestWeights(pack);
+      } catch (error) {
+        skippedPacks.push({
+          pack,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+
+      setStatus(`Running pack acceptance for ${pack}...`);
+      const singleRun = await askWorker(worker, {
         type: "run-style-transfer",
-        id: `benchmark-full-style-${runIndex}`,
+        id: `benchmark-pack-acceptance-${pack}`,
         optimizer: "sgd",
         inputShape: fixture.inputShape,
         inputImageValues: fixture.inputImageValues,
@@ -688,37 +652,38 @@ export const BenchmarkApp = (): ReactElement => {
         std: fixture.std,
         styleLayerIndices: fixture.styleLayerIndices,
         contentLayerIndex: fixture.contentLayerIndex,
-        weights: resolvedWeights,
+        weights: weightsResult.weights,
         contentWeight: fullContentWeight,
         styleWeight: fullStyleWeight,
         learningRate: fullLearningRate,
         steps: fullSteps,
       });
-      if (optimized.type !== "run-style-transfer-result") {
-        throw new Error("Unexpected full style-transfer run response");
+      if (singleRun.type !== "run-style-transfer-result") {
+        throw new Error(`Unexpected worker response type: ${singleRun.type}`);
       }
-      if (!optimized.ok) throw new Error(optimized.message);
-      lastResult = {
-        losses: optimized.losses,
-        stats: optimized.stats,
-        pack: "fp32",
-      };
-      runStats.push(optimized.stats);
-    }
-
-    if (lastResult !== null) setResult(lastResult);
-    if (runStats.length > 0) {
-      const perf = performance as Performance & {
-        memory?: { usedJSHeapSize: number };
-      };
-      setSummary({
-        ...summarizeRuns(runStats),
-        downloadSizeBytes: fp32WeightsResult.stats.downloadSizeBytes,
-        decodeLoadMs: fp32WeightsResult.stats.decodeLoadMs,
-        firstIterationMs: runStats[0].avgStepMs,
-        peakMemoryBytes: perf.memory?.usedJSHeapSize,
+      if (!singleRun.ok) {
+        throw new Error(singleRun.message);
+      }
+      comparisonRows.push({
+        pack,
+        elapsedMs: singleRun.stats.elapsedMs,
+        avgStepMs: singleRun.stats.avgStepMs,
+        finalLoss: singleRun.losses.at(-1) ?? 0,
+        downloadSizeBytes: weightsResult.stats.downloadSizeBytes,
       });
     }
+
+    setPackSkippedRows(skippedPacks);
+    if (!comparisonRows.some((row) => row.pack === "fp32")) {
+      const skippedSummary = skippedPacks
+        .map((row) => `${row.pack}: ${row.reason}`)
+        .join("; ");
+      throw new Error(
+        `Pack acceptance requires an available fp32 baseline. Skipped: ${skippedSummary}`,
+      );
+    }
+    setPackComparison(comparisonRows);
+    setPackAcceptance(buildPackAcceptanceRows(comparisonRows));
   };
 
   const runBenchmark = async (): Promise<void> => {
@@ -731,12 +696,12 @@ export const BenchmarkApp = (): ReactElement => {
       },
     );
     try {
-      if (activeTab === "first-pool") {
-        await runFirstPoolBenchmark(worker);
-      } else if (activeTab === "full-style") {
-        await runFullStyleBenchmark(worker);
-      } else {
+      if (activeTab === "kernel-lab") {
         await runKernelLabBenchmark(worker);
+      } else if (activeTab === "pack-acceptance") {
+        await runPackAcceptanceBenchmark(worker);
+      } else {
+        await runFirstPoolBenchmark(worker);
       }
       setStatus("Done");
     } catch (error) {
@@ -752,48 +717,85 @@ export const BenchmarkApp = (): ReactElement => {
       <header className="flex flex-col gap-2">
         <h1 className="text-3xl font-semibold">WebGPU Pipeline Benchmark</h1>
         <p className="text-slate-300">
-          Measure first-pool and full style-transfer pipeline timings.
+          Measure kernel setting speed by default, with pack acceptance and
+          smaller pipeline checks available separately.
         </p>
       </header>
 
-      <div className="flex w-fit overflow-hidden rounded border border-slate-700">
-        <button
-          className={`px-4 py-2 ${activeTab === "first-pool" ? "bg-emerald-500 text-black" : "bg-slate-900 text-slate-200"}`}
-          onClick={() => {
-            setActiveTab("first-pool");
-            clearResults();
-          }}
-          type="button"
-        >
-          First pool
-        </button>
-        <button
-          className={`px-4 py-2 ${activeTab === "full-style" ? "bg-emerald-500 text-black" : "bg-slate-900 text-slate-200"}`}
-          onClick={() => {
-            setActiveTab("full-style");
-            clearResults();
-          }}
-          type="button"
-        >
-          Full style transfer
-        </button>
-        <button
-          className={`px-4 py-2 ${activeTab === "kernel-lab" ? "bg-emerald-500 text-black" : "bg-slate-900 text-slate-200"}`}
-          onClick={() => {
-            setActiveTab("kernel-lab");
-            clearResults();
-          }}
-          type="button"
-        >
-          Kernel lab
-        </button>
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex w-fit overflow-hidden rounded border border-slate-700">
+          <button
+            className={`px-4 py-2 ${activeTab === "kernel-lab" ? "bg-emerald-500 text-black" : "bg-slate-900 text-slate-200"}`}
+            onClick={() => {
+              setActiveTab("kernel-lab");
+              clearResults();
+            }}
+            type="button"
+          >
+            Kernel speed
+          </button>
+        </div>
+        <div className="flex w-fit overflow-hidden rounded border border-slate-700">
+          <button
+            className={`px-4 py-2 ${activeTab === "pack-acceptance" ? "bg-emerald-500 text-black" : "bg-slate-900 text-slate-200"}`}
+            onClick={() => {
+              setActiveTab("pack-acceptance");
+              clearResults();
+            }}
+            type="button"
+          >
+            Pack acceptance
+          </button>
+          <button
+            className={`px-4 py-2 ${activeTab === "first-pool" ? "bg-emerald-500 text-black" : "bg-slate-900 text-slate-200"}`}
+            onClick={() => {
+              setActiveTab("first-pool");
+              clearResults();
+            }}
+            type="button"
+          >
+            First pool
+          </button>
+        </div>
       </div>
 
       <p className="rounded border border-slate-700 bg-slate-900/60 p-3">
         Status: {status}
       </p>
 
-      {activeTab === "first-pool" ? (
+      {activeTab === "kernel-lab" ? (
+        <section className="grid gap-3 rounded border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
+          <label className="flex flex-col gap-1">
+            Steps
+            <input
+              min={1}
+              type="number"
+              value={kernelLabSteps}
+              onChange={(event) =>
+                setKernelLabSteps(Number(event.target.value))
+              }
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            Learning rate
+            <input
+              step={0.00001}
+              type="number"
+              value={fullLearningRate}
+              onChange={(event) =>
+                setFullLearningRate(Number(event.target.value))
+              }
+            />
+          </label>
+        </section>
+      ) : activeTab === "pack-acceptance" ? (
+        <section className="rounded border border-slate-700 bg-slate-900/60 p-4 text-sm text-slate-300">
+          Pack acceptance runs one pass for each available model pack and
+          compares final loss against the fp32 baseline. It is separate from
+          kernel speed measurements so the default benchmark does not download
+          fp32 weights.
+        </section>
+      ) : (
         <section className="grid gap-3 rounded border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
           <label className="flex flex-col gap-1">
             Steps
@@ -893,83 +895,6 @@ export const BenchmarkApp = (): ReactElement => {
               onChange={(event) => setDebugReadbackGrad(event.target.checked)}
             />
             <span>Gradient readback diagnostics</span>
-          </label>
-        </section>
-      ) : activeTab === "full-style" ? (
-        <section className="grid gap-3 rounded border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
-          <label className="flex flex-col gap-1">
-            Steps
-            <input
-              min={1}
-              type="number"
-              value={fullSteps}
-              onChange={(event) => setFullSteps(Number(event.target.value))}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            Runs
-            <input
-              min={1}
-              type="number"
-              value={fullRuns}
-              onChange={(event) => setFullRuns(Number(event.target.value))}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            Learning rate
-            <input
-              step={0.00001}
-              type="number"
-              value={fullLearningRate}
-              onChange={(event) =>
-                setFullLearningRate(Number(event.target.value))
-              }
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            Content weight
-            <input
-              type="number"
-              value={fullContentWeight}
-              onChange={(event) =>
-                setFullContentWeight(Number(event.target.value))
-              }
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            Style weight
-            <input
-              type="number"
-              value={fullStyleWeight}
-              onChange={(event) =>
-                setFullStyleWeight(Number(event.target.value))
-              }
-            />
-          </label>
-        </section>
-      ) : (
-        <section className="grid gap-3 rounded border border-slate-700 bg-slate-900/60 p-4 md:grid-cols-3">
-          <label className="flex flex-col gap-1">
-            Steps
-            <input
-              min={1}
-              type="number"
-              value={kernelLabSteps}
-              onChange={(event) =>
-                setKernelLabSteps(Number(event.target.value))
-              }
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            Learning rate
-            <input
-              step={0.00001}
-              type="number"
-              value={fullLearningRate}
-              onChange={(event) =>
-                setFullLearningRate(Number(event.target.value))
-              }
-            />
           </label>
         </section>
       )}
@@ -1098,7 +1023,7 @@ export const BenchmarkApp = (): ReactElement => {
         {packComparison === null ? null : (
           <div className="mt-6 overflow-x-auto">
             <h3 className="mb-2 text-sm font-semibold text-slate-200">
-              Pack comparison (single run each)
+              Pack acceptance comparison
             </h3>
             <table className="w-full min-w-[620px] border-collapse text-left text-sm">
               <thead className="text-slate-300">
@@ -1140,6 +1065,18 @@ export const BenchmarkApp = (): ReactElement => {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+        {packSkippedRows === null || packSkippedRows.length === 0 ? null : (
+          <div className="mt-4 rounded border border-amber-500/40 bg-amber-950/30 p-3 text-sm text-amber-100">
+            <h3 className="mb-2 font-semibold">Skipped packs</h3>
+            <ul className="space-y-1">
+              {packSkippedRows.map((row) => (
+                <li key={row.pack}>
+                  <span className="font-medium">{row.pack}</span>: {row.reason}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
         {packAcceptance === null ? null : (

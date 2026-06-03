@@ -56,7 +56,7 @@ The browser runtime intentionally implements only the operations required by thi
 | Phase 4: Manual backward                  | Complete for the fixed input-gradient graph | Backward kernels and PyTorch parity fixtures exist for the required loss/layer path.                                                                  |
 | Phase 5: Optimizer loop                   | Implemented                                 | First-pool and full VGG-style optimization endpoints run in the worker with GPU-resident buffers and optimizer options.                               |
 | Phase 6: Product-minimum UI               | Implemented, needs QA                       | The app has image upload/defaults, controls, model-pack selection/cache status, progress telemetry, previews, and download-oriented output rendering. |
-| Phase 7: Benchmarking and tuning          | In progress                                 | `/benchmark` exposes first-pool, full-style, pack-acceptance, and kernel-lab workflows; optimization flags are still experimental.                    |
+| Phase 7: Benchmarking and tuning          | In progress                                 | `/benchmark` exposes kernel-lab speed comparisons, pack-acceptance, and first-pool workflows; optimization flags are still experimental.              |
 
 ## Current worker endpoints
 

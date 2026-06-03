@@ -19,28 +19,29 @@ test("kernel lab smoke runs baseline and optimized storage rows", async ({
     );
     if (fixture === null) return null;
 
-    const fp32Availability = await checkModelPackAvailability(
-      "/vgg19-models",
-      "fp32",
-    );
-    if (fp32Availability.ok) return "fp32";
-
-    const int8Availability = await checkModelPackAvailability(
-      "/vgg19-models",
+    const quantizedPacks = [
+      "int4log-experimental",
       "int8-per-channel",
-    );
-    if (int8Availability.ok) return "int8-per-channel";
+      "int8log-per-channel",
+      "int4-experimental",
+    ] as const;
+    for (const pack of quantizedPacks) {
+      const availability = await checkModelPackAvailability(
+        "/vgg19-models",
+        pack,
+      );
+      if (availability.ok) return pack;
+    }
 
     return null;
   });
   test.skip(
     availablePack === null,
-    "Missing phase3 fixture or usable model pack. Provide the phase3 fixture and fp32 or int8-per-channel model pack first.",
+    "Missing phase3 fixture or usable quantized model pack. Provide the phase3 fixture and at least one quantized model pack first.",
   );
   if (availablePack === null) return;
 
   const baselineName = `baseline (default pooled ${availablePack})`;
-  await page.getByRole("button", { name: "Kernel lab" }).click();
   await page.getByRole("button", { name: "Run benchmark" }).click();
   await expect(page.getByText("Status: Done")).toBeVisible({ timeout: 300000 });
   await expect(
