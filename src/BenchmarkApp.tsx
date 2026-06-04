@@ -10,6 +10,10 @@ import {
   type VggPackName,
 } from "./features/style-transfer/modelPacks";
 import {
+  kernelFlagsToSettings,
+  writeKernelOptimizationSettings,
+} from "./features/style-transfer/kernelOptimizationSettingsStorage";
+import {
   parseVgg19ManifestBackedLayerCache,
   type Vgg19WeightsManifest,
 } from "./ml/worker/models/vgg19/weights";
@@ -80,6 +84,7 @@ type KernelLabRow = {
   speedupVsBaseline: number;
   ok: boolean;
   error?: string;
+  kernelFlags?: WorkerKernelOptimizationFlags;
   kernelStats?: WorkerKernelStats;
 };
 
@@ -445,6 +450,7 @@ export const BenchmarkApp = (): ReactElement => {
       ) {
         rows.push({
           name: variant.name,
+          kernelFlags: variant.kernelFlags,
           elapsedMs: 0,
           forwardMs: 0,
           lossMs: 0,
@@ -483,6 +489,7 @@ export const BenchmarkApp = (): ReactElement => {
       if (response.type !== "run-style-transfer-result") {
         rows.push({
           name: variant.name,
+          kernelFlags: variant.kernelFlags,
           elapsedMs: 0,
           forwardMs: 0,
           lossMs: 0,
@@ -499,6 +506,7 @@ export const BenchmarkApp = (): ReactElement => {
       if (!response.ok) {
         rows.push({
           name: variant.name,
+          kernelFlags: variant.kernelFlags,
           elapsedMs: 0,
           forwardMs: 0,
           lossMs: 0,
@@ -519,6 +527,7 @@ export const BenchmarkApp = (): ReactElement => {
       }
       rows.push({
         name: variant.name,
+        kernelFlags: variant.kernelFlags,
         elapsedMs: response.stats.elapsedMs,
         forwardMs: response.stats.forwardMs,
         lossMs: response.stats.lossMs,
@@ -684,6 +693,11 @@ export const BenchmarkApp = (): ReactElement => {
     }
     setPackComparison(comparisonRows);
     setPackAcceptance(buildPackAcceptanceRows(comparisonRows));
+  };
+
+  const saveKernelLabSettings = (row: KernelLabRow): void => {
+    writeKernelOptimizationSettings(kernelFlagsToSettings(row.kernelFlags));
+    setStatus(`Saved kernel settings from ${row.name} for the main app.`);
   };
 
   const runBenchmark = async (): Promise<void> => {
@@ -1115,6 +1129,9 @@ export const BenchmarkApp = (): ReactElement => {
                     Variant
                   </th>
                   <th className="border-b border-slate-700 py-2 pr-4">
+                    App settings
+                  </th>
+                  <th className="border-b border-slate-700 py-2 pr-4">
                     Elapsed ms
                   </th>
                   <th className="border-b border-slate-700 py-2 pr-4">
@@ -1143,6 +1160,16 @@ export const BenchmarkApp = (): ReactElement => {
                   <tr key={row.name}>
                     <td className="border-b border-slate-800 py-2 pr-4">
                       {row.name}
+                    </td>
+                    <td className="border-b border-slate-800 py-2 pr-4">
+                      <button
+                        className="rounded bg-sky-500 px-2 py-1 text-xs font-semibold text-black disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-300"
+                        disabled={!row.ok}
+                        onClick={() => saveKernelLabSettings(row)}
+                        type="button"
+                      >
+                        Use in app
+                      </button>
                     </td>
                     <td className="border-b border-slate-800 py-2 pr-4">
                       {row.ok ? row.elapsedMs.toFixed(2) : "-"}

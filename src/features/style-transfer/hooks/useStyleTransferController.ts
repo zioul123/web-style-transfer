@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, Dispatch, SetStateAction } from "react";
 import type { WorkerRequest, WorkerResponse } from "../../../types";
 import {
@@ -26,6 +26,13 @@ import {
   type VggPackName,
 } from "../modelPacks";
 import type { ModelCachePackStatus } from "../modelCache";
+import {
+  KERNEL_OPTIMIZATION_SETTINGS_STORAGE_KEY,
+  readKernelOptimizationSettings,
+  settingsToKernelFlags,
+  writeKernelOptimizationSettings,
+  type KernelOptimizationSettings,
+} from "../kernelOptimizationSettingsStorage";
 
 const DEFAULT_CONTENT_IMAGE_URL = new URL(
   "../../../../assets/madeira_900x1600.jpeg",
@@ -219,6 +226,8 @@ export const useStyleTransferController =
     const [selectedPack, setSelectedPackState] = useState<VggPackName>(
       getInitialPackPreference,
     );
+    const [initialKernelOptimizationSettings] =
+      useState<KernelOptimizationSettings>(readKernelOptimizationSettings);
     const [optimizer, setOptimizer] = useState<"sgd" | "adam" | "lbfgs">(
       "lbfgs",
     );
@@ -229,25 +238,40 @@ export const useStyleTransferController =
     const [lbfgsEpsilon, setLbfgsEpsilon] = useState<number>(1e-9);
     const [synchronizePhaseTimings, setSynchronizePhaseTimings] =
       useState<boolean>(false);
-    const [useCachedPipelines, setUseCachedPipelines] = useState<boolean>(true);
+    const [useCachedPipelines, setUseCachedPipelines] = useState<boolean>(
+      initialKernelOptimizationSettings.useCachedPipelines,
+    );
     const [usePersistentWeightBuffers, setUsePersistentWeightBuffers] =
-      useState<boolean>(true);
-    const [useStepBufferPool, setUseStepBufferPool] = useState<boolean>(true);
-    const [useVec4Pointwise, setUseVec4Pointwise] = useState<boolean>(true);
+      useState<boolean>(
+        initialKernelOptimizationSettings.usePersistentWeightBuffers,
+      );
+    const [useStepBufferPool, setUseStepBufferPool] = useState<boolean>(
+      initialKernelOptimizationSettings.useStepBufferPool,
+    );
+    const [useVec4Pointwise, setUseVec4Pointwise] = useState<boolean>(
+      initialKernelOptimizationSettings.useVec4Pointwise,
+    );
     const [usePoolBackwardScatter, setUsePoolBackwardScatter] =
-      useState<boolean>(true);
+      useState<boolean>(
+        initialKernelOptimizationSettings.usePoolBackwardScatter,
+      );
     const [gramKernel, setGramKernel] = useState<KernelGramKernel>(
-      "symmetric-parallel-dot",
+      initialKernelOptimizationSettings.gramKernel,
     );
     const [styleBackward, setStyleBackward] = useState<KernelStyleBackward>(
-      "fused-from-gram-diff",
+      initialKernelOptimizationSettings.styleBackward,
     );
     const [convForwardKernel, setConvForwardKernel] =
-      useState<KernelConvForward>("scalar");
+      useState<KernelConvForward>(
+        initialKernelOptimizationSettings.convForwardKernel,
+      );
     const [convBackwardInputKernel, setConvBackwardInputKernel] =
-      useState<KernelConvBackwardInput>("scalar");
-    const [weightStorage, setWeightStorage] =
-      useState<KernelWeightStorage>("fp32");
+      useState<KernelConvBackwardInput>(
+        initialKernelOptimizationSettings.convBackwardInputKernel,
+      );
+    const [weightStorage, setWeightStorage] = useState<KernelWeightStorage>(
+      initialKernelOptimizationSettings.weightStorage,
+    );
     const [iterations, setIterations] = useState<number>(0);
     const [isRunning, setIsRunning] = useState<boolean>(false);
     const [lastLoss, setLastLoss] = useState<number | null>(null);
@@ -285,34 +309,39 @@ export const useStyleTransferController =
     );
     const canRun =
       contentTensor !== null && styleTensor !== null && weights !== null;
-    const kernelFlags = useMemo(() => {
-      const flags: import("../../../types").WorkerKernelOptimizationFlags = {};
-      if (useCachedPipelines) flags.useCachedPipelines = true;
-      if (usePersistentWeightBuffers) flags.usePersistentWeightBuffers = true;
-      if (useStepBufferPool) flags.useStepBufferPool = true;
-      if (useVec4Pointwise) flags.useVec4Pointwise = true;
-      if (usePoolBackwardScatter) flags.usePoolBackwardScatter = true;
-      if (gramKernel !== "scalar") flags.gramKernel = gramKernel;
-      if (styleBackward !== "two-pass") flags.styleBackward = styleBackward;
-      if (convForwardKernel !== "scalar")
-        flags.convForwardKernel = convForwardKernel;
-      if (convBackwardInputKernel !== "scalar") {
-        flags.convBackwardInputKernel = convBackwardInputKernel;
-      }
-      if (weightStorage !== "fp32") flags.weightStorage = weightStorage;
-      return Object.keys(flags).length > 0 ? flags : undefined;
-    }, [
-      convBackwardInputKernel,
-      convForwardKernel,
-      gramKernel,
-      styleBackward,
-      useCachedPipelines,
-      usePersistentWeightBuffers,
-      usePoolBackwardScatter,
-      useStepBufferPool,
-      useVec4Pointwise,
-      weightStorage,
-    ]);
+    const kernelOptimizationSettings = useMemo<KernelOptimizationSettings>(
+      () => ({
+        useCachedPipelines,
+        usePersistentWeightBuffers,
+        useStepBufferPool,
+        useVec4Pointwise,
+        usePoolBackwardScatter,
+        gramKernel,
+        styleBackward,
+        convForwardKernel,
+        convBackwardInputKernel,
+        weightStorage,
+      }),
+      [
+        convBackwardInputKernel,
+        convForwardKernel,
+        gramKernel,
+        styleBackward,
+        useCachedPipelines,
+        usePersistentWeightBuffers,
+        usePoolBackwardScatter,
+        useStepBufferPool,
+        useVec4Pointwise,
+        weightStorage,
+      ],
+    );
+    const kernelFlags = useMemo(
+      () => settingsToKernelFlags(kernelOptimizationSettings),
+      [kernelOptimizationSettings],
+    );
+    useEffect(() => {
+      writeKernelOptimizationSettings(kernelOptimizationSettings);
+    }, [kernelOptimizationSettings]);
     const kernelConfigSummary = useMemo(() => {
       const enabled: string[] = [];
       if (useCachedPipelines) enabled.push("cached-pipelines");
@@ -343,19 +372,47 @@ export const useStyleTransferController =
       weightStorage,
     ]);
 
-    const clearWorkerSession = (sessionId: string): void => {
+    const clearWorkerSession = useCallback((sessionId: string): void => {
       if (workerRef.current === null) return;
       workerRef.current.postMessage({
         type: "clear-style-transfer-session",
         id: createMessageId(),
         sessionId,
       } satisfies WorkerRequest);
-    };
+    }, []);
 
-    const rotateOptimizationSession = (clearCurrent: boolean): void => {
-      if (clearCurrent) clearWorkerSession(optimizationSessionId);
-      setOptimizationSessionId(createOptimizationSessionId());
-    };
+    const rotateOptimizationSession = useCallback(
+      (clearCurrent: boolean): void => {
+        if (clearCurrent) clearWorkerSession(optimizationSessionId);
+        setOptimizationSessionId(createOptimizationSessionId());
+      },
+      [clearWorkerSession, optimizationSessionId],
+    );
+
+    useEffect(() => {
+      const onStorage = (event: StorageEvent): void => {
+        if (
+          event.key !== KERNEL_OPTIMIZATION_SETTINGS_STORAGE_KEY ||
+          event.newValue === null
+        ) {
+          return;
+        }
+        const nextSettings = readKernelOptimizationSettings();
+        setUseCachedPipelines(nextSettings.useCachedPipelines);
+        setUsePersistentWeightBuffers(nextSettings.usePersistentWeightBuffers);
+        setUseStepBufferPool(nextSettings.useStepBufferPool);
+        setUseVec4Pointwise(nextSettings.useVec4Pointwise);
+        setUsePoolBackwardScatter(nextSettings.usePoolBackwardScatter);
+        setGramKernel(nextSettings.gramKernel);
+        setStyleBackward(nextSettings.styleBackward);
+        setConvForwardKernel(nextSettings.convForwardKernel);
+        setConvBackwardInputKernel(nextSettings.convBackwardInputKernel);
+        setWeightStorage(nextSettings.weightStorage);
+        if (!isRunning) rotateOptimizationSession(true);
+      };
+      window.addEventListener("storage", onStorage);
+      return () => window.removeEventListener("storage", onStorage);
+    }, [isRunning, rotateOptimizationSession]);
 
     const resetOptimizerProgress = (): void => {
       setIterations(0);
