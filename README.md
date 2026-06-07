@@ -175,6 +175,10 @@ npm run lint
 npm run format:check
 ```
 
+Prettier excludes generated fixture and model-pack JSON under `public/` so
+exporter output remains compact. Untracked model-pack shard binaries are also
+ignored by Git.
+
 ## Agent workflow
 
 Repository-local agent guidance lives in `AGENTS.md`. For non-trivial tasks,
