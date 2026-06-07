@@ -53,7 +53,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   out[i] = (2.0 * (inputValues[i] - targetValues[i])) / ${count}.0;
 }`;
 
-export const makeMseBackwardVec4Shader = (vecCount: number, scalarCount: number): string => `
+export const makeMseBackwardVec4Shader = (
+  vecCount: number,
+  scalarCount: number,
+): string => `
 @group(0) @binding(0) var<storage, read> inputValues: array<vec4f>;
 @group(0) @binding(1) var<storage, read> targetValues: array<vec4f>;
 @group(0) @binding(2) var<storage, read_write> out: array<vec4f>;

@@ -53,11 +53,12 @@ export const makeBinaryOpVec4Shader = (
   vecCount: number,
   mode: "tensorTensor" | "tensorScalar" | "scalarTensor",
 ): string => {
-  const expr = mode === "tensorTensor"
-    ? `out[i] = a[i] ${op === "add" ? "+" : op === "sub" ? "-" : op === "mul" ? "*" : "/"} b[i];`
-    : mode === "tensorScalar"
-      ? `out[i] = a[i] ${op === "add" ? "+" : op === "sub" ? "-" : op === "mul" ? "*" : "/"} b[0];`
-      : `out[i] = b[0] ${op === "add" ? "+" : op === "sub" ? "-" : op === "mul" ? "*" : "/"} a[i];`;
+  const expr =
+    mode === "tensorTensor"
+      ? `out[i] = a[i] ${op === "add" ? "+" : op === "sub" ? "-" : op === "mul" ? "*" : "/"} b[i];`
+      : mode === "tensorScalar"
+        ? `out[i] = a[i] ${op === "add" ? "+" : op === "sub" ? "-" : op === "mul" ? "*" : "/"} b[0];`
+        : `out[i] = b[0] ${op === "add" ? "+" : op === "sub" ? "-" : op === "mul" ? "*" : "/"} a[i];`;
   return `
 @group(0) @binding(0) var<storage, read> a: array<vec4f>;
 @group(0) @binding(1) var<storage, read> b: array<vec4f>;
@@ -83,7 +84,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (i >= ${count}u) { return; }
   out[i] = clamp(a[i], ${min}, ${max});
 }`;
-
 
 export const runBinaryOpToBuffer = (
   gpuDevice: GPUDevice | null,

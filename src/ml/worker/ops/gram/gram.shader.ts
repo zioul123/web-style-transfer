@@ -49,9 +49,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   out[i] = sum / norm;
 }`;
 
-export const makeSymmetricGramMatrixShader = (
-  pairCount: number,
-): string => `
+export const makeSymmetricGramMatrixShader = (pairCount: number): string => `
 struct GramUniforms {
   channels: u32,
   spatial: u32,

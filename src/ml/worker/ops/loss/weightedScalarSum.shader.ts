@@ -1,11 +1,15 @@
-export const makeWeightedScalarSumShader = (weights: readonly number[]): string => {
+export const makeWeightedScalarSumShader = (
+  weights: readonly number[],
+): string => {
   if (weights.length === 0) {
     throw new Error("weighted scalar sum requires at least one weight.");
   }
   const bindingDecls: string[] = [];
   const sumTerms: string[] = [];
   for (let i = 0; i < weights.length; i += 1) {
-    bindingDecls.push(`@group(0) @binding(${i}) var<storage, read> s${i}: array<f32>;`);
+    bindingDecls.push(
+      `@group(0) @binding(${i}) var<storage, read> s${i}: array<f32>;`,
+    );
     sumTerms.push(`(s${i}[0] * ${weights[i]})`);
   }
   const outBindingIndex = weights.length;

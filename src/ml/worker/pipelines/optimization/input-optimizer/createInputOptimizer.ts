@@ -41,9 +41,7 @@ export const createInputOptimizer = <TVector>(
     return ops.adamUpdateClamp(input, grad, adamM, adamV, step, config);
   };
 
-  const addLbfgsHistory = async (
-    grad: TVector,
-  ): Promise<void> => {
+  const addLbfgsHistory = async (grad: TVector): Promise<void> => {
     if (
       previousDirection === null ||
       previousGrad === null ||
@@ -78,7 +76,12 @@ export const createInputOptimizer = <TVector>(
       alphaBuffers[i] = alphaBuffer;
       rhos[i] = rho;
       // q <- q - (rho_i * alphaRaw_i) * y_i, with alphaRaw_i = dot(s_i, q)
-      const nextQ = await ops.addScaledByScalarBuffer(q, oldDir, alphaBuffer, -rho);
+      const nextQ = await ops.addScaledByScalarBuffer(
+        q,
+        oldDir,
+        alphaBuffer,
+        -rho,
+      );
       ops.dispose(q);
       q = nextQ;
     }
@@ -119,11 +122,7 @@ export const createInputOptimizer = <TVector>(
       lbfgsIteration === 1
         ? Math.min(1, 1 / (await ops.absSum(grad))) * config.learningRate
         : config.learningRate;
-    const nextInput = await ops.updateClamp(
-      input,
-      direction,
-      -stepSize,
-    );
+    const nextInput = await ops.updateClamp(input, direction, -stepSize);
 
     const nextPreviousGrad = await ops.clone(grad);
     if (previousGrad !== null) ops.dispose(previousGrad);

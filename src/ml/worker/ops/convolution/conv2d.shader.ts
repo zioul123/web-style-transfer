@@ -1,7 +1,8 @@
 export type ConvWeightStorage = "fp32" | "fp16-packed";
 
-const weightStorageArrayType = (weightStorage: ConvWeightStorage): "f32" | "u32" =>
-  weightStorage === "fp16-packed" ? "u32" : "f32";
+const weightStorageArrayType = (
+  weightStorage: ConvWeightStorage,
+): "f32" | "u32" => (weightStorage === "fp16-packed" ? "u32" : "f32");
 
 const makeWeightReadHelper = (
   storageName: string,

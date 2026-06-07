@@ -9,12 +9,7 @@ export const gramElementCount = (shape: TensorShape4D): number =>
 export const convOutputShape = (
   inputShape: TensorShape4D,
   outChannels: number,
-): TensorShape4D => [
-  inputShape[0],
-  outChannels,
-  inputShape[2],
-  inputShape[3],
-];
+): TensorShape4D => [inputShape[0], outChannels, inputShape[2], inputShape[3]];
 
 export const pooledShape = (inputShape: TensorShape4D): TensorShape4D => [
   inputShape[0],

@@ -130,10 +130,7 @@ export const runMse = async (
 
 export const runMseBuffer = async (
   gpuDevice: GPUDevice | null,
-  acquireReusableBuffer: (
-    size: number,
-    usage: number,
-  ) => GPUBuffer,
+  acquireReusableBuffer: (size: number, usage: number) => GPUBuffer,
   a: GpuBufferRef,
   b: GpuBufferRef,
   count: number,
@@ -144,7 +141,10 @@ export const runMseBuffer = async (
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
   const device = gpuDevice;
   const bytes = count * 4;
-  let currentBuffer = acquireReusableBuffer(bytes, BUFFER_USAGE_STORAGE_COPY_SRC);
+  let currentBuffer = acquireReusableBuffer(
+    bytes,
+    BUFFER_USAGE_STORAGE_COPY_SRC,
+  );
   const diffPipeline = device.createComputePipeline({
     layout: "auto",
     compute: {
@@ -171,11 +171,16 @@ export const runMseBuffer = async (
   while (currentCount > 1) {
     const nextCount = Math.ceil(currentCount / 64);
     const nextBytes = nextCount * 4;
-    const nextBuffer = acquireReusableBuffer(nextBytes, BUFFER_USAGE_STORAGE_COPY_SRC);
+    const nextBuffer = acquireReusableBuffer(
+      nextBytes,
+      BUFFER_USAGE_STORAGE_COPY_SRC,
+    );
     const reducePipeline = device.createComputePipeline({
       layout: "auto",
       compute: {
-        module: device.createShaderModule({ code: makeReduceSumShader(currentCount) }),
+        module: device.createShaderModule({
+          code: makeReduceSumShader(currentCount),
+        }),
         entryPoint: "main",
       },
     });
@@ -210,10 +215,7 @@ export const runMseBuffer = async (
 
 export const runMseBufferToScalarBuffer = async (
   gpuDevice: GPUDevice | null,
-  acquireReusableBuffer: (
-    size: number,
-    usage: number,
-  ) => GPUBuffer,
+  acquireReusableBuffer: (size: number, usage: number) => GPUBuffer,
   a: GpuBufferRef,
   b: GpuBufferRef,
   count: number,
@@ -222,7 +224,10 @@ export const runMseBufferToScalarBuffer = async (
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
   const device = gpuDevice;
   const bytes = count * 4;
-  let currentBuffer = acquireReusableBuffer(bytes, BUFFER_USAGE_STORAGE_COPY_SRC);
+  let currentBuffer = acquireReusableBuffer(
+    bytes,
+    BUFFER_USAGE_STORAGE_COPY_SRC,
+  );
   const diffPipeline = device.createComputePipeline({
     layout: "auto",
     compute: {
@@ -250,11 +255,16 @@ export const runMseBufferToScalarBuffer = async (
   while (currentCount > 1) {
     const nextCount = Math.ceil(currentCount / 64);
     const nextBytes = nextCount * 4;
-    const nextBuffer = acquireReusableBuffer(nextBytes, BUFFER_USAGE_STORAGE_COPY_SRC);
+    const nextBuffer = acquireReusableBuffer(
+      nextBytes,
+      BUFFER_USAGE_STORAGE_COPY_SRC,
+    );
     const reducePipeline = device.createComputePipeline({
       layout: "auto",
       compute: {
-        module: device.createShaderModule({ code: makeReduceSumShader(currentCount) }),
+        module: device.createShaderModule({
+          code: makeReduceSumShader(currentCount),
+        }),
         entryPoint: "main",
       },
     });

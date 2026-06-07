@@ -11,7 +11,11 @@ type TempRecord = {
 };
 
 export type OptimizationRuntimeContext = {
-  acquireTemp: (shape: OptimizationShape4D, usage: number, role: string) => GPUBuffer;
+  acquireTemp: (
+    shape: OptimizationShape4D,
+    usage: number,
+    role: string,
+  ) => GPUBuffer;
   trackOwned: <T extends GpuBufferRef>(...refs: T[]) => T;
   releaseStepOwned: () => void;
   disposeAll: () => void;
@@ -30,9 +34,17 @@ export const createOptimizationRuntimeContext = (
   const stepTempBuffers: TempRecord[] = [];
   const reuseTempBuffers = options.reuseTempBuffers ?? true;
 
-  const tempKey = (shape: OptimizationShape4D, usage: number, role: string): string => `${shape.join("x")}:${usage}:${role}`;
+  const tempKey = (
+    shape: OptimizationShape4D,
+    usage: number,
+    role: string,
+  ): string => `${shape.join("x")}:${usage}:${role}`;
 
-  const acquireTemp = (shape: OptimizationShape4D, usage: number, role: string): GPUBuffer => {
+  const acquireTemp = (
+    shape: OptimizationShape4D,
+    usage: number,
+    role: string,
+  ): GPUBuffer => {
     if (!reuseTempBuffers) {
       const size = elementCount(shape) * Float32Array.BYTES_PER_ELEMENT;
       const buffer = acquireReusableBuffer(device, size, usage);
