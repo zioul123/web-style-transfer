@@ -123,17 +123,16 @@ Large generated fixtures and full model packs should not be committed unless the
 The default test tiers are intentionally small enough to run in pull requests while still making the existing browser coverage visible:
 
 1. **Install and browser setup** installs locked npm dependencies plus Chromium and its system libraries.
-2. **Production build** runs TypeScript and Vite via `npm run build`.
-3. **Default Playwright suite** runs `npm test`, covering app boot, worker protocol, WebGPU kernel parity, committed fixture parity, and optimization correctness paths. Performance-oriented `/benchmark` and kernel-lab smoke tests live in `benchmarks/` and are excluded from default CI.
+2. **Repository checks** run changed-file formatting validation, ESLint, the TypeScript/Vite production build, and the default Playwright suite through `scripts/agent-check.sh`.
+3. **Optional benchmarks** remain separate because they measure performance-sensitive `/benchmark` and kernel-lab paths rather than routine correctness.
 
-CI runs the same sequence on pull requests and pushes to `main`:
+The pull-request workflow at `.github/workflows/agent-review.yml` and the push-to-main workflow at `.github/workflows/ci.yml` run the same safe checks:
 
 ```bash
 npm ci
 npx playwright install chromium
 npx playwright install-deps chromium
-npm run build
-npm test
+./scripts/agent-check.sh
 ```
 
 Run optional benchmark and kernel-lab specs separately when validating performance-sensitive changes:
@@ -175,6 +174,30 @@ Optional checks:
 npm run lint
 npm run format:check
 ```
+
+## Agent workflow
+
+Repository-local agent guidance lives in `AGENTS.md`. For non-trivial tasks,
+agents refine the request, plan, retrieve focused context, implement, verify,
+review, retry when needed, and prepare a PR summary.
+
+- Committed handoff templates live in `.agent-templates/`.
+- Generated task artifacts live in `.agent-artifacts/` and are ignored except
+  for `.gitkeep`.
+- `./scripts/agent-check.sh` runs changed-file formatting validation, lint,
+  build, and the default Playwright suite without installing or changing
+  dependencies. Set `AGENT_FULL_FORMAT_CHECK=1` to opt into the repository-wide
+  Prettier check.
+- `./scripts/agent-pr-summary.sh [base-ref]` creates draft touched-file and PR
+  summary artifacts from the current diff. It refuses to overwrite existing
+  artifacts unless `--force` is supplied.
+
+Policy and navigation references:
+
+- `docs/architecture.md`
+- `docs/code-map.md`
+- `docs/change-policy.md`
+- `docs/review-rubric.md`
 
 ## Deployment to GitHub Pages
 

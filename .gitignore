@@ -26,10 +26,11 @@ dist-ssr
 # Artifacts
 __pycache__
 .venv
-.wst
 *.tsbuildinfo
 .vite
 test-results
+.agent-artifacts/*
+!.agent-artifacts/.gitkeep
 public/vgg19-phase3-full-pass/*
 !public/vgg19-phase3-full-pass/
 !public/vgg19-phase3-full-pass/vgg19_phase3_full_pass_fixture.json
