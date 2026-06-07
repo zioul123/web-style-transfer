@@ -4,6 +4,10 @@
 
 **Result:** pass | fail
 
+## Review Source
+
+- <!-- Independent reviewer/subagent, or justified self-review for a bounded task. -->
+
 ## Rubric Findings
 
 - <!-- `None` or `[P0-P3] Finding - path:line` with impact and evidence. -->
@@ -26,6 +30,10 @@
 ## Checks Reviewed
 
 - `command` - pass | fail | skipped (reason)
+
+## Documentation Decision
+
+- <!-- Docs updated, or why no update was needed. -->
 
 ## Retry Plan
 

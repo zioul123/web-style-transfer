@@ -181,20 +181,55 @@ ignored by Git.
 
 ## Agent workflow
 
-Repository-local agent guidance lives in `AGENTS.md`. For non-trivial tasks,
-agents refine the request, plan, retrieve focused context, implement, verify,
-review, retry when needed, and prepare a PR summary.
+`AGENTS.md` is intentionally compact because it is loaded for every task.
+Detailed procedures use repo-local Codex skills, so their full instructions are
+loaded only when relevant:
 
-- Committed handoff templates live in `.agent-templates/`.
-- Generated task artifacts live in `.agent-artifacts/` and are ignored except
-  for `.gitkeep`.
-- `./scripts/agent-check.sh` runs changed-file formatting validation, lint,
-  build, and the default Playwright suite without installing or changing
-  dependencies. Set `AGENT_FULL_FORMAT_CHECK=1` to opt into the repository-wide
-  Prettier check.
-- `./scripts/agent-pr-summary.sh [base-ref]` creates draft touched-file and PR
-  summary artifacts from the current diff. It refuses to overwrite existing
-  artifacts unless `--force` is supplied.
+- `$repo-change`: staged workflow for non-trivial repository changes.
+- `$python-reference`: PyTorch exporters, fixtures, quantization, and parity.
+- `$repo-review`: independent final-diff review.
+
+For a non-trivial change, use a short task ID:
+
+```bash
+./scripts/agent-task.sh init improve-cache-errors
+```
+
+The task state lives under `.agent-artifacts/improve-cache-errors/` and is
+ignored by Git. Complete the task, plan, context map, touched-file list, review,
+and PR summary there. Draft the final scope from the diff with:
+
+```bash
+./scripts/agent-pr-summary.sh --task improve-cache-errors origin/main
+```
+
+After checks and review, validate that the artifacts are complete and cover
+every changed file:
+
+```bash
+./scripts/agent-task.sh check improve-cache-errors origin/main
+```
+
+The legacy `./scripts/agent-pr-summary.sh [base-ref]` form still writes flat
+artifacts for compatibility, but task-scoped mode is recommended.
+
+Project-scoped agents live in `.codex/agents/`:
+
+- `repo-explorer` handles broad or uncertain retrieval and returns a compact
+  context map.
+- `repo-actor` implements a bounded plan from task artifacts without inheriting
+  raw exploration history.
+- `repo-reviewer` independently reviews final non-trivial code/config diffs.
+
+Use one agent for bounded work. Delegate read-heavy exploration or independent
+review when it meaningfully reduces context pollution; avoid overlapping
+writers.
+
+`./scripts/agent-check.sh` validates the tracked harness, changed-file
+formatting, lint, build, and the default Playwright suite without installing or
+changing dependencies. Set `AGENT_FULL_FORMAT_CHECK=1` for the repository-wide
+Prettier check. Set `AGENT_TASK_ID=<task-id>` to include local artifact
+validation in the same command.
 
 Policy and navigation references:
 

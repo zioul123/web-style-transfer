@@ -2,7 +2,11 @@
 
 Review the final diff independently from implementation. Use the task, plan,
 context map, touched-file list, check results, and `git diff` as inputs. Write
-the result to `.agent-artifacts/review.md`.
+the result to `.agent-artifacts/<task-id>/review.md`.
+
+For non-trivial code or configuration changes, use the read-only
+`repo-reviewer` agent with fresh context and the `$repo-review` skill. A bounded
+documentation-only change may use a justified self-review.
 
 ## Result Rules
 

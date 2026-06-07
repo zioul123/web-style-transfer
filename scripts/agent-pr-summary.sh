@@ -5,11 +5,32 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-BASE_REF="${1:-origin/main}"
-FORCE="${2:-}"
-ARTIFACT_DIR=".agent-artifacts"
-TOUCHED_FILE="$ARTIFACT_DIR/touched-files.md"
-SUMMARY_FILE="$ARTIFACT_DIR/pr-summary.md"
+usage() {
+  echo "Usage:" >&2
+  echo "  $0 [base-ref] [--force]" >&2
+  echo "  $0 --task <task-id> [base-ref] [--force]" >&2
+}
+
+TASK_ID=""
+BASE_REF="origin/main"
+FORCE=""
+
+if [[ "${1:-}" == "--task" ]]; then
+  TASK_ID="${2:-}"
+  BASE_REF="${3:-origin/main}"
+  FORCE="${4:-}"
+  if [[ -z "$TASK_ID" || "$#" -gt 4 ]]; then
+    usage
+    exit 1
+  fi
+else
+  BASE_REF="${1:-origin/main}"
+  FORCE="${2:-}"
+  if [[ "$#" -gt 2 ]]; then
+    usage
+    exit 1
+  fi
+fi
 
 if [[ "$BASE_REF" == "--force" ]]; then
   FORCE="--force"
@@ -17,46 +38,69 @@ if [[ "$BASE_REF" == "--force" ]]; then
 fi
 
 if [[ "$FORCE" != "" && "$FORCE" != "--force" ]]; then
-  echo "Usage: $0 [base-ref] [--force]" >&2
+  usage
   exit 1
 fi
 
-if [[ "$FORCE" != "--force" && ( -e "$TOUCHED_FILE" || -e "$SUMMARY_FILE" ) ]]; then
-  echo "Refusing to overwrite existing agent artifacts." >&2
-  echo "Review them first, or rerun with: $0 $BASE_REF --force" >&2
+if [[ -n "$TASK_ID" && ! "$TASK_ID" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+  echo "Task ID must contain lowercase letters, digits, and hyphens." >&2
+  exit 1
+fi
+
+if [[ -n "$TASK_ID" ]]; then
+  ARTIFACT_DIR=".agent-artifacts/$TASK_ID"
+else
+  ARTIFACT_DIR=".agent-artifacts"
+fi
+
+TOUCHED_FILE="$ARTIFACT_DIR/touched-files.md"
+SUMMARY_FILE="$ARTIFACT_DIR/pr-summary.md"
+
+if [[ -n "$TASK_ID" && ! -d "$ARTIFACT_DIR" ]]; then
+  echo "Task artifacts do not exist. Run: ./scripts/agent-task.sh init $TASK_ID" >&2
+  exit 1
+fi
+
+is_template_file() {
+  local path="$1"
+  [[ ! -e "$path" ]] ||
+    grep -q '<!--' "$path" ||
+    grep -Fq 'Specific reason this task requires the file' "$path"
+}
+
+if [[ "$FORCE" != "--force" ]] &&
+  { ! is_template_file "$TOUCHED_FILE" || ! is_template_file "$SUMMARY_FILE"; }; then
+  echo "Refusing to overwrite completed agent artifacts." >&2
+  echo "Review them first, or rerun with --force." >&2
   exit 1
 fi
 
 mkdir -p "$ARTIFACT_DIR"
 CHANGED_FILES="$(mktemp)"
-trap 'rm -f "$CHANGED_FILES"' EXIT
+SORTED_FILES="$(mktemp)"
+trap 'rm -f "$CHANGED_FILES" "$SORTED_FILES"' EXIT
 
 if git rev-parse --verify "$BASE_REF" >/dev/null 2>&1; then
-  git diff --name-only "$BASE_REF"...HEAD >>"$CHANGED_FILES"
+  if git merge-base "$BASE_REF" HEAD >/dev/null 2>&1; then
+    git diff --name-only "$BASE_REF"...HEAD >>"$CHANGED_FILES"
+  else
+    git diff --name-only "$BASE_REF" HEAD >>"$CHANGED_FILES"
+  fi
 else
   echo "Warning: base ref '$BASE_REF' was not found; using working-tree changes only." >&2
 fi
 
 git diff --name-only >>"$CHANGED_FILES"
 git diff --cached --name-only >>"$CHANGED_FILES"
-git ls-files --others --exclude-standard |
-  while IFS= read -r path; do
-    case "$path" in
-      public/vgg19-models/* | *.bin) continue ;;
-      *) printf '%s\n' "$path" ;;
-    esac
-  done >>"$CHANGED_FILES"
-
-SORTED_FILES="$(mktemp)"
-trap 'rm -f "$CHANGED_FILES" "$SORTED_FILES"' EXIT
+git ls-files --others --exclude-standard >>"$CHANGED_FILES"
 sed '/^\.agent-artifacts\//d; /^$/d' "$CHANGED_FILES" | sort -u >"$SORTED_FILES"
 
 classify_file() {
   local path="$1"
   case "$path" in
     tests/* | benchmarks/* | *.spec.ts) echo "test" ;;
-    docs/* | README.md | AGENTS.md | .agent-templates/* | *.md) echo "docs" ;;
-    .github/* | scripts/* | package.json | package-lock.json | tsconfig*.json | *.config.* | .gitignore)
+    docs/* | README.md | AGENTS.md | .agent-templates/* | .agents/skills/* | *.md) echo "docs" ;;
+    .github/* | .codex/* | scripts/* | package.json | package-lock.json | tsconfig*.json | *.config.* | .gitignore)
       echo "config"
       ;;
     dist/* | test-results/* | .agent-artifacts/*) echo "generated" ;;
@@ -105,4 +149,4 @@ classify_file() {
 
 echo "Created $TOUCHED_FILE and $SUMMARY_FILE"
 echo "Base ref: $BASE_REF"
-echo "Replace every TODO before review or PR handoff."
+echo "Replace every TODO before task validation or PR handoff."

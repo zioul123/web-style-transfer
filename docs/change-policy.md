@@ -76,7 +76,7 @@ deterministic case cannot cover the behavior. Performance changes require
 correctness coverage plus an appropriate benchmark result or explanation.
 
 Tests may be omitted for documentation-only or non-executable template changes.
-Record the reason in `.agent-artifacts/review.md` and the PR summary.
+Record the reason in `.agent-artifacts/<task-id>/review.md` and the PR summary.
 
 ## Dependencies
 

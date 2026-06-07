@@ -1,0 +1,4 @@
+interface:
+  display_name: "Repository Review"
+  short_description: "Review final diffs against repository rules"
+  default_prompt: "Use $repo-review to independently review this repository diff."

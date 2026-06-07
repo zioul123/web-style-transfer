@@ -8,6 +8,10 @@
 
 - `path`: `symbol` - reason
 
+## Context And Delegation
+
+- <!-- Focused docs to load, and whether fresh explorer/reviewer agents are needed. -->
+
 ## Proposed Implementation Steps
 
 1. <!-- Ordered, bounded step. -->

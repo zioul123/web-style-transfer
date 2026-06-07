@@ -96,6 +96,27 @@ assertion layer.
 - `.github/workflows/deploy-pages.yml`: GitHub Pages build and deployment.
 - `requirements.txt`: Python reference dependencies.
 
+## Agent Tooling
+
+- `AGENTS.md`: compact always-loaded invariants, routing, and completion rules.
+- `.agents/skills/repo-change/`: progressively disclosed implementation
+  workflow, context routing, delegation, and artifact contract.
+- `.agents/skills/python-reference/`: fixture/exporter routing loaded only for
+  Python reference and numerical parity tasks.
+- `.agents/skills/repo-review/`: independent final-diff review procedure.
+- `.codex/agents/repo-explorer.toml`: read-only broad-retrieval role.
+- `.codex/agents/repo-actor.toml`: bounded implementation role using compact
+  task artifacts.
+- `.codex/agents/repo-reviewer.toml`: read-only final-review role.
+- `.agent-templates/`: committed task artifact schemas.
+- `.agent-artifacts/<task-id>/`: ignored task-local state and handoff contract.
+- `scripts/agent-task.sh`: initialize and validate task-scoped artifacts.
+- `scripts/agent-pr-summary.sh`: draft touched-file and PR summary artifacts.
+- `scripts/agent-workflow-check.sh`: validate tracked skills, agents, scripts,
+  and the root instruction context budget.
+- `scripts/agent-check.sh`: workflow validation plus format, lint, build, and
+  default Playwright checks.
+
 ## Existing Utilities And Patterns
 
 - Import protocol types through `src/types.ts` unless a module already uses a
@@ -120,5 +141,7 @@ assertion layer.
 - `docs/webgpu-style-transfer-plan.md`: project phase status and follow-ups.
 - `docs/change-policy.md`: scope, approval, docs, test, and risk policy.
 - `docs/review-rubric.md`: strict final-diff review checklist.
+- `.agents/skills/repo-change/references/context-routing.md`: conditional
+  documentation and source retrieval.
 - `public/vgg19-models/README.md`: pack layout and manifest schema.
 - `python-reference/vgg19-phase3-full-pass-README.md`: large fixture workflow.

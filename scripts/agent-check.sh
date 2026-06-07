@@ -5,6 +5,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+./scripts/agent-workflow-check.sh
+
 if [[ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]]; then
   # shellcheck disable=SC1090
   source "${NVM_DIR:-$HOME/.nvm}/nvm.sh"
@@ -94,7 +96,7 @@ run_format_check() {
   sort -u "$changed_files" |
     while IFS= read -r path; do
       case "$path" in
-        .agent-artifacts/* | public/* | dist/* | test-results/*) continue ;;
+        .agent-artifacts/* | public/*.json | dist/* | test-results/*) continue ;;
         *.js | *.jsx | *.ts | *.tsx | *.json | *.css | *.md | *.html | *.yml | *.yaml)
           printf '%s\n' "$path"
           ;;

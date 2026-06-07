@@ -1,0 +1,4 @@
+interface:
+  display_name: "Repository Change"
+  short_description: "Run scoped repository changes reliably"
+  default_prompt: "Use $repo-change to implement this repository change with focused context and verification."

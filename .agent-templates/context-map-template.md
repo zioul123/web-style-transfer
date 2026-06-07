@@ -23,3 +23,7 @@
 ## Constraints Discovered
 
 - <!-- Architecture, type, fixture, environment, or compatibility constraint. -->
+
+## Delegated Retrieval
+
+- <!-- Agent and distilled result, or "Not used". Do not paste raw logs. -->
