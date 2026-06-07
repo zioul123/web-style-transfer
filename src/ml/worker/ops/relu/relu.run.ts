@@ -20,20 +20,21 @@ export const runReluForwardBuffer = async (
   count: number,
   useVec4: boolean = false,
 ): Promise<GpuBufferRef> => {
-  const outputBuffer = useVec4 && count % 4 === 0
-    ? runUnaryShaderToBufferWithDispatch(
-      getGpuDevice(),
-      makeReluVec4Shader(count / 4),
-      input.buffer,
-      count,
-      count / 4,
-    )
-    : runUnaryShaderToBuffer(
-      getGpuDevice(),
-      makeReluShader(count),
-      input.buffer,
-      count,
-    );
+  const outputBuffer =
+    useVec4 && count % 4 === 0
+      ? runUnaryShaderToBufferWithDispatch(
+          getGpuDevice(),
+          makeReluVec4Shader(count / 4),
+          input.buffer,
+          count,
+          count / 4,
+        )
+      : runUnaryShaderToBuffer(
+          getGpuDevice(),
+          makeReluShader(count),
+          input.buffer,
+          count,
+        );
   return ownedBuffer(outputBuffer);
 };
 
@@ -67,20 +68,20 @@ export const runReluBackwardBuffer = async (
   return ownedBuffer(
     useVec4 && count % 4 === 0
       ? runUnaryShaderToBufferWithDispatch(
-        getGpuDevice(),
-        makeReluBackwardVec4Shader(count / 4),
-        input.buffer,
-        count,
-        count / 4,
-        [{ binding: 1, resource: { buffer: gradOut.buffer } }],
-      )
+          getGpuDevice(),
+          makeReluBackwardVec4Shader(count / 4),
+          input.buffer,
+          count,
+          count / 4,
+          [{ binding: 1, resource: { buffer: gradOut.buffer } }],
+        )
       : runUnaryShaderToBuffer(
-        getGpuDevice(),
-        makeReluBackwardShader(count),
-        input.buffer,
-        count,
-        [{ binding: 1, resource: { buffer: gradOut.buffer } }],
-      ),
+          getGpuDevice(),
+          makeReluBackwardShader(count),
+          input.buffer,
+          count,
+          [{ binding: 1, resource: { buffer: gradOut.buffer } }],
+        ),
   );
 };
 
@@ -103,7 +104,11 @@ export const runReluBackward = async (
     gradOutBuffer,
     input.length,
   );
-  const output = await readGpuBufferToArray(gpuDevice, outputBuffer.buffer, input.length);
+  const output = await readGpuBufferToArray(
+    gpuDevice,
+    outputBuffer.buffer,
+    input.length,
+  );
   releaseOwnedBuffer(inputBuffer);
   releaseOwnedBuffer(gradOutBuffer);
   releaseOwnedBuffer(outputBuffer);

@@ -1,4 +1,8 @@
-import type { WorkerResponse, WorkerRunStats, WorkerTensor } from "../../../types";
+import type {
+  WorkerResponse,
+  WorkerRunStats,
+  WorkerTensor,
+} from "../../../types";
 
 export const postResponse = (response: WorkerResponse): void => {
   self.postMessage(response);
@@ -23,7 +27,10 @@ export const sendPongResponse = (id: string, timestamp: number): void => {
   postResponse({ type: "pong", id, timestamp });
 };
 
-export const sendTensorRoundtripResult = (id: string, tensor: WorkerTensor): void => {
+export const sendTensorRoundtripResult = (
+  id: string,
+  tensor: WorkerTensor,
+): void => {
   postResponse({
     type: "tensor-roundtrip-result",
     id,
@@ -90,7 +97,23 @@ export const sendWebGpuInitResult = (
 export const sendRunFirstPoolOptimizerResult = (
   id: string,
   result:
-    | { ok: true; losses: number[]; finalValues: number[]; stats?: { elapsedMs: number; avgStepMs: number; forwardMs: number; lossMs: number; backwardMs: number; updateMs: number; readbackMs: number; mandatoryReadbackMs: number; diagnosticsReadbackMs: number; steps: number } }
+    | {
+        ok: true;
+        losses: number[];
+        finalValues: number[];
+        stats?: {
+          elapsedMs: number;
+          avgStepMs: number;
+          forwardMs: number;
+          lossMs: number;
+          backwardMs: number;
+          updateMs: number;
+          readbackMs: number;
+          mandatoryReadbackMs: number;
+          diagnosticsReadbackMs: number;
+          steps: number;
+        };
+      }
     | { ok: false; message: string },
 ): void => {
   postResponse({ type: "run-first-pool-optimizer-result", id, ...result });

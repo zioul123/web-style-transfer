@@ -12,10 +12,7 @@ import {
 } from "../../../runtime/gpuFlags";
 import { getOrCreateComputePipeline } from "../../../runtime/computePipelineCache";
 import { runBinaryOpToBuffer } from "../../../runtime/shaderRunner";
-import type {
-  InputOptimizerConfig,
-  InputOptimizerVectorOps,
-} from "./types";
+import type { InputOptimizerConfig, InputOptimizerVectorOps } from "./types";
 
 const makeCloneShader = (count: number): string => `
 @group(0) @binding(0) var<storage, read> input: array<f32>;
@@ -190,9 +187,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   out[i] = abs(input[i]);
 }`;
 
-const createPipelineCache = (
-  device: GPUDevice,
-): ((key: string, shader: string) => GPUComputePipeline) =>
+const createPipelineCache =
+  (device: GPUDevice): ((key: string, shader: string) => GPUComputePipeline) =>
   (key: string, shader: string): GPUComputePipeline =>
     getOrCreateComputePipeline(device, key, shader);
 
@@ -489,7 +485,10 @@ const dotProduct = async (
     const nextCount = Math.ceil(currentCount / 64);
     const next = runSingleInputReductionShader(
       device,
-      getPipeline(`reduce-sum:${currentCount}`, makeReduceSumShader(currentCount)),
+      getPipeline(
+        `reduce-sum:${currentCount}`,
+        makeReduceSumShader(currentCount),
+      ),
       current,
       currentCount,
       nextCount,
@@ -525,7 +524,10 @@ const dotToScalarBuffer = async (
     const nextCount = Math.ceil(currentCount / 64);
     const next = runSingleInputReductionShader(
       device,
-      getPipeline(`reduce-sum:${currentCount}`, makeReduceSumShader(currentCount)),
+      getPipeline(
+        `reduce-sum:${currentCount}`,
+        makeReduceSumShader(currentCount),
+      ),
       current,
       currentCount,
       nextCount,
@@ -554,7 +556,10 @@ const absSum = async (
     const nextCount = Math.ceil(currentCount / 64);
     const next = runSingleInputReductionShader(
       device,
-      getPipeline(`reduce-sum:${currentCount}`, makeReduceSumShader(currentCount)),
+      getPipeline(
+        `reduce-sum:${currentCount}`,
+        makeReduceSumShader(currentCount),
+      ),
       current,
       currentCount,
       nextCount,
@@ -592,7 +597,10 @@ const dotPairWithRight = async (
     const nextCount = Math.ceil(currentCount / 64);
     const next = runSingleInputReductionShader(
       device,
-      getPipeline(`reduce-pair-sum:${currentCount}`, makeReducePairSumShader(currentCount)),
+      getPipeline(
+        `reduce-pair-sum:${currentCount}`,
+        makeReducePairSumShader(currentCount),
+      ),
       current,
       currentCount,
       nextCount * 2,
@@ -606,7 +614,13 @@ const dotPairWithRight = async (
     usage: BUFFER_USAGE_MAP_READ_COPY_DST,
   });
   const encoder = device.createCommandEncoder();
-  encoder.copyBufferToBuffer(current.buffer, 0, readBuffer, 0, 2 * Float32Array.BYTES_PER_ELEMENT);
+  encoder.copyBufferToBuffer(
+    current.buffer,
+    0,
+    readBuffer,
+    0,
+    2 * Float32Array.BYTES_PER_ELEMENT,
+  );
   device.queue.submit([encoder.finish()]);
   await readBuffer.mapAsync(MAP_MODE_READ);
   const pair = new Float32Array(readBuffer.getMappedRange().slice(0));
@@ -623,7 +637,10 @@ export const createGpuVectorOps = (
   const getPipeline = createPipelineCache(device);
   const clonePipeline = getPipeline("clone", makeCloneShader(count));
   const scalePipeline = getPipeline("scale", makeScaleShader(count));
-  const addScaledPipeline = getPipeline("add-scaled", makeAddScaledShader(count));
+  const addScaledPipeline = getPipeline(
+    "add-scaled",
+    makeAddScaledShader(count),
+  );
   const addScaledByDotAndScalarPipeline = getPipeline(
     "add-scaled-by-dot-and-scalar",
     makeAddScaledByDotAndScalarShader(count),
@@ -632,7 +649,10 @@ export const createGpuVectorOps = (
     "add-scaled-by-scalar",
     makeAddScaledByScalarShader(count),
   );
-  const updateClampPipeline = getPipeline("update-clamp", makeUpdateClampShader(count));
+  const updateClampPipeline = getPipeline(
+    "update-clamp",
+    makeUpdateClampShader(count),
+  );
   const scalarParameterBuffer = device.createBuffer({
     size: Float32Array.BYTES_PER_ELEMENT,
     usage: BUFFER_USAGE_STORAGE_COPY_DST,
@@ -679,13 +699,9 @@ export const createGpuVectorOps = (
       scalar: number,
     ): Promise<GpuBufferRef> => {
       writeScalarParameter(device, scalarParameterBuffer, scalar);
-      const out = runSingleInputShader(
-        device,
-        scalePipeline,
-        input,
-        count,
-        [{ binding: 2, resource: { buffer: scalarParameterBuffer } }],
-      );
+      const out = runSingleInputShader(device, scalePipeline, input, count, [
+        { binding: 2, resource: { buffer: scalarParameterBuffer } },
+      ]);
       return out;
     },
 
@@ -786,11 +802,7 @@ export const createGpuVectorOps = (
       direction: GpuBufferRef,
       learningRate: number,
     ): Promise<GpuBufferRef> => {
-      writeScalarParameter(
-        device,
-        learningRateParameterBuffer,
-        learningRate,
-      );
+      writeScalarParameter(device, learningRateParameterBuffer, learningRate);
       const out = runTwoInputShader(
         device,
         updateClampPipeline,

@@ -12,7 +12,9 @@ export const runWeightedScalarSumBuffer = (
     throw new Error("weighted scalar sum requires at least one scalar buffer.");
   }
   if (scalarBuffers.length !== weights.length) {
-    throw new Error("weighted scalar sum requires matching scalar and weight counts.");
+    throw new Error(
+      "weighted scalar sum requires matching scalar and weight counts.",
+    );
   }
   const gpuDevice = getGpuDevice();
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
@@ -27,10 +29,12 @@ export const runWeightedScalarSumBuffer = (
     usage: BUFFER_USAGE_STORAGE_COPY_SRC,
   });
   const outBindingIndex = scalarBuffers.length;
-  const entries: GPUBindGroupEntry[] = scalarBuffers.map((scalarBuffer, index) => ({
-    binding: index,
-    resource: { buffer: scalarBuffer.buffer },
-  }));
+  const entries: GPUBindGroupEntry[] = scalarBuffers.map(
+    (scalarBuffer, index) => ({
+      binding: index,
+      resource: { buffer: scalarBuffer.buffer },
+    }),
+  );
   entries.push({
     binding: outBindingIndex,
     resource: { buffer: outBuffer },

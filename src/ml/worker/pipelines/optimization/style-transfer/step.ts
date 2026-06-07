@@ -3,7 +3,13 @@ import { readGpuBufferToArray } from "../../../runtime/bufferKernels";
 import type { InputOptimizer } from "../input-optimizer/types";
 import { POOL_LAYERS, RELU_LAYERS } from "../layerSchedules";
 import type { OptimizationTrackedOps } from "../trackedOps";
-import { convOutputShape, elementCount, gramElementCount, pooledShape, type TensorShape4D } from "../../../runtime/tensorShapes";
+import {
+  convOutputShape,
+  elementCount,
+  gramElementCount,
+  pooledShape,
+  type TensorShape4D,
+} from "../../../runtime/tensorShapes";
 import type {
   ConvLayerCacheEntry,
   StyleTransferForwardResult,
@@ -94,7 +100,10 @@ const computeStepLoss = async (
   tracked: OptimizationTrackedOps,
   run: StyleTransferForwardResult,
   persistent: StyleTransferPersistentContext,
-): Promise<{ totalLossBuffer: GpuBufferRef; styleLayerContexts: StyleLayerLossContext[] }> => {
+): Promise<{
+  totalLossBuffer: GpuBufferRef;
+  styleLayerContexts: StyleLayerLossContext[];
+}> => {
   const scalarLossBuffers: GpuBufferRef[] = [];
   const scalarWeights: number[] = [];
   const styleLayerContexts: StyleLayerLossContext[] = [];
@@ -103,7 +112,9 @@ const computeStepLoss = async (
     const reluShape = run.reluShape[reluLayerIndex];
     const targetGram = persistent.styleGramTargets[reluLayerIndex];
     if (inputRelu === undefined) {
-      throw new Error(`Missing ReLU activation for style layer index ${reluLayerIndex}.`);
+      throw new Error(
+        `Missing ReLU activation for style layer index ${reluLayerIndex}.`,
+      );
     }
     if (reluShape === undefined) {
       throw new Error(`Unsupported ReLU style layer index ${reluLayerIndex}.`);
@@ -147,7 +158,10 @@ const computeStepLoss = async (
   );
   scalarLossBuffers.push(contentSse);
   scalarWeights.push(payload.contentWeight / elementCount(contentReluShape));
-  const totalLossBuffer = tracked.weightedScalarSum(scalarLossBuffers, scalarWeights);
+  const totalLossBuffer = tracked.weightedScalarSum(
+    scalarLossBuffers,
+    scalarWeights,
+  );
   return {
     totalLossBuffer,
     styleLayerContexts,
@@ -172,7 +186,11 @@ const seedReluGradients = async (
     const weightedStyleGrad =
       payload.styleWeight === 1
         ? styleGrad
-        : tracked.scalarMul(styleGrad, styleLayerContext.reluCount, payload.styleWeight);
+        : tracked.scalarMul(
+            styleGrad,
+            styleLayerContext.reluCount,
+            payload.styleWeight,
+          );
     addReluGradient(
       tracked,
       gradByReluLayer,
@@ -197,7 +215,11 @@ const seedReluGradients = async (
   const weightedContentGrad =
     payload.contentWeight === 1
       ? contentGrad
-      : tracked.scalarMul(contentGrad, elementCount(contentReluShape), payload.contentWeight);
+      : tracked.scalarMul(
+          contentGrad,
+          elementCount(contentReluShape),
+          payload.contentWeight,
+        );
   addReluGradient(
     tracked,
     gradByReluLayer,
@@ -222,7 +244,11 @@ const backpropagateToInput = async (
     if (poolLayerSet.has(layerIndex)) {
       const poolInput = run.layerInput[layerIndex];
       const poolInputShape = run.layerInputShape[layerIndex];
-      if (grad !== null && poolInput !== undefined && poolInputShape !== undefined) {
+      if (
+        grad !== null &&
+        poolInput !== undefined &&
+        poolInputShape !== undefined
+      ) {
         grad = await tracked.maxPoolBackward(poolInput, poolInputShape, grad);
       }
     }
@@ -233,13 +259,21 @@ const backpropagateToInput = async (
       const reluShape = run.reluShape[layerIndex];
       if (tapGrad !== undefined) {
         if (reluShape === undefined) {
-          throw new Error(`Missing ReLU shape for gradient layer index ${layerIndex}.`);
+          throw new Error(
+            `Missing ReLU shape for gradient layer index ${layerIndex}.`,
+          );
         }
         grad =
-          grad === null ? tapGrad : tracked.add(grad, tapGrad, elementCount(reluShape));
+          grad === null
+            ? tapGrad
+            : tracked.add(grad, tapGrad, elementCount(reluShape));
       }
       if (grad !== null && reluOut !== undefined && reluShape !== undefined) {
-        grad = await tracked.reluBackward(reluOut, grad, elementCount(reluShape));
+        grad = await tracked.reluBackward(
+          reluOut,
+          grad,
+          elementCount(reluShape),
+        );
       }
     }
 
@@ -255,7 +289,8 @@ const backpropagateToInput = async (
     }
   }
 
-  if (grad === null) throw new Error("No gradient path reached the input image.");
+  if (grad === null)
+    throw new Error("No gradient path reached the input image.");
   return tracked.normalizeBackward(grad, payload.inputShape, payload.std);
 };
 
@@ -290,7 +325,9 @@ export const runStyleTransferStep = async (
   const lossStart = performance.now();
   const lossResult = await computeStepLoss(payload, tracked, run, persistent);
   const totalLoss = readLoss
-    ? (await readGpuBufferToArray(device, lossResult.totalLossBuffer.buffer, 1))[0]
+    ? (
+        await readGpuBufferToArray(device, lossResult.totalLossBuffer.buffer, 1)
+      )[0]
     : null;
   if (synchronizePhaseTimings) await device.queue.onSubmittedWorkDone();
   const lossMs = performance.now() - lossStart;

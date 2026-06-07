@@ -1,7 +1,4 @@
-import type {
-  InputOptimizerConfig,
-  InputOptimizerVectorOps,
-} from "./types";
+import type { InputOptimizerConfig, InputOptimizerVectorOps } from "./types";
 
 const clampUnit = (value: number): number => Math.max(0, Math.min(1, value));
 
@@ -19,10 +16,7 @@ export const createCpuVectorOps = (
     return out;
   },
 
-  scale: async (
-    input: Float32Array,
-    scalar: number,
-  ): Promise<Float32Array> => {
+  scale: async (input: Float32Array, scalar: number): Promise<Float32Array> => {
     const out = new Float32Array(count);
     for (let i = 0; i < count; i += 1) out[i] = input[i] * scalar;
     return out;
@@ -137,8 +131,7 @@ export const createCpuVectorOps = (
       const vHat = v[i] / b2Correction;
       out[i] = clampUnit(
         input[i] -
-          config.learningRate *
-            (mHat / (Math.sqrt(vHat) + config.adamEpsilon)),
+          config.learningRate * (mHat / (Math.sqrt(vHat) + config.adamEpsilon)),
       );
     }
     return out;

@@ -25,10 +25,7 @@ export const VGG_PACK_OPTIONS = [
 
 export type VggPackName = (typeof VGG_PACK_OPTIONS)[number]["name"];
 
-export type VggPackLoadState =
-  | "downloading"
-  | "cached"
-  | "ready";
+export type VggPackLoadState = "downloading" | "cached" | "ready";
 
 export type VggPackLoadResult = {
   weights: FullWeights;
@@ -39,9 +36,10 @@ export type VggPackLoadResult = {
 export const DEFAULT_VGG_PACK: VggPackName = "int4log-experimental";
 export const VGG_PACK_STORAGE_KEY = "style-transfer.vgg-pack";
 
-const loadJson = async <T,>(url: string): Promise<T> => {
+const loadJson = async <T>(url: string): Promise<T> => {
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`Failed to load ${url}: ${response.status}`);
+  if (!response.ok)
+    throw new Error(`Failed to load ${url}: ${response.status}`);
   return (await response.json()) as T;
 };
 
@@ -49,7 +47,10 @@ const toFullWeights = async (
   manifest: Vgg19WeightsManifest,
   shardBuffers: Record<string, ArrayBuffer>,
 ): Promise<FullWeights> => {
-  const cache = await parseVgg19ManifestBackedLayerCache(manifest, shardBuffers);
+  const cache = await parseVgg19ManifestBackedLayerCache(
+    manifest,
+    shardBuffers,
+  );
   const weights: FullWeights = {};
   for (let layerIndex = 0; layerIndex <= 29; layerIndex += 1) {
     const layer = cache[layerIndex];
@@ -132,5 +133,5 @@ export const clearCachedVggModelPacks = async (): Promise<ModelCacheStatus> => {
   return await readModelCacheStatus();
 };
 
-export const getCachedVggModelPackStatus = async (): Promise<ModelCacheStatus> =>
-  await readModelCacheStatus();
+export const getCachedVggModelPackStatus =
+  async (): Promise<ModelCacheStatus> => await readModelCacheStatus();

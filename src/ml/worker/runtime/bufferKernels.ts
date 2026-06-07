@@ -13,7 +13,9 @@ export type BorrowedGpuBuffer = { owned: false; buffer: GPUBuffer };
 export type GpuBufferRef = OwnedGpuBuffer | BorrowedGpuBuffer;
 type KernelRuntimeOptions = { useCachedPipelines: boolean };
 
-const kernelRuntimeOptions: KernelRuntimeOptions = { useCachedPipelines: false };
+const kernelRuntimeOptions: KernelRuntimeOptions = {
+  useCachedPipelines: false,
+};
 
 export const setKernelRuntimeOptions = (
   options: Partial<KernelRuntimeOptions>,
@@ -23,8 +25,14 @@ export const setKernelRuntimeOptions = (
   }
 };
 
-export const ownedBuffer = (buffer: GPUBuffer): OwnedGpuBuffer => ({ owned: true, buffer });
-export const borrowedBuffer = (buffer: GPUBuffer): BorrowedGpuBuffer => ({ owned: false, buffer });
+export const ownedBuffer = (buffer: GPUBuffer): OwnedGpuBuffer => ({
+  owned: true,
+  buffer,
+});
+export const borrowedBuffer = (buffer: GPUBuffer): BorrowedGpuBuffer => ({
+  owned: false,
+  buffer,
+});
 
 export const releaseOwnedBuffer = (bufferRef: GpuBufferRef): void => {
   if (bufferRef.owned) {
@@ -60,7 +68,9 @@ export const readGpuBufferToArray = async (
   encoder.copyBufferToBuffer(sourceBuffer, 0, readBuffer, 0, byteLength);
   gpuDevice.queue.submit([encoder.finish()]);
   await readBuffer.mapAsync(MAP_MODE_READ);
-  const out: Float32Array = new Float32Array(readBuffer.getMappedRange().slice(0));
+  const out: Float32Array = new Float32Array(
+    readBuffer.getMappedRange().slice(0),
+  );
   readBuffer.unmap();
   readBuffer.destroy();
   return out;
@@ -81,9 +91,12 @@ export const runUnaryShaderToBuffer = (
   const pipeline = kernelRuntimeOptions.useCachedPipelines
     ? getOrCreateComputePipeline(gpuDevice, code, code)
     : gpuDevice.createComputePipeline({
-      layout: "auto",
-      compute: { module: gpuDevice.createShaderModule({ code }), entryPoint: "main" },
-    });
+        layout: "auto",
+        compute: {
+          module: gpuDevice.createShaderModule({ code }),
+          entryPoint: "main",
+        },
+      });
   const bindGroup = gpuDevice.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
     entries: [
@@ -118,9 +131,12 @@ export const runUnaryShaderToBufferWithDispatch = (
   const pipeline = kernelRuntimeOptions.useCachedPipelines
     ? getOrCreateComputePipeline(gpuDevice, code, code)
     : gpuDevice.createComputePipeline({
-      layout: "auto",
-      compute: { module: gpuDevice.createShaderModule({ code }), entryPoint: "main" },
-    });
+        layout: "auto",
+        compute: {
+          module: gpuDevice.createShaderModule({ code }),
+          entryPoint: "main",
+        },
+      });
   const bindGroup = gpuDevice.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
     entries: [
@@ -139,7 +155,6 @@ export const runUnaryShaderToBufferWithDispatch = (
   return outBuffer;
 };
 
-
 export const runScalarMulBuffer = async (
   input: GpuBufferRef,
   count: number,
@@ -147,7 +162,10 @@ export const runScalarMulBuffer = async (
 ): Promise<GpuBufferRef> => {
   const gpuDevice: GPUDevice | null = getGpuDevice();
   if (gpuDevice === null) throw new Error("WebGPU is not initialized.");
-  const scalarBuffer = uploadToOwnedBuffer(gpuDevice, new Float32Array([scalar]));
+  const scalarBuffer = uploadToOwnedBuffer(
+    gpuDevice,
+    new Float32Array([scalar]),
+  );
   const outputBuffer = runBinaryOpToBuffer(
     gpuDevice,
     "mul",

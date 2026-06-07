@@ -14,21 +14,24 @@ import {
 } from "../trackedOps";
 import { createInputOptimizer } from "../input-optimizer/createInputOptimizer";
 import { createGpuVectorOps } from "../input-optimizer/gpuVectorOps";
-import type { InputOptimizer, InputOptimizerConfig } from "../input-optimizer/types";
-import { elementCount, type TensorShape4D } from "../../../runtime/tensorShapes";
+import type {
+  InputOptimizer,
+  InputOptimizerConfig,
+} from "../input-optimizer/types";
+import {
+  elementCount,
+  type TensorShape4D,
+} from "../../../runtime/tensorShapes";
 import { parseVgg19ConvLayerCache } from "../../../models/vgg19/weights";
 import { createPersistentTargetContext } from "./persistentTargetContext";
-import {
-  runStyleTransferForward,
-  runStyleTransferStep,
-} from "./step";
-import type { WorkerKernelOptimizationFlags, WorkerKernelStats } from "../../../../../types";
+import { runStyleTransferForward, runStyleTransferStep } from "./step";
+import type {
+  WorkerKernelOptimizationFlags,
+  WorkerKernelStats,
+} from "../../../../../types";
 import { BUFFER_USAGE_STORAGE_COPY_DST } from "../../../runtime/gpuFlags";
 import type { ConvWeightStorage } from "../../../ops/convolution/conv2d.shader";
-import type {
-  StyleTransferPayload,
-  StyleTransferRunResult,
-} from "./types";
+import type { StyleTransferPayload, StyleTransferRunResult } from "./types";
 
 type OptimizerSession = {
   key: string;
@@ -60,7 +63,9 @@ const createSessionOptimizer = (
 ): InputOptimizer<GpuBufferRef> =>
   createInputOptimizer(optimizerConfig, createGpuVectorOps(device, inputCount));
 
-const normalizeLossReadbackInterval = (interval: number | undefined): number => {
+const normalizeLossReadbackInterval = (
+  interval: number | undefined,
+): number => {
   if (interval === undefined) return 1;
   if (!Number.isFinite(interval)) return 1;
   return Math.max(1, Math.floor(interval));
@@ -79,7 +84,11 @@ const getOrCreateOptimizer = (
   const sessionId = payload.sessionId ?? null;
   if (sessionId === null) {
     return {
-      inputOptimizer: createSessionOptimizer(device, inputCount, optimizerConfig),
+      inputOptimizer: createSessionOptimizer(
+        device,
+        inputCount,
+        optimizerConfig,
+      ),
       sessionId: null,
       stepOffset: 0,
     };
@@ -89,7 +98,11 @@ const getOrCreateOptimizer = (
   const existing = optimizerSessionById.get(sessionId);
   if (existing === undefined || existing.key !== key) {
     if (existing !== undefined) existing.inputOptimizer.dispose();
-    const inputOptimizer = createSessionOptimizer(device, inputCount, optimizerConfig);
+    const inputOptimizer = createSessionOptimizer(
+      device,
+      inputCount,
+      optimizerConfig,
+    );
     optimizerSessionById.set(sessionId, {
       key,
       stepOffset: 0,
@@ -173,29 +186,42 @@ const assertSupportedKernelFlags = (
 ): void => {
   if (kernelFlags === undefined) return;
   if (kernelFlags.usePersistentWeightBuffers === false) {
-    throw new Error("kernelFlags.usePersistentWeightBuffers=false is not supported.");
+    throw new Error(
+      "kernelFlags.usePersistentWeightBuffers=false is not supported.",
+    );
   }
   if (kernelFlags.useStepBufferPool === false) {
     throw new Error("kernelFlags.useStepBufferPool=false is not supported.");
   }
   if (kernelFlags.convForwardKernel === "tiled-spatial") {
-    throw new Error("kernelFlags.convForwardKernel=tiled-spatial is not implemented yet.");
+    throw new Error(
+      "kernelFlags.convForwardKernel=tiled-spatial is not implemented yet.",
+    );
   }
   if (kernelFlags.convBackwardInputKernel === "spatial-vec4") {
-    throw new Error("kernelFlags.convBackwardInputKernel=spatial-vec4 is not implemented yet.");
+    throw new Error(
+      "kernelFlags.convBackwardInputKernel=spatial-vec4 is not implemented yet.",
+    );
   }
   if (
     kernelFlags.weightStorage === "fp16-storage" &&
     kernelFlags.usePersistentWeightBuffers !== true
   ) {
-    throw new Error("kernelFlags.weightStorage=fp16-storage requires usePersistentWeightBuffers=true.");
+    throw new Error(
+      "kernelFlags.weightStorage=fp16-storage requires usePersistentWeightBuffers=true.",
+    );
   }
   if (kernelFlags.weightStorage === "int8-dequant-experimental") {
-    throw new Error("kernelFlags.weightStorage=int8-dequant-experimental is not implemented yet.");
+    throw new Error(
+      "kernelFlags.weightStorage=int8-dequant-experimental is not implemented yet.",
+    );
   }
 };
 
-const mergeKernelStats = (target: WorkerKernelStats, source: WorkerKernelStats): void => {
+const mergeKernelStats = (
+  target: WorkerKernelStats,
+  source: WorkerKernelStats,
+): void => {
   for (const [family, stat] of Object.entries(source)) {
     if (stat === undefined) continue;
     const key = family as keyof WorkerKernelStats;
@@ -217,16 +243,29 @@ export const runStyleTransferPipeline = async (
   const synchronizePhaseTimings = payload.synchronizePhaseTimings ?? false;
   if (synchronizePhaseTimings) await device.queue.onSubmittedWorkDone();
 
-  const contentShape: TensorShape4D = payload.contentShape ?? payload.inputShape;
+  const contentShape: TensorShape4D =
+    payload.contentShape ?? payload.inputShape;
   const styleShape: TensorShape4D = payload.styleShape ?? payload.inputShape;
   if (!shapesMatch(payload.inputShape, contentShape)) {
     throw new Error(
       "Style transfer expects the optimized input shape to match the content image shape.",
     );
   }
-  assertValuesMatchShape("inputImageValues", payload.inputImageValues, payload.inputShape);
-  assertValuesMatchShape("contentImageValues", payload.contentImageValues, contentShape);
-  assertValuesMatchShape("styleImageValues", payload.styleImageValues, styleShape);
+  assertValuesMatchShape(
+    "inputImageValues",
+    payload.inputImageValues,
+    payload.inputShape,
+  );
+  assertValuesMatchShape(
+    "contentImageValues",
+    payload.contentImageValues,
+    contentShape,
+  );
+  assertValuesMatchShape(
+    "styleImageValues",
+    payload.styleImageValues,
+    styleShape,
+  );
 
   const runtimeContext = createOptimizationRuntimeContext(device, {
     reuseTempBuffers: payload.kernelFlags?.useStepBufferPool ?? true,
@@ -263,7 +302,9 @@ export const runStyleTransferPipeline = async (
   const aggregatedKernelStats: WorkerKernelStats = {};
   let weightUploadMs = 0;
   const persistentWeightStorage: ConvWeightStorage =
-    payload.kernelFlags?.weightStorage === "fp16-storage" ? "fp16-packed" : "fp32";
+    payload.kernelFlags?.weightStorage === "fp16-storage"
+      ? "fp16-packed"
+      : "fp32";
   const encodePersistentWeightValues = (
     values: Float32Array,
   ): Float32Array | Uint32Array =>
@@ -272,7 +313,10 @@ export const runStyleTransferPipeline = async (
       : values;
   const persistentWeightBuffers: GPUBuffer[] = [];
   const persistentConvWeightBuffers = new Map<Float32Array, GPUBuffer>();
-  const persistentConvBackwardTransposedWeightBuffers = new Map<Float32Array, GPUBuffer>();
+  const persistentConvBackwardTransposedWeightBuffers = new Map<
+    Float32Array,
+    GPUBuffer
+  >();
   const persistentConvBiasBuffers = new Map<Float32Array, GPUBuffer>();
   const persistentKernelResources: OptimizationPersistentKernelResources = {
     getConvForwardStaticBuffers: (weight: Float32Array, bias: Float32Array) => {
@@ -301,7 +345,11 @@ export const runStyleTransferPipeline = async (
         persistentWeightBuffers.push(biasBuffer);
         weightUploadMs += performance.now() - uploadStart;
       }
-      return { weightBuffer, weightStorage: persistentWeightStorage, biasBuffer };
+      return {
+        weightBuffer,
+        weightStorage: persistentWeightStorage,
+        biasBuffer,
+      };
     },
     getConvBackwardStaticBuffers: (
       weight: Float32Array,
@@ -329,8 +377,8 @@ export const runStyleTransferPipeline = async (
           for (let ic = 0; ic < inChannels; ic += 1) {
             for (let kh = 0; kh < 3; kh += 1) {
               for (let kw = 0; kw < 3; kw += 1) {
-                const sourceIndex = ((oc * inChannels + ic) * 9) + kh * 3 + kw;
-                const targetIndex = (((ic * 3 + kh) * 3 + kw) * outChannels) + oc;
+                const sourceIndex = (oc * inChannels + ic) * 9 + kh * 3 + kw;
+                const targetIndex = ((ic * 3 + kh) * 3 + kw) * outChannels + oc;
                 transposed[targetIndex] = weight[sourceIndex];
               }
             }
@@ -343,7 +391,10 @@ export const runStyleTransferPipeline = async (
           usage: BUFFER_USAGE_STORAGE_COPY_DST,
         });
         device.queue.writeBuffer(transposedWeightBuffer, 0, transposedValues);
-        persistentConvBackwardTransposedWeightBuffers.set(weight, transposedWeightBuffer);
+        persistentConvBackwardTransposedWeightBuffers.set(
+          weight,
+          transposedWeightBuffer,
+        );
         persistentWeightBuffers.push(transposedWeightBuffer);
         weightUploadMs += performance.now() - uploadStart;
       }
@@ -368,10 +419,16 @@ export const runStyleTransferPipeline = async (
     device,
     new Float32Array(payload.styleImageValues),
   );
-  const persistentBuffers: GpuBufferRef[] = [contentImageBuffer, styleImageBuffer];
+  const persistentBuffers: GpuBufferRef[] = [
+    contentImageBuffer,
+    styleImageBuffer,
+  ];
 
   try {
-    const targetContext = createPersistentTargetContext(runtimeContext, persistentBuffers);
+    const targetContext = createPersistentTargetContext(
+      runtimeContext,
+      persistentBuffers,
+    );
     const targetTracked = createOptimizationTrackedOps(
       device,
       targetContext,
@@ -432,7 +489,8 @@ export const runStyleTransferPipeline = async (
     if (synchronizePhaseTimings) await device.queue.onSubmittedWorkDone();
 
     for (let step = 0; step < payload.steps; step += 1) {
-      if (inputBuffer === null) throw new Error("Input buffer was released unexpectedly.");
+      if (inputBuffer === null)
+        throw new Error("Input buffer was released unexpectedly.");
       const tracked = createOptimizationTrackedOps(
         device,
         runtimeContext,
@@ -472,14 +530,17 @@ export const runStyleTransferPipeline = async (
       if (synchronizePhaseTimings) await device.queue.onSubmittedWorkDone();
     }
 
-    if (inputBuffer === null) throw new Error("Input buffer was released unexpectedly.");
+    if (inputBuffer === null)
+      throw new Error("Input buffer was released unexpectedly.");
     const finalValues = await readGpuBufferToArray(
       device,
       inputBuffer.buffer,
       elementCount(payload.inputShape),
     );
     const elapsedMs = performance.now() - totalStart;
-    const kernelStats = collectKernelStats ? { ...aggregatedKernelStats } : undefined;
+    const kernelStats = collectKernelStats
+      ? { ...aggregatedKernelStats }
+      : undefined;
     if (kernelStats !== undefined) {
       kernelStats.weightUpload = { calls: 1, elapsedMs: weightUploadMs };
     }
@@ -503,7 +564,10 @@ export const runStyleTransferPipeline = async (
     if (sessionId === null) inputOptimizer.dispose();
     if (sessionId !== null) {
       const existing = optimizerSessionById.get(sessionId);
-      if (existing !== undefined && existing.inputOptimizer === inputOptimizer) {
+      if (
+        existing !== undefined &&
+        existing.inputOptimizer === inputOptimizer
+      ) {
         existing.stepOffset += payload.steps;
       }
     }
