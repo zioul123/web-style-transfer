@@ -189,6 +189,46 @@ loaded only when relevant:
 - `$python-reference`: PyTorch exporters, fixtures, quantization, and parity.
 - `$repo-review`: independent final-diff review.
 
+The diagram below is the human-facing map of the workflow. Skills provide
+task-specific instructions; project agents are fresh-context roles that may be
+delegated bounded work. Task artifacts are the durable handoff between them.
+
+<!-- agent-workflow-diagram:start -->
+
+```mermaid
+flowchart TD
+    request["Repository task"] --> route{"Route by scope"}
+
+    route -->|"Bounded or trivial"| local["Current agent"]
+    route -->|"Non-trivial repo change"| change["Skill: $repo-change"]
+    route -->|"PyTorch, fixtures, quantization, parity"| python["Skill: $python-reference"]
+    route -->|"Review request or final diff"| reviewSkill["Skill: $repo-review"]
+
+    change --> artifacts["Task artifacts<br/>task, plan, context map,<br/>touched files, review, PR summary"]
+    python --> change
+
+    change -.->|"Uncertain or cross-area retrieval"| explorer["Agent: repo-explorer<br/>read-only context map"]
+    explorer --> artifacts
+
+    artifacts -.->|"Broad bounded implementation"| actor["Agent: repo-actor<br/>workspace-write implementation"]
+    actor --> artifacts
+    local --> implement["Implement the smallest scoped change"]
+    artifacts --> implement
+
+    implement --> checks["Focused checks<br/>build for code/config<br/>agent-check when feasible"]
+    checks -.->|"Non-trivial code/config diff"| reviewer["Agent: repo-reviewer<br/>read-only independent review"]
+    reviewer --> reviewSkill
+    reviewSkill --> findings{"Required findings?"}
+    findings -->|"Yes: fix and re-check"| implement
+    findings -->|"No"| finish["Complete artifacts and summary"]
+    checks -->|"Review not required"| finish
+```
+
+<!-- agent-workflow-diagram:end -->
+
+When adding, removing, renaming, or materially rerouting a repo skill or project
+agent, update this marked diagram in the same change.
+
 For a non-trivial change, use a short task ID:
 
 ```bash

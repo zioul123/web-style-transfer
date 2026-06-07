@@ -26,6 +26,8 @@ Web Style Transfer is a correctness-first React/TypeScript/WebGPU application.
 - Use `$repo-review` for independent final-diff review.
 - Architecture and risk policies are in `docs/architecture.md` and
   `docs/change-policy.md`; load them when the changed surface requires them.
+- When skills, project agents, delegation, or completion routing change, update
+  the marked agent workflow diagram in `README.md` in the same change.
 
 ## Delegation
 

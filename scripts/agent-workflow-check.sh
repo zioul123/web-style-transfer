@@ -7,6 +7,47 @@ cd "$ROOT_DIR"
 
 required_skills=(repo-change python-reference repo-review)
 readonly_agents=(repo-explorer repo-reviewer)
+workflow_diagram="$(
+  sed -n \
+    '/<!-- agent-workflow-diagram:start -->/,/<!-- agent-workflow-diagram:end -->/p' \
+    README.md
+)"
+
+if [[ -z "$workflow_diagram" ]] ||
+  ! grep -Fq '<!-- agent-workflow-diagram:start -->' <<<"$workflow_diagram" ||
+  ! grep -Fq '<!-- agent-workflow-diagram:end -->' <<<"$workflow_diagram" ||
+  ! grep -Fq '```mermaid' <<<"$workflow_diagram"; then
+  echo "README.md is missing the marked Mermaid agent workflow diagram." >&2
+  exit 1
+fi
+
+actual_skills="$(
+  find .agents/skills -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort
+)"
+diagram_skills="$(
+  grep -oE '\$[a-z0-9-]+' <<<"$workflow_diagram" | sed 's/^\$//' | sort -u
+)"
+actual_agents="$(
+  find .codex/agents -mindepth 1 -maxdepth 1 -type f -name '*.toml' \
+    -exec basename {} .toml \; | sort
+)"
+diagram_agents="$(
+  grep -oE 'Agent: [a-z0-9-]+' <<<"$workflow_diagram" |
+    sed 's/^Agent: //' |
+    sort -u
+)"
+
+if [[ "$actual_skills" != "$diagram_skills" ]]; then
+  echo "README agent workflow skill inventory is stale." >&2
+  printf 'Expected:\n%s\nDiagram:\n%s\n' "$actual_skills" "$diagram_skills" >&2
+  exit 1
+fi
+
+if [[ "$actual_agents" != "$diagram_agents" ]]; then
+  echo "README agent workflow agent inventory is stale." >&2
+  printf 'Expected:\n%s\nDiagram:\n%s\n' "$actual_agents" "$diagram_agents" >&2
+  exit 1
+fi
 
 for script in scripts/agent-check.sh scripts/agent-pr-summary.sh scripts/agent-task.sh scripts/agent-workflow-check.sh; do
   bash -n "$script"
