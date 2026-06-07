@@ -1,13 +1,14 @@
-name: CI
+name: Agent Review Checks
 
 on:
-  push:
-    branches:
-      - main
+  pull_request:
+
+permissions:
+  contents: read
 
 jobs:
-  test:
-    name: Agent checks
+  review:
+    name: Format, lint, build, and Playwright tests
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -35,4 +36,4 @@ jobs:
       - name: Run repository checks
         run: ./scripts/agent-check.sh
         env:
-          AGENT_BASE_REF: ${{ github.event.before }}
+          AGENT_BASE_REF: ${{ github.event.pull_request.base.sha }}

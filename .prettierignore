@@ -1,0 +1,2 @@
+# Generated fixtures and model-pack manifests are kept in exporter output form.
+public/**/*.json

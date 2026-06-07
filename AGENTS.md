@@ -1,34 +1,93 @@
-# Context
+# Repository Agent Contract
 
-Context of the project should be obtained by reading `README.md` and `docs/webgpu-style-transfer-plan.md` prior to tackling your task.
+Keep this file compact because it is loaded for every task. Detailed procedures
+live in repo skills and are loaded only when relevant.
 
-# Testing
+## Project Invariants
 
-When you need to run Playwright e2e tests, your environment lacks certain dependencies (which manifests as missing shared library `libatk-1.0.so.0`), so you must use the following to install Playwright:
+Web Style Transfer is a correctness-first React/TypeScript/WebGPU application.
+
+- The React main thread owns controls, model loading, and previews.
+- `src/types/worker-protocol/` is the typed main-thread/worker contract.
+- The worker owns WebGPU execution, buffers, kernels, and optimization.
+- GPU buffer ownership and cleanup remain explicit.
+- Numerical behavior is anchored to deterministic PyTorch fixtures.
+- Do not bypass checksum, shape, protocol, validation, or error handling.
+
+## Context Routing
+
+- Start repository exploration with `docs/code-map.md`.
+- Read source, tests, and focused docs needed for the task; do not preload every
+  project document or generated asset.
+- Use `$repo-change` for non-trivial code, config, test, CI, workflow, or
+  multi-file documentation changes.
+- Use `$python-reference` only for PyTorch reference, fixture, quantization, or
+  numerical parity work.
+- Use `$repo-review` for independent final-diff review.
+- Architecture and risk policies are in `docs/architecture.md` and
+  `docs/change-policy.md`; load them when the changed surface requires them.
+- When skills, project agents, delegation, or completion routing change, update
+  the marked agent workflow diagram in `README.md` in the same change.
+
+## Delegation
+
+- Keep bounded single-area work in one agent.
+- For uncertain or cross-area retrieval, spawn the read-only `repo-explorer`
+  with fresh context.
+- For broad implementation, pass task, plan, and the compact context map to a
+  fresh `repo-actor` instead of forwarding raw exploration history.
+- For non-trivial code/config changes, use the read-only `repo-reviewer` after
+  checks and before completion.
+- Parallelize independent read-heavy work. Avoid overlapping writers.
+
+## Environment
+
+Use Node.js 22 before npm commands:
 
 ```bash
-npx playwright install chromium
-npx playwright install-deps chromium
+nvm use 22
 ```
 
-When running some e2e tests, certain tests that require fixtures will be skipped by default. Prior to running them, you will need to generate the fixtures by running:
+Activate the repository environment before Python commands:
 
 ```bash
-python python-reference/export_vgg19_phase3_full_pass.py
+source .venv/bin/activate
 ```
 
-Do not commit these fixtures if they were not already commited, as they are very big.
+Common checks:
 
-# Style
+```bash
+npm run build
+npm test
+./scripts/agent-check.sh
+```
 
-Use explicit types when declaring state, e.g. instead of `const [myState, setMyState] = useState('abcde.');`, use `const [myState, setMyState] = useState<string>('abcde.');`.
+`npm run benchmark` is optional and reserved for performance-sensitive work.
 
-When declaring types, use narrower types instead of general ones where possible, e.g. instead of `{ ok: boolean; result?: number; errorMsg?: string }`, use `{ ok: true; result: number} | { ok: false; errorMsg: string }`. Instead of `{ op: 'add' | 'clamp'; value1: number; value2?: number; clampMin?: number; clampMax?: number}`, use `{ op: 'add'; value1: number; value2: number } | { op: 'clamp'; value1: number }`.
+## Change Rules
 
-Avoid using type casts where possible, e.g. if we have `funcCall(a): { ok: boolean; values: number[] } | { ok: boolean; scalar: number }`, then instead of `const b = funcCall(a) as { ok: boolean; values?: number[] }`, prefer that using a type guard to prevent tricky bugs down the line, e.g. `const b = funcCall(a); if (!isScalarResult(b)) { throw new Error("..."); }`.
+- Make the smallest change that satisfies explicit acceptance criteria.
+- Reuse existing helpers, components, protocol types, test utilities, and
+  runtime ownership patterns.
+- Preserve strict discriminated unions, type guards, and exhaustive routing.
+- Add focused tests for behavior changes.
+- Update the narrowest relevant documentation in the same change. State why
+  docs are unnecessary when that decision is not obvious.
+- Ask before broad rewrites, dependency changes, destructive data changes,
+  migrations, security-sensitive behavior, or unrequested public-contract
+  changes.
+- Do not commit or push unless explicitly asked.
+- Do not revert unrelated user changes or commit generated model assets unless
+  requested.
 
-# Finishing a task
+## Completion
 
-Before concluding a task, make sure to run `npm run build`, and ensure the build is successful.
+For non-trivial work:
 
-When concluding, remember to update the attached github PR description if applicable.
+1. Use task-scoped artifacts under `.agent-artifacts/<task-id>/`.
+2. Keep task, plan, context, and touched-file state current.
+3. Run focused checks and always run `npm run build` for code/config changes.
+4. Run `./scripts/agent-check.sh` when feasible.
+5. Pass independent review and resolve required findings.
+6. Complete risks, rollback, checks, and follow-up work in the PR summary.
+7. Update an attached PR description when applicable.

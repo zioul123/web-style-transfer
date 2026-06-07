@@ -123,17 +123,16 @@ Large generated fixtures and full model packs should not be committed unless the
 The default test tiers are intentionally small enough to run in pull requests while still making the existing browser coverage visible:
 
 1. **Install and browser setup** installs locked npm dependencies plus Chromium and its system libraries.
-2. **Production build** runs TypeScript and Vite via `npm run build`.
-3. **Default Playwright suite** runs `npm test`, covering app boot, worker protocol, WebGPU kernel parity, committed fixture parity, and optimization correctness paths. Performance-oriented `/benchmark` and kernel-lab smoke tests live in `benchmarks/` and are excluded from default CI.
+2. **Repository checks** run changed-file formatting validation, ESLint, the TypeScript/Vite production build, and the default Playwright suite through `scripts/agent-check.sh`.
+3. **Optional benchmarks** remain separate because they measure performance-sensitive `/benchmark` and kernel-lab paths rather than routine correctness.
 
-CI runs the same sequence on pull requests and pushes to `main`:
+The pull-request workflow at `.github/workflows/agent-review.yml` and the push-to-main workflow at `.github/workflows/ci.yml` run the same safe checks:
 
 ```bash
 npm ci
 npx playwright install chromium
 npx playwright install-deps chromium
-npm run build
-npm test
+./scripts/agent-check.sh
 ```
 
 Run optional benchmark and kernel-lab specs separately when validating performance-sensitive changes:
@@ -175,6 +174,109 @@ Optional checks:
 npm run lint
 npm run format:check
 ```
+
+Prettier excludes generated fixture and model-pack JSON under `public/` so
+exporter output remains compact. Untracked model-pack shard binaries are also
+ignored by Git.
+
+## Agent workflow
+
+`AGENTS.md` is intentionally compact because it is loaded for every task.
+Detailed procedures use repo-local Codex skills, so their full instructions are
+loaded only when relevant:
+
+- `$repo-change`: staged workflow for non-trivial repository changes.
+- `$python-reference`: PyTorch exporters, fixtures, quantization, and parity.
+- `$repo-review`: independent final-diff review.
+
+The diagram below is the human-facing map of the workflow. Skills provide
+task-specific instructions; project agents are fresh-context roles that may be
+delegated bounded work. Task artifacts are the durable handoff between them.
+
+<!-- agent-workflow-diagram:start -->
+
+```mermaid
+flowchart TD
+    request["Repository task"] --> route{"Route by scope"}
+
+    route -->|"Bounded or trivial"| local["Current agent"]
+    route -->|"Non-trivial repo change"| change["Skill: $repo-change"]
+    route -->|"PyTorch, fixtures, quantization, parity"| python["Skill: $python-reference"]
+    route -->|"Review request or final diff"| reviewSkill["Skill: $repo-review"]
+
+    change --> artifacts["Task artifacts<br/>task, plan, context map,<br/>touched files, review, PR summary"]
+    python --> change
+
+    change -.->|"Uncertain or cross-area retrieval"| explorer["Agent: repo-explorer<br/>read-only context map"]
+    explorer --> artifacts
+
+    artifacts -.->|"Broad bounded implementation"| actor["Agent: repo-actor<br/>workspace-write implementation"]
+    actor --> artifacts
+    local --> implement["Implement the smallest scoped change"]
+    artifacts --> implement
+
+    implement --> checks["Focused checks<br/>build for code/config<br/>agent-check when feasible"]
+    checks -.->|"Non-trivial code/config diff"| reviewer["Agent: repo-reviewer<br/>read-only independent review"]
+    reviewer --> reviewSkill
+    reviewSkill --> findings{"Required findings?"}
+    findings -->|"Yes: fix and re-check"| implement
+    findings -->|"No"| finish["Complete artifacts and summary"]
+    checks -->|"Review not required"| finish
+```
+
+<!-- agent-workflow-diagram:end -->
+
+When adding, removing, renaming, or materially rerouting a repo skill or project
+agent, update this marked diagram in the same change.
+
+For a non-trivial change, use a short task ID:
+
+```bash
+./scripts/agent-task.sh init improve-cache-errors
+```
+
+The task state lives under `.agent-artifacts/improve-cache-errors/` and is
+ignored by Git. Complete the task, plan, context map, touched-file list, review,
+and PR summary there. Draft the final scope from the diff with:
+
+```bash
+./scripts/agent-pr-summary.sh --task improve-cache-errors origin/main
+```
+
+After checks and review, validate that the artifacts are complete and cover
+every changed file:
+
+```bash
+./scripts/agent-task.sh check improve-cache-errors origin/main
+```
+
+The legacy `./scripts/agent-pr-summary.sh [base-ref]` form still writes flat
+artifacts for compatibility, but task-scoped mode is recommended.
+
+Project-scoped agents live in `.codex/agents/`:
+
+- `repo-explorer` handles broad or uncertain retrieval and returns a compact
+  context map.
+- `repo-actor` implements a bounded plan from task artifacts without inheriting
+  raw exploration history.
+- `repo-reviewer` independently reviews final non-trivial code/config diffs.
+
+Use one agent for bounded work. Delegate read-heavy exploration or independent
+review when it meaningfully reduces context pollution; avoid overlapping
+writers.
+
+`./scripts/agent-check.sh` validates the tracked harness, changed-file
+formatting, lint, build, and the default Playwright suite without installing or
+changing dependencies. Set `AGENT_FULL_FORMAT_CHECK=1` for the repository-wide
+Prettier check. Set `AGENT_TASK_ID=<task-id>` to include local artifact
+validation in the same command.
+
+Policy and navigation references:
+
+- `docs/architecture.md`
+- `docs/code-map.md`
+- `docs/change-policy.md`
+- `docs/review-rubric.md`
 
 ## Deployment to GitHub Pages
 

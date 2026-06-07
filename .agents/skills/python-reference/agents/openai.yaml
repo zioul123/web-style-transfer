@@ -1,0 +1,4 @@
+interface:
+  display_name: "Python Reference"
+  short_description: "Work with parity fixtures and exporters"
+  default_prompt: "Use $python-reference for this PyTorch reference or fixture task."
