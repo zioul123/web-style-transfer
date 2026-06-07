@@ -10,7 +10,9 @@ cd "$ROOT_DIR"
 if [[ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]]; then
   # shellcheck disable=SC1090
   source "${NVM_DIR:-$HOME/.nvm}/nvm.sh"
-  nvm use 22 >/dev/null
+  if nvm version 22 >/dev/null 2>&1; then
+    nvm use 22 >/dev/null
+  fi
 fi
 
 if ! command -v node >/dev/null 2>&1; then
