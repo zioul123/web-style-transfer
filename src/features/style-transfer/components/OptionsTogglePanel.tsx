@@ -2,12 +2,14 @@ import type { Dispatch, SetStateAction } from "react";
 
 type OptionsTogglePanelProps = {
   readonly benchmarkUrl: string;
+  readonly pointCloudPreviewUrl: string;
   readonly showOptions: boolean;
   readonly setShowOptions: Dispatch<SetStateAction<boolean>>;
 };
 
 export function OptionsTogglePanel({
   benchmarkUrl,
+  pointCloudPreviewUrl,
   showOptions,
   setShowOptions,
 }: OptionsTogglePanelProps) {
@@ -21,12 +23,20 @@ export function OptionsTogglePanel({
       >
         {showOptions ? "Hide options" : "Show options"}
       </button>
-      <a
-        className="text-sm font-medium text-sky-300 underline underline-offset-4 hover:text-sky-200"
-        href={benchmarkUrl}
-      >
-        Benchmark settings for your device
-      </a>
+      <div className="flex flex-wrap gap-4 text-sm font-medium">
+        <a
+          className="text-sky-300 underline underline-offset-4 hover:text-sky-200"
+          href={benchmarkUrl}
+        >
+          Benchmark settings for your device
+        </a>
+        <a
+          className="text-amber-300 underline underline-offset-4 hover:text-amber-200"
+          href={pointCloudPreviewUrl}
+        >
+          Point-cloud mesh preview
+        </a>
+      </div>
     </section>
   );
 }

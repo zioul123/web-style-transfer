@@ -7,6 +7,7 @@ that matches the task, then follow imports and tests only as needed.
 
 | Path                                      | Contents                                                             |
 | ----------------------------------------- | -------------------------------------------------------------------- |
+| `src/features/pointcloud-preview/`        | Point-cloud mesh preview page, loaders, math, and R3F scene          |
 | `src/features/style-transfer/components/` | Main UI panels and preview/control components                        |
 | `src/features/style-transfer/hooks/`      | Main-thread style-transfer orchestration                             |
 | `src/features/style-transfer/benchmark/`  | Model-pack benchmark and acceptance helpers                          |
@@ -28,6 +29,7 @@ that matches the task, then follow imports and tests only as needed.
 | `src/RouteApp.tsx`                                                | Main versus `/benchmark` route selection                                     |
 | `src/App.tsx`                                                     | Main application composition                                                 |
 | `src/BenchmarkApp.tsx`                                            | Benchmark UI and worker-driven benchmark flows                               |
+| `src/PointCloudPreviewApp.tsx`                                    | Standalone `/pointcloud-preview` route shell                                 |
 | `src/styleTransfer.worker.ts`                                     | Worker bootstrap                                                             |
 | `src/features/style-transfer/hooks/useStyleTransferController.ts` | Main-thread state, image conversion, model loading, and worker orchestration |
 | `src/ml/worker/main-thread-protocol/messageRouter.ts`             | Top-level worker request dispatch                                            |
@@ -40,6 +42,10 @@ that matches the task, then follow imports and tests only as needed.
 
 - `src/features/style-transfer/modelPacks.ts`: pack names, URL loading, parsing,
   and cache integration.
+- `src/features/pointcloud-preview/loadPointCloudMesh.ts`: JSON validation,
+  typed-array conversion, bounds, and precomputed mesh vertex colours.
+- `src/features/pointcloud-preview/math/kdTree3d.ts`: immutable 3D k-d tree and
+  nearest-neighbour search for point-cloud samples.
 - `src/features/style-transfer/modelCache.ts`: IndexedDB model-pack persistence.
 - `src/features/style-transfer/kernelOptimizationSettingsStorage.ts`:
   persisted experimental kernel settings.
@@ -75,6 +81,7 @@ that matches the task, then follow imports and tests only as needed.
 | `public/phase4-backprop/`              | Committed backward fixture                                   |
 | `public/lbfgs/`                        | Committed optimizer fixture                                  |
 | `public/vgg19-phase3-full-pass/`       | Compact tracked fixture plus ignored optional outputs        |
+| `public/pointcloud-style-transfer/`    | Tiny committed mesh + point-cloud preview example            |
 | `python-reference/`                    | PyTorch fixture exporters and reference implementation       |
 
 Add a focused Playwright spec near the closest existing behavior. Reuse test
@@ -129,6 +136,8 @@ assertion layer.
 - Use runtime buffer ownership/pool/context helpers for GPU allocations.
 - Follow each op family's existing split between `*.shader.ts` and `*.run.ts`.
 - Keep readback-heavy debug routes separate from GPU-resident pipeline paths.
+- Use `assetUrl()` for preview JSON examples so route loading respects Vite
+  `BASE_URL`.
 - Use explicit React state generic types and narrow literal unions.
 - Tests may skip optional large assets, but committed-fixture paths should
   remain deterministic.

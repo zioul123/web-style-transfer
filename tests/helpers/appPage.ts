@@ -3,9 +3,9 @@ import type { Page } from "@playwright/test";
 const settleWindowMs = 300;
 const maxLoadAttempts = 3;
 
-export const gotoStableApp = async (page: Page): Promise<void> => {
+export const gotoStableApp = async (page: Page, path = "/"): Promise<void> => {
   for (let attempt = 0; attempt < maxLoadAttempts; attempt += 1) {
-    await page.goto("/", { waitUntil: "load" });
+    await page.goto(path, { waitUntil: "load" });
     await page.locator("main").waitFor({ state: "visible" });
 
     const navigated = await page

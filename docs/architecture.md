@@ -21,7 +21,8 @@ typed protocol to couple React code directly to worker internals.
 ## Runtime Flow
 
 1. `src/main.tsx` mounts `src/RouteApp.tsx`.
-2. `RouteApp` selects the main UI or `/benchmark` route.
+2. `RouteApp` selects the main UI, `/benchmark`, or `/pointcloud-preview`
+   route.
 3. `useStyleTransferController` loads images and model packs, initializes the
    worker, and builds typed requests.
 4. `src/styleTransfer.worker.ts` mounts the worker message router.
@@ -47,16 +48,17 @@ typed protocol to couple React code directly to worker internals.
 
 ## Change Routing
 
-| Change                           | Start Here                              | Usually Also Inspect                      |
-| -------------------------------- | --------------------------------------- | ----------------------------------------- |
-| UI/control behavior              | `src/features/style-transfer/`          | `src/App.tsx`, UI tests                   |
-| Worker request/response          | `src/types/worker-protocol/`            | routers, responses, worker tests, docs    |
-| GPU helper or resource lifecycle | `src/ml/worker/runtime/`                | all callers, parity tests                 |
-| Kernel behavior                  | `src/ml/worker/ops/<family>/`           | tensor-op router, fixtures, parity tests  |
-| Full optimization behavior       | `src/ml/worker/pipelines/optimization/` | protocol, controller, runtime tests       |
-| Model-pack format/loading        | `modelPacks.ts`, `weights.ts`           | cache, public README, acceptance tests    |
-| Performance flag                 | benchmark and pipeline settings         | correctness parity and benchmark evidence |
-| Route/deployment behavior        | `RouteApp.tsx`, `vite.config.ts`        | Pages workflow, app boot tests            |
+| Change                           | Start Here                              | Usually Also Inspect                                 |
+| -------------------------------- | --------------------------------------- | ---------------------------------------------------- |
+| UI/control behavior              | `src/features/style-transfer/`          | `src/App.tsx`, UI tests                              |
+| Point-cloud preview route        | `src/features/pointcloud-preview/`      | `RouteApp.tsx`, `PointCloudPreviewApp.tsx`, UI tests |
+| Worker request/response          | `src/types/worker-protocol/`            | routers, responses, worker tests, docs               |
+| GPU helper or resource lifecycle | `src/ml/worker/runtime/`                | all callers, parity tests                            |
+| Kernel behavior                  | `src/ml/worker/ops/<family>/`           | tensor-op router, fixtures, parity tests             |
+| Full optimization behavior       | `src/ml/worker/pipelines/optimization/` | protocol, controller, runtime tests                  |
+| Model-pack format/loading        | `modelPacks.ts`, `weights.ts`           | cache, public README, acceptance tests               |
+| Performance flag                 | benchmark and pipeline settings         | correctness parity and benchmark evidence            |
+| Route/deployment behavior        | `RouteApp.tsx`, `vite.config.ts`        | Pages workflow, app boot tests                       |
 
 ## Invariants
 
