@@ -204,6 +204,9 @@ export const parsePointCloudMeshText = (text: string): PointCloudMeshData => {
       `Point-cloud mesh JSON could not be parsed: ${
         error instanceof Error ? error.message : "Unknown JSON parse error."
       }`,
+      {
+        cause: error,
+      },
     );
   }
 

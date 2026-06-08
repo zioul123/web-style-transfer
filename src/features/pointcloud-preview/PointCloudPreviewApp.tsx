@@ -2,10 +2,14 @@ import {
   startTransition,
   useEffect,
   useId,
+  useMemo,
   useState,
   type ChangeEvent,
 } from "react";
-import { PointCloudPreviewScene } from "./PointCloudPreviewScene";
+import {
+  maxFragmentShaderPoints,
+  PointCloudPreviewScene,
+} from "./PointCloudPreviewScene";
 import { parsePointCloudMeshText } from "./loadPointCloudMesh";
 import type { PointCloudHitSample, PointCloudMeshData } from "./types";
 import { assetUrl } from "../../shared/assetUrls";
@@ -33,6 +37,8 @@ type LoadedAssetState =
       readonly errorMessage: string;
       readonly data: null;
     };
+
+type MeshColorMode = "baked" | "fragment-knn";
 
 const colorToCss = (color: readonly [number, number, number]): string =>
   `rgb(${Math.round(color[0] * 255)} ${Math.round(color[1] * 255)} ${Math.round(
@@ -70,6 +76,8 @@ export function PointCloudPreviewApp() {
   const [showMesh, setShowMesh] = useState<boolean>(true);
   const [showPoints, setShowPoints] = useState<boolean>(true);
   const [showWireframe, setShowWireframe] = useState<boolean>(false);
+  const [meshColorMode, setMeshColorMode] =
+    useState<MeshColorMode>("fragment-knn");
   const [showNeighborDebug, setShowNeighborDebug] = useState<boolean>(true);
   const [pointSize, setPointSize] = useState<number>(0.035);
   const [selectedHit, setSelectedHit] = useState<PointCloudHitSample | null>(
@@ -158,6 +166,20 @@ export function PointCloudPreviewApp() {
   };
 
   const data = assetState.data;
+  const canUseFragmentKnnShading = useMemo(
+    () => data !== null && data.pointCount <= maxFragmentShaderPoints,
+    [data],
+  );
+  const effectiveMeshColorMode: MeshColorMode =
+    meshColorMode === "fragment-knn" && canUseFragmentKnnShading
+      ? "fragment-knn"
+      : "baked";
+  const meshColorModeDescription =
+    effectiveMeshColorMode === "fragment-knn"
+      ? `Fragment KNN shading active (${data?.pointCount ?? 0}/${maxFragmentShaderPoints} points).`
+      : meshColorMode === "fragment-knn" && data !== null
+        ? `Fragment KNN shading is capped at ${maxFragmentShaderPoints} points for now; this dataset falls back to baked vertex colours.`
+        : "Baked vertex colours active.";
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(251,146,60,0.16),_transparent_28rem),radial-gradient(circle_at_bottom_right,_rgba(59,130,246,0.18),_transparent_32rem),linear-gradient(160deg,_#0b1120_0%,_#101826_48%,_#071019_100%)] text-slate-100">
@@ -203,6 +225,7 @@ export function PointCloudPreviewApp() {
                 showMesh={showMesh}
                 showPoints={showPoints}
                 showWireframe={showWireframe}
+                meshColorMode={effectiveMeshColorMode}
                 showNeighborDebug={showNeighborDebug}
                 pointSize={pointSize}
                 selectedHit={selectedHit}
@@ -346,6 +369,22 @@ export function PointCloudPreviewApp() {
                   />
                   Wireframe mesh
                 </label>
+                <label className="sm:col-span-2">
+                  <span className="mb-2 block text-slate-300">
+                    Mesh colouring
+                  </span>
+                  <select
+                    data-testid="mesh-color-mode-select"
+                    className="w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-amber-300"
+                    value={meshColorMode}
+                    onChange={(event) =>
+                      setMeshColorMode(event.target.value as MeshColorMode)
+                    }
+                  >
+                    <option value="fragment-knn">Fragment KNN shading</option>
+                    <option value="baked">Baked vertex colours</option>
+                  </select>
+                </label>
                 <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3">
                   <input
                     className="accent-amber-300"
@@ -357,6 +396,12 @@ export function PointCloudPreviewApp() {
                   />
                   Show 3-neighbour debug
                 </label>
+                <div
+                  data-testid="mesh-color-mode-status"
+                  className="sm:col-span-2 rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-300"
+                >
+                  {meshColorModeDescription}
+                </div>
                 <label className="sm:col-span-2">
                   <span className="mb-2 block text-slate-300">
                     Point size: {pointSize.toFixed(3)}
