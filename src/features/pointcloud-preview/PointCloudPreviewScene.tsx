@@ -675,7 +675,7 @@ function SceneContent({
     ],
   );
 
-  const markerRadius = Math.max(data.bounds.radius * 0.03, 0.015);
+  const markerRadius = Math.max(data.bounds.radius * 0.018, 0.004);
   const effectivePointSize = Math.max(data.bounds.radius * pointSize, 0.008);
 
   const handleIntersection = (event: ThreeEvent<PointerEvent>): void => {
