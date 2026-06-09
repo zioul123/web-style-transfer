@@ -46,6 +46,8 @@ that matches the task, then follow imports and tests only as needed.
   typed-array conversion, bounds, and precomputed mesh vertex colours.
 - `src/features/pointcloud-preview/math/kdTree3d.ts`: immutable 3D k-d tree and
   nearest-neighbour search for point-cloud samples.
+- `src/features/pointcloud-preview/math/spatialHash3d.ts`: point-sample binning
+  and sorted cell ranges used by fragment-space mesh shading.
 - `src/features/style-transfer/modelCache.ts`: IndexedDB model-pack persistence.
 - `src/features/style-transfer/kernelOptimizationSettingsStorage.ts`:
   persisted experimental kernel settings.
@@ -81,7 +83,7 @@ that matches the task, then follow imports and tests only as needed.
 | `public/phase4-backprop/`              | Committed backward fixture                                   |
 | `public/lbfgs/`                        | Committed optimizer fixture                                  |
 | `public/vgg19-phase3-full-pass/`       | Compact tracked fixture plus ignored optional outputs        |
-| `public/pointcloud-style-transfer/`    | Tiny committed mesh + point-cloud preview example            |
+| `public/pointcloud-style-transfer/`    | Tiny/medium committed mesh + point-cloud preview examples    |
 | `python-reference/`                    | PyTorch fixture exporters and reference implementation       |
 
 Add a focused Playwright spec near the closest existing behavior. Reuse test
@@ -152,5 +154,7 @@ assertion layer.
 - `docs/review-rubric.md`: strict final-diff review checklist.
 - `.agents/skills/repo-change/references/context-routing.md`: conditional
   documentation and source retrieval.
+- `public/pointcloud-style-transfer/README.md`: preview example assets and
+  shared mesh-plus-point-cloud JSON shape.
 - `public/vgg19-models/README.md`: pack layout and manifest schema.
 - `python-reference/vgg19-phase3-full-pass-README.md`: large fixture workflow.

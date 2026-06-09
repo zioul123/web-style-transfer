@@ -9,7 +9,7 @@ The codebase keeps a PyTorch reference implementation in `python-reference/` and
 The browser app is runnable and includes:
 
 - A React UI for content/style image selection, resolution presets, optimizer controls, model-pack selection, progress telemetry, and final image preview.
-- A standalone `/pointcloud-preview` route for rendering mesh-aligned point clouds from JSON exports, with mesh hit inspection against the nearest 3 aligned samples.
+- A standalone `/pointcloud-preview` route for rendering mesh-aligned point clouds from JSON exports, including fragment-KNN mesh shading, hit inspection, screenshots, and reusable saved viewpoints.
 - A Web Worker that owns WebGPU initialization, GPU buffers, shader dispatch, and pipeline execution.
 - WebGPU kernels for forward ops, loss ops, manual input-gradient backpropagation, and optimizer updates.
 - End-to-end style-transfer execution through VGG19 feature layers up to `conv5_1` / torch `features[28]`.
@@ -69,6 +69,15 @@ npm run preview
 
 Run the benchmark UI by visiting `/benchmark` under the dev or preview server.
 Run the point-cloud mesh preview UI by visiting `/pointcloud-preview` under the dev or preview server.
+
+The point-cloud preview route boots from the committed medium demo, lets you
+upload replacement JSON exports, and provides:
+
+- baked-vertex versus spatial-hash fragment-KNN mesh colouring;
+- point visibility, wireframe, point-size, gamma, and brightness controls;
+- axis snapping, Y/Z swapping, camera reframing, and saved viewpoints stored in
+  browser local storage across datasets on this route;
+- PNG screenshot export of the current canvas view.
 
 ## Model packs
 
@@ -146,6 +155,10 @@ The point-cloud preview route accepts JSON with the same four arrays as `python-
 ```
 
 `m_verts` and `pc_xyz` must be in the same coordinate space, and `pc_xyz` / `pc_rgb` must have matching lengths.
+
+See [public/pointcloud-style-transfer/README.md](public/pointcloud-style-transfer/README.md)
+for the committed preview examples and how they relate to the Python reference
+exports.
 
 ## Testing
 
