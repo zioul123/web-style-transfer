@@ -21,6 +21,7 @@ function App() {
   const { selectedPack, setSelectedPack } = controls;
   const [showOptions, setShowOptions] = useState<boolean>(false);
   const benchmarkUrl = assetUrl("benchmark");
+  const pointCloudPreviewUrl = assetUrl("pointcloud-preview");
   const canUseAllModelPacks = isLocalhost();
   const modelPackOptions = canUseAllModelPacks
     ? VGG_PACK_OPTIONS
@@ -41,6 +42,7 @@ function App() {
         <StatusPanel status={status} />
         <OptionsTogglePanel
           benchmarkUrl={benchmarkUrl}
+          pointCloudPreviewUrl={pointCloudPreviewUrl}
           showOptions={showOptions}
           setShowOptions={setShowOptions}
         />

@@ -10,6 +10,7 @@ The app has three main layers:
    - React app shell in `src/App.tsx`.
    - Style-transfer controller, model-pack loading, cache status, and image/tensor conversion in `src/features/style-transfer/`.
    - Benchmark route in `src/BenchmarkApp.tsx`.
+   - Point-cloud preview route in `src/PointCloudPreviewApp.tsx` and `src/features/pointcloud-preview/`.
 2. **Typed worker protocol**
    - Public type exports through `src/types.ts`.
    - Split protocol definitions in `src/types/worker-protocol/`.
@@ -65,6 +66,33 @@ The benchmark route is selected when the path after the Vite base starts with `/
 - First-pool optimization benchmarks.
 
 Some benchmark flows require optional fixtures or model packs that are not committed by default.
+
+### `src/PointCloudPreviewApp.tsx` and `src/features/pointcloud-preview/`
+
+The point-cloud preview route is selected when the path after the Vite base
+starts with `/pointcloud-preview`. It is intentionally isolated from the worker
+protocol and the WebGPU style-transfer pipeline so point-cloud inspection does
+not couple preview-only behavior back into the optimization stack.
+
+The route currently provides:
+
+- loading of committed demo assets or uploaded mesh-plus-point-cloud JSON
+  exports;
+- JSON validation, typed-array conversion, bounds calculation, and precomputed
+  baked vertex colours in `loadPointCloudMesh.ts`;
+- exact CPU-side 3-nearest-neighbour hit inspection via
+  `math/kdTree3d.ts` and `math/interpolation.ts`;
+- fragment-space mesh colouring backed by a feature-local spatial hash in
+  `math/spatialHash3d.ts`, with fallback to baked vertex colours when a dense
+  cell would exceed current shader bounds;
+- browser-only view state such as mesh/point toggles, gamma and brightness
+  controls, screenshots, and saved viewpoints persisted in local storage across
+  datasets on this route.
+
+`PointCloudPreviewScene.tsx` owns the R3F canvas, point/mesh materials,
+fragment-shader textures, hit overlays, camera commands, and FPS sampling.
+`PointCloudPreviewApp.tsx` owns the data-source UI, stats, control panels, and
+route-local persistence.
 
 ## Worker protocol
 
@@ -203,11 +231,29 @@ The app resolves model URLs through `src/shared/assetUrls.ts`:
 7. The worker returns losses, timing stats, and updated output values.
 8. The controller renders the output PNG preview and schedules the next chunk if the run is still active.
 
+## Point-cloud preview flow
+
+1. `RouteApp` selects `PointCloudPreviewApp` when the URL path matches
+   `/pointcloud-preview` after the Vite base.
+2. The route loads the committed medium example or parses an uploaded JSON
+   export with `loadPointCloudMesh.ts`.
+3. The loader validates the four-array schema, builds typed arrays, computes
+   bounds, precomputes baked mesh colours, and derives both k-d tree and
+   spatial-hash lookup structures.
+4. `PointCloudPreviewScene.tsx` renders the mesh and aligned point cloud,
+   switching between baked colours and spatial-hash fragment-KNN shading as the
+   dataset allows.
+5. Mesh hover hits use the CPU k-d tree path for exact nearest-3 inspection,
+   while route-local React state tracks controls, screenshots, and saved
+   viewpoints in browser storage.
+
 ## Testing architecture
 
 Playwright is used for integration, worker, and WebGPU parity coverage. The suite includes:
 
 - App boot and worker/WebGPU initialization checks.
+- Point-cloud preview route boot, upload, fallback, screenshot, and viewpoint
+  persistence checks.
 - Tensor primitive parity tests.
 - VGG first-pool forward and optimization checks.
 - Full phase-3 forward/loss parity checks when fixtures are present.

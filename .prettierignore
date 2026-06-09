@@ -1,2 +1,3 @@
 # Generated fixtures and model-pack manifests are kept in exporter output form.
 public/**/*.json
+pc-and-mesh-big-example.json
