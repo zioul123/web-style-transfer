@@ -91,6 +91,13 @@ test("point-cloud preview boots from the standalone route with the bundled demo"
     /Fragment KNN shading active/i,
   );
   await expect(page.getByTestId("pointcloud-fps")).toContainText(/FPS/i);
+  await expect(
+    page.getByRole("button", { name: /Upload point-cloud mesh/i }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Reload preview/i }),
+  ).toBeVisible();
+  await expect(page.getByTestId("screenshot-button")).toBeVisible();
   await expect(page.getByTestId("save-viewpoint-button")).toBeEnabled();
   await expect(page.getByTestId("swap-yz-button")).toBeVisible();
 });
@@ -176,11 +183,11 @@ test("point-cloud preview disables dependent controls and saves viewpoints", asy
 }) => {
   await gotoStableApp(page, "/pointcloud-preview");
 
-  await page.getByLabel("Show point cloud").uncheck();
+  await page.getByTestId("toggle-points-button").click();
   await expect(page.getByTestId("point-size-slider")).toBeDisabled();
 
-  await page.getByLabel("Show mesh").uncheck();
-  await expect(page.getByLabel("Wireframe mesh")).toBeDisabled();
+  await page.getByTestId("toggle-mesh-button").click();
+  await expect(page.getByTestId("toggle-wireframe-button")).toBeDisabled();
 
   await page.getByTestId("save-viewpoint-button").click();
   await expect(page.getByTestId("viewpoint-go-1")).toBeVisible();
@@ -188,12 +195,31 @@ test("point-cloud preview disables dependent controls and saves viewpoints", asy
 
   await page.getByTestId("swap-yz-button").click();
   await expect(page.getByTestId("swap-yz-button")).toHaveText(/Y\/Z swapped/i);
-  await page.getByTestId("viewpoint-go-1").click();
+  await page.getByTestId("viewpoint-update-1").click();
+  await page.getByTestId("swap-yz-button").click();
   await expect(page.getByTestId("swap-yz-button")).toHaveText(/Flip Y and Z/i);
+  await page.getByTestId("viewpoint-go-1").click();
+  await expect(page.getByTestId("swap-yz-button")).toHaveText(/Y\/Z swapped/i);
+
+  const fileInput = page.locator('input[type="file"]');
+  await fileInput.setInputFiles({
+    name: "tiny-upload.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(validUploadJson, "utf8"),
+  });
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+  await expect(page.getByTestId("viewpoint-go-1")).toBeVisible();
+  await expect(page.getByTestId("viewpoint-name-1")).toHaveValue("Top view");
 
   await page.reload();
   await expect(page.getByTestId("viewpoint-go-1")).toBeVisible();
   await expect(page.getByTestId("viewpoint-name-1")).toHaveValue("Top view");
+
+  await page.getByTestId("viewpoint-delete-1").click();
+  await expect(page.getByTestId("viewpoint-go-1")).toHaveCount(0);
+
+  await page.reload();
+  await expect(page.getByTestId("viewpoint-go-1")).toHaveCount(0);
 });
 
 test("point-cloud preview can download a screenshot", async ({ page }) => {
@@ -204,4 +230,24 @@ test("point-cloud preview can download a screenshot", async ({ page }) => {
   const download = await downloadPromise;
 
   expect(download.suggestedFilename()).toMatch(/^pointcloud-preview-.*\.png$/);
+});
+
+test("point-cloud preview right-side cards can collapse and expand", async ({
+  page,
+}) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  const cameraCardToggle = page
+    .getByTestId("camera-card")
+    .getByRole("button", { name: /Camera and orientation/i });
+  await expect(cameraCardToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("save-viewpoint-button")).toBeVisible();
+
+  await cameraCardToggle.click();
+  await expect(cameraCardToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("save-viewpoint-button")).toBeHidden();
+
+  await cameraCardToggle.click();
+  await expect(cameraCardToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("save-viewpoint-button")).toBeVisible();
 });

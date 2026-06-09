@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type ComponentPropsWithoutRef,
   type ReactNode,
 } from "react";
 import {
@@ -118,60 +119,61 @@ const snapAxisButtons: readonly {
   { axis: "neg-z", label: "-Z" },
 ];
 
-const readSavedViewpointMap = (): Record<string, readonly SavedViewpoint[]> => {
+const parseSavedViewpointEntries = (
+  entries: readonly unknown[],
+  reindexIds: boolean,
+): SavedViewpoint[] =>
+  entries.flatMap((entry, index): SavedViewpoint[] => {
+    if (typeof entry !== "object" || entry === null) {
+      return [];
+    }
+    const candidate = entry as Record<string, unknown>;
+    if (
+      typeof candidate.label !== "string" ||
+      typeof candidate.swapYZ !== "boolean" ||
+      !isPreviewCameraState(candidate.camera)
+    ) {
+      return [];
+    }
+    const preservedId =
+      typeof candidate.id === "number" ? candidate.id : index + 1;
+    return [
+      {
+        id: reindexIds ? index + 1 : preservedId,
+        label: candidate.label,
+        camera: candidate.camera,
+        swapYZ: candidate.swapYZ,
+      },
+    ];
+  });
+
+const readSavedViewpoints = (): readonly SavedViewpoint[] => {
   if (typeof window === "undefined") {
-    return {};
+    return [];
   }
 
   try {
     const raw = window.localStorage.getItem(savedViewpointsStorageKey);
     if (raw === null) {
-      return {};
+      return [];
     }
     const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      return parseSavedViewpointEntries(parsed, false);
+    }
     if (typeof parsed !== "object" || parsed === null) {
-      return {};
+      return [];
     }
 
-    const output: Record<string, readonly SavedViewpoint[]> = {};
-    Object.entries(parsed as Record<string, unknown>).forEach(
-      ([key, value]) => {
-        if (!Array.isArray(value)) {
-          return;
-        }
-        output[key] = value.flatMap((entry): SavedViewpoint[] => {
-          if (typeof entry !== "object" || entry === null) {
-            return [];
-          }
-          const candidate = entry as Record<string, unknown>;
-          if (
-            typeof candidate.id !== "number" ||
-            typeof candidate.label !== "string" ||
-            typeof candidate.swapYZ !== "boolean" ||
-            !isPreviewCameraState(candidate.camera)
-          ) {
-            return [];
-          }
-          return [
-            {
-              id: candidate.id,
-              label: candidate.label,
-              camera: candidate.camera,
-              swapYZ: candidate.swapYZ,
-            },
-          ];
-        });
-      },
-    );
-    return output;
+    const legacyEntries = Object.values(parsed as Record<string, unknown>)
+      .filter(Array.isArray)
+      .flatMap((value) => value);
+    return parseSavedViewpointEntries(legacyEntries, true);
   } catch {
-    return {};
+    return [];
   }
 };
 
-const readSavedViewpointsForSource = (
-  sourceLabel: string,
-): readonly SavedViewpoint[] => readSavedViewpointMap()[sourceLabel] ?? [];
 const isPreviewCameraState = (value: unknown): value is PreviewCameraState => {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -186,6 +188,12 @@ const isPreviewCameraState = (value: unknown): value is PreviewCameraState => {
     candidate.target.every((entry) => typeof entry === "number")
   );
 };
+
+const nextViewpointIdFor = (viewpoints: readonly SavedViewpoint[]): number =>
+  viewpoints.reduce(
+    (highestId, viewpoint) => Math.max(highestId, viewpoint.id),
+    0,
+  ) + 1;
 
 function InfoTooltip({ text }: { readonly text: string }) {
   return (
@@ -210,6 +218,224 @@ function LabelWithTooltip({
       <span>{label}</span>
       {tooltip !== undefined ? <InfoTooltip text={tooltip} /> : null}
     </span>
+  );
+}
+
+function CollapsiblePanelCard({
+  title,
+  children,
+  defaultOpen = true,
+  testId,
+}: {
+  readonly title: string;
+  readonly children: ReactNode;
+  readonly defaultOpen?: boolean;
+  readonly testId?: string;
+}) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  return (
+    <section
+      className="rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-5 shadow-xl shadow-black/20"
+      data-testid={testId}
+    >
+      <button
+        className="flex w-full items-center justify-between gap-3 text-left"
+        type="button"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((value) => !value)}
+      >
+        <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
+          {title}
+        </p>
+        <span
+          aria-hidden="true"
+          className="text-lg font-semibold leading-none text-slate-300"
+        >
+          {isOpen ? "-" : "+"}
+        </span>
+      </button>
+      {isOpen ? <div className="mt-4">{children}</div> : null}
+    </section>
+  );
+}
+
+function IconButton({
+  children,
+  className,
+  ...props
+}: Omit<ComponentPropsWithoutRef<"button">, "className"> & {
+  readonly className: string;
+  readonly children: ReactNode;
+}) {
+  return (
+    <button
+      {...props}
+      className={`inline-flex items-center justify-center rounded-xl transition disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+      type={props.type ?? "button"}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SaveIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M3 2.5H11.5L13.5 4.5V13.5H2.5V3C2.5 2.72386 2.72386 2.5 3 2.5Z"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+      <path d="M5 2.5V6H10.5V2.5" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M5 13.5V9.5H11V13.5" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M3.5 4.5H12.5" stroke="currentColor" strokeWidth="1.2" />
+      <path
+        d="M5 4.5V3.5H11V4.5M4.5 4.5L5 13.5H11L11.5 4.5"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+      <path d="M6.5 6.5V11.5" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M9.5 6.5V11.5" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
+function ArrowRightIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M3 8H12M12 8L8.5 4.5M12 8L8.5 11.5"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function RotateCcwIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M5.5 6H2.5V3M2.5 6C3.5 4.1 5.55 2.75 7.92 2.75C11.28 2.75 14 5.47 14 8.83C14 12.19 11.28 14.91 7.92 14.91C5.47 14.91 3.35 13.46 2.39 11.37"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function EyeOpenIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M1.75 8C2.9 5.82 5.2 4.25 8 4.25C10.8 4.25 13.1 5.82 14.25 8C13.1 10.18 10.8 11.75 8 11.75C5.2 11.75 2.9 10.18 1.75 8Z"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <circle cx="8" cy="8" r="1.75" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
+function EyeClosedIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M2.25 2.25L13.75 13.75"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+      <path
+        d="M6.55 4.46C7.01 4.32 7.49 4.25 8 4.25C10.8 4.25 13.1 5.82 14.25 8C13.75 8.95 13.03 9.79 12.14 10.45M9.52 9.54C9.13 9.95 8.58 10.2 8 10.2C6.83 10.2 5.88 9.25 5.88 8.08C5.88 7.5 6.12 6.97 6.51 6.58M3.86 5.56C2.98 6.22 2.26 7.06 1.75 8C2.9 10.18 5.2 11.75 8 11.75C8.5 11.75 8.99 11.68 9.45 11.54"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function VisibilityToggleButton({
+  label,
+  visible,
+  disabled = false,
+  testId,
+  onClick,
+}: {
+  readonly label: string;
+  readonly visible: boolean;
+  readonly disabled?: boolean;
+  readonly testId: string;
+  readonly onClick: () => void;
+}) {
+  return (
+    <button
+      data-testid={testId}
+      className={`flex items-center justify-between gap-3 rounded-[0.95rem] border px-4 py-4 text-sm font-semibold transition ${
+        disabled
+          ? "cursor-not-allowed border-white/10 bg-slate-900/55 text-slate-500"
+          : "border-white/10 bg-slate-900/75 text-slate-100 hover:bg-white/10"
+      }`}
+      type="button"
+      aria-pressed={visible}
+      aria-label={`${visible ? "Hide" : "Show"} ${label}`}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <span>{label}</span>
+      {visible ? <EyeOpenIcon /> : <EyeClosedIcon />}
+    </button>
   );
 }
 
@@ -283,25 +509,22 @@ export function PointCloudPreviewApp() {
     useState<PreviewCameraState | null>(null);
   const [savedViewpoints, setSavedViewpoints] = useState<
     readonly SavedViewpoint[]
-  >([]);
-  const [nextViewpointId, setNextViewpointId] = useState<number>(1);
+  >(() => readSavedViewpoints());
+  const [nextViewpointId, setNextViewpointId] = useState<number>(() =>
+    nextViewpointIdFor(readSavedViewpoints()),
+  );
   const [framesPerSecond, setFramesPerSecond] = useState<number>(0);
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
 
   useEffect(() => {
-    if (assetState.status !== "ready") {
+    if (typeof window === "undefined") {
       return;
     }
-    const currentSourceLabel = assetState.sourceLabel;
-    const savedViewpointMap = readSavedViewpointMap();
     window.localStorage.setItem(
       savedViewpointsStorageKey,
-      JSON.stringify({
-        ...savedViewpointMap,
-        [currentSourceLabel]: savedViewpoints,
-      }),
+      JSON.stringify(savedViewpoints),
     );
-  }, [assetState.sourceLabel, assetState.status, savedViewpoints]);
+  }, [savedViewpoints]);
 
   const issueCameraCommand = (
     nextCommand: NextCameraCommand | ((currentId: number) => NextCameraCommand),
@@ -329,7 +552,6 @@ export function PointCloudPreviewApp() {
     data: PointCloudMeshData,
     sourceLabel: string,
   ): void => {
-    const savedViewpointsForSource = readSavedViewpointsForSource(sourceLabel);
     startTransition(() => {
       setAssetState({
         status: "ready",
@@ -338,13 +560,6 @@ export function PointCloudPreviewApp() {
         data,
       });
       setSelectedHit(null);
-      setSavedViewpoints(savedViewpointsForSource);
-      setNextViewpointId(
-        savedViewpointsForSource.reduce(
-          (highestId, viewpoint) => Math.max(highestId, viewpoint.id),
-          0,
-        ) + 1,
-      );
       setCurrentCameraState(null);
       setFramesPerSecond(0);
       setViewSettings((currentSettings) => ({
@@ -404,9 +619,6 @@ export function PointCloudPreviewApp() {
         const text = await response.text();
         const data = parsePointCloudMeshText(text);
         if (!isCancelled) {
-          const savedViewpointsForSource = readSavedViewpointsForSource(
-            bundledMediumSourceLabel,
-          );
           startTransition(() => {
             setAssetState({
               status: "ready",
@@ -415,13 +627,6 @@ export function PointCloudPreviewApp() {
               data,
             });
             setSelectedHit(null);
-            setSavedViewpoints(savedViewpointsForSource);
-            setNextViewpointId(
-              savedViewpointsForSource.reduce(
-                (highestId, viewpoint) => Math.max(highestId, viewpoint.id),
-                0,
-              ) + 1,
-            );
             setCurrentCameraState(null);
             setFramesPerSecond(0);
             setViewSettings((currentSettings) => ({
@@ -511,6 +716,29 @@ export function PointCloudPreviewApp() {
     );
   };
 
+  const handleUpdateViewpoint = (id: number): void => {
+    if (currentCameraState === null) {
+      return;
+    }
+    setSavedViewpoints((currentViews) =>
+      currentViews.map((viewpoint) =>
+        viewpoint.id === id
+          ? {
+              ...viewpoint,
+              camera: currentCameraState,
+              swapYZ: viewSettings.swapYZ,
+            }
+          : viewpoint,
+      ),
+    );
+  };
+
+  const handleDeleteViewpoint = (id: number): void => {
+    setSavedViewpoints((currentViews) =>
+      currentViews.filter((viewpoint) => viewpoint.id !== id),
+    );
+  };
+
   const handleScreenshot = (): void => {
     const canvas = previewHostRef.current?.querySelector("canvas");
     if (!(canvas instanceof HTMLCanvasElement)) {
@@ -545,9 +773,9 @@ export function PointCloudPreviewApp() {
 
   return (
     <>
-      <main className="min-h-screen w-screen bg-[linear-gradient(180deg,_#071019_0%,_#0b1120_100%)] text-slate-100">
-        <div className="w-full px-4 py-4">
-          <header className="mb-4 flex items-center justify-between rounded-[1.1rem] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-xl shadow-black/20">
+      <main className="h-screen w-screen overflow-hidden bg-[linear-gradient(180deg,_#071019_0%,_#0b1120_100%)] text-slate-100">
+        <div className="flex h-full w-full flex-col px-4 py-4">
+          <header className="mb-4 flex shrink-0 items-center justify-between rounded-[1.1rem] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-xl shadow-black/20">
             <div className="flex items-center gap-6">
               <h1 className="text-2xl font-semibold tracking-tight text-white">
                 Point-Cloud Mesh Preview
@@ -576,8 +804,35 @@ export function PointCloudPreviewApp() {
             </button>
           </header>
 
-          <div className="flex items-stretch gap-4">
-            <div className="flex w-[25rem] shrink-0 flex-col gap-4">
+          <div className="flex min-h-0 flex-1 items-stretch gap-4">
+            <div className="flex h-full w-[25rem] shrink-0 flex-col gap-4 overflow-y-auto pr-1">
+              <section className="rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-5 shadow-xl shadow-black/20">
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
+                  Rendering algorithm
+                </p>
+                <div className="mt-4">
+                  <select
+                    data-testid="mesh-color-mode-select"
+                    className="w-full rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-amber-300"
+                    value={viewSettings.meshColorMode}
+                    onChange={(event) =>
+                      updateViewSettings({
+                        meshColorMode: event.target.value as MeshColorMode,
+                      })
+                    }
+                  >
+                    <option value="fragment-knn">Fragment KNN shading</option>
+                    <option value="baked">Baked vertex colours</option>
+                  </select>
+                </div>
+                <div
+                  data-testid="mesh-color-mode-status"
+                  className="mt-4 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-3 text-sm text-slate-300"
+                >
+                  {meshColorModeDescription}
+                </div>
+              </section>
+
               <section className="rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-5 shadow-xl shadow-black/20">
                 <div className="flex items-center gap-2">
                   <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
@@ -585,16 +840,18 @@ export function PointCloudPreviewApp() {
                   </p>
                   <InfoTooltip text="Load the bundled medium preview or upload a point-cloud mesh JSON export from the Python pipeline." />
                 </div>
-                <div className="mt-4 flex flex-wrap gap-3">
+                <div className="mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-3">
                   <label
-                    className="cursor-pointer rounded-xl bg-amber-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-200"
+                    className="flex cursor-pointer items-center justify-center rounded-xl bg-amber-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-200"
                     htmlFor={fileInputId}
                   >
-                    Upload point-cloud mesh JSON
+                    Upload point-cloud mesh
                   </label>
                   <button
-                    className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/10"
+                    className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-lg font-semibold text-slate-100 transition hover:bg-white/10"
                     type="button"
+                    aria-label="Reload preview"
+                    title="Reload preview"
                     onClick={() => {
                       void loadBundledExample(
                         bundledMediumExampleUrl,
@@ -603,7 +860,7 @@ export function PointCloudPreviewApp() {
                       );
                     }}
                   >
-                    Reload preview
+                    <RotateCcwIcon />
                   </button>
                   <input
                     id={fileInputId}
@@ -711,22 +968,29 @@ export function PointCloudPreviewApp() {
               </section>
             </div>
 
-            <section className="min-w-0 flex-1 rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-4 shadow-xl shadow-black/20">
+            <section className="flex min-w-0 min-h-0 flex-1 flex-col rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-4 shadow-xl shadow-black/20">
               <div className="mb-3 flex items-center justify-between gap-3 px-1">
                 <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
                   Interactive preview
                 </p>
-                <div
-                  data-testid="pointcloud-fps"
-                  className="rounded-xl border border-emerald-300/25 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100"
-                >
-                  {fpsLabel(framesPerSecond)}
+                <div className="flex items-center gap-3">
+                  <div
+                    data-testid="pointcloud-fps"
+                    className="rounded-xl border border-emerald-300/25 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100"
+                  >
+                    {fpsLabel(framesPerSecond)}
+                  </div>
+                  <button
+                    data-testid="screenshot-button"
+                    className="rounded-xl border border-emerald-300/20 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-400/20"
+                    type="button"
+                    onClick={handleScreenshot}
+                  >
+                    Screenshot
+                  </button>
                 </div>
               </div>
-              <div
-                ref={previewHostRef}
-                className="relative h-[calc(100vh-10.5rem)]"
-              >
+              <div ref={previewHostRef} className="relative min-h-0 flex-1">
                 {data !== null ? (
                   <PointCloudPreviewScene
                     data={data}
@@ -822,86 +1086,47 @@ export function PointCloudPreviewApp() {
               </div>
             </section>
 
-            <div className="flex w-[25rem] shrink-0 flex-col gap-4">
-              <section className="rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-5 shadow-xl shadow-black/20">
-                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
-                  Rendering algorithm
-                </p>
-                <div className="mt-4">
-                  <select
-                    data-testid="mesh-color-mode-select"
-                    className="w-full rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-amber-300"
-                    value={viewSettings.meshColorMode}
-                    onChange={(event) =>
-                      updateViewSettings({
-                        meshColorMode: event.target.value as MeshColorMode,
-                      })
-                    }
-                  >
-                    <option value="fragment-knn">Fragment KNN shading</option>
-                    <option value="baked">Baked vertex colours</option>
-                  </select>
-                </div>
-                <div
-                  data-testid="mesh-color-mode-status"
-                  className="mt-4 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-3 text-sm text-slate-300"
-                >
-                  {meshColorModeDescription}
-                </div>
-              </section>
-
-              <section className="rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-5 shadow-xl shadow-black/20">
-                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
-                  View options
-                </p>
-                <div className="mt-4 space-y-3 text-sm text-slate-200">
+            <div
+              data-testid="pointcloud-right-panel"
+              className="flex h-full w-[25rem] shrink-0 flex-col gap-4 overflow-y-auto pr-1"
+            >
+              <CollapsiblePanelCard
+                title="View options"
+                testId="view-options-card"
+              >
+                <div className="space-y-3 text-sm text-slate-200">
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <label className="flex items-center gap-3 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4">
-                      <input
-                        className="accent-amber-300"
-                        type="checkbox"
-                        checked={viewSettings.showMesh}
-                        onChange={(event) =>
-                          updateViewSettings({ showMesh: event.target.checked })
-                        }
-                      />
-                      Show mesh
-                    </label>
-                    <label
-                      className={`flex items-center gap-3 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4 ${
-                        viewSettings.showMesh
-                          ? ""
-                          : "cursor-not-allowed text-slate-500"
-                      }`}
-                    >
-                      <input
-                        className="accent-amber-300"
-                        type="checkbox"
-                        checked={viewSettings.showWireframe}
-                        disabled={!viewSettings.showMesh}
-                        onChange={(event) =>
-                          updateViewSettings({
-                            showWireframe: event.target.checked,
-                          })
-                        }
-                      />
-                      Wireframe mesh
-                    </label>
+                    <VisibilityToggleButton
+                      label="Mesh"
+                      testId="toggle-mesh-button"
+                      visible={viewSettings.showMesh}
+                      onClick={() =>
+                        updateViewSettings({ showMesh: !viewSettings.showMesh })
+                      }
+                    />
+                    <VisibilityToggleButton
+                      label="Wireframe"
+                      testId="toggle-wireframe-button"
+                      visible={viewSettings.showWireframe}
+                      disabled={!viewSettings.showMesh}
+                      onClick={() =>
+                        updateViewSettings({
+                          showWireframe: !viewSettings.showWireframe,
+                        })
+                      }
+                    />
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <label className="flex items-center gap-3 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4">
-                      <input
-                        className="accent-amber-300"
-                        type="checkbox"
-                        checked={viewSettings.showPoints}
-                        onChange={(event) =>
-                          updateViewSettings({
-                            showPoints: event.target.checked,
-                          })
-                        }
-                      />
-                      Show point cloud
-                    </label>
+                    <VisibilityToggleButton
+                      label="Point cloud"
+                      testId="toggle-points-button"
+                      visible={viewSettings.showPoints}
+                      onClick={() =>
+                        updateViewSettings({
+                          showPoints: !viewSettings.showPoints,
+                        })
+                      }
+                    />
                     <label className="rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4">
                       <span
                         className={`mb-2 block ${
@@ -930,13 +1155,13 @@ export function PointCloudPreviewApp() {
                     </label>
                   </div>
                 </div>
-              </section>
+              </CollapsiblePanelCard>
 
-              <section className="rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-5 shadow-xl shadow-black/20">
-                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
-                  Shading options
-                </p>
-                <div className="mt-4 space-y-4 text-sm text-slate-200">
+              <CollapsiblePanelCard
+                title="Shading options"
+                testId="shading-options-card"
+              >
+                <div className="space-y-4 text-sm text-slate-200">
                   <label className="flex items-center gap-3 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-3">
                     <input
                       className="accent-amber-300"
@@ -969,24 +1194,13 @@ export function PointCloudPreviewApp() {
                     />
                   </label>
                 </div>
-              </section>
+              </CollapsiblePanelCard>
 
-              <section className="rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-5 shadow-xl shadow-black/20">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
-                    Camera and orientation
-                  </p>
-                  <button
-                    data-testid="screenshot-button"
-                    className="rounded-xl border border-emerald-300/20 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-400/20"
-                    type="button"
-                    onClick={handleScreenshot}
-                  >
-                    Screenshot
-                  </button>
-                </div>
-
-                <div className="mt-4 flex flex-wrap gap-3">
+              <CollapsiblePanelCard
+                title="Camera and orientation"
+                testId="camera-card"
+              >
+                <div className="flex flex-wrap gap-3">
                   <button
                     data-testid="swap-yz-button"
                     className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
@@ -1035,15 +1249,17 @@ export function PointCloudPreviewApp() {
                     <span className="font-semibold text-white">
                       Saved viewpoints
                     </span>
-                    <button
+                    <IconButton
                       data-testid="save-viewpoint-button"
-                      className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-                      type="button"
+                      className="h-10 w-10 border border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"
                       disabled={currentCameraState === null}
+                      aria-label="Save current viewpoint"
+                      title="Save current viewpoint"
                       onClick={handleSaveViewpoint}
                     >
-                      Save this viewpoint
-                    </button>
+                      <SaveIcon />
+                      <span className="sr-only">Save current viewpoint</span>
+                    </IconButton>
                   </div>
                   {savedViewpoints.length > 0 ? (
                     <div className="mt-3 flex flex-col gap-3">
@@ -1052,11 +1268,11 @@ export function PointCloudPreviewApp() {
                           key={viewpoint.id}
                           className="rounded-[0.95rem] border border-white/10 bg-slate-950/40 p-3"
                         >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0 flex-1">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-3">
                               <input
                                 data-testid={`viewpoint-name-${viewpoint.id}`}
-                                className="w-full rounded-[0.8rem] border border-white/10 bg-slate-900/75 px-3 py-2 text-sm font-semibold text-white outline-none transition focus:border-amber-300"
+                                className="min-w-0 flex-1 rounded-[0.8rem] border border-white/10 bg-slate-900/75 px-3 py-2 text-sm font-semibold text-white outline-none transition focus:border-amber-300"
                                 value={viewpoint.label}
                                 onChange={(event) =>
                                   handleRenameViewpoint(
@@ -1065,40 +1281,67 @@ export function PointCloudPreviewApp() {
                                   )
                                 }
                               />
-                              <div className="mt-2 text-xs text-slate-400">
-                                {viewpoint.swapYZ
-                                  ? "Y/Z swapped"
-                                  : "Default axes"}
-                              </div>
+                              {viewpoint.swapYZ ? (
+                                <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.15em] text-amber-200">
+                                  Y/Z
+                                </span>
+                              ) : null}
                             </div>
-                            <button
-                              data-testid={`viewpoint-go-${viewpoint.id}`}
-                              className="rounded-xl border border-emerald-300/30 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-400/20"
-                              type="button"
-                              onClick={() => {
-                                updateViewSettings({
-                                  swapYZ: viewpoint.swapYZ,
-                                });
-                                issueCameraCommand({
-                                  type: "restore",
-                                  camera: viewpoint.camera,
-                                });
-                              }}
-                            >
-                              Go to viewpoint
-                            </button>
+                            <div className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
+                              <button
+                                data-testid={`viewpoint-go-${viewpoint.id}`}
+                                className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-300/30 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-400/20"
+                                type="button"
+                                onClick={() => {
+                                  updateViewSettings({
+                                    swapYZ: viewpoint.swapYZ,
+                                  });
+                                  issueCameraCommand({
+                                    type: "restore",
+                                    camera: viewpoint.camera,
+                                  });
+                                }}
+                              >
+                                <span>Go</span>
+                                <ArrowRightIcon />
+                              </button>
+                              <button
+                                data-testid={`viewpoint-update-${viewpoint.id}`}
+                                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                type="button"
+                                disabled={currentCameraState === null}
+                                title="Update this saved viewpoint to match the current camera"
+                                onClick={() =>
+                                  handleUpdateViewpoint(viewpoint.id)
+                                }
+                              >
+                                <SaveIcon />
+                                <span>Update</span>
+                              </button>
+                              <IconButton
+                                data-testid={`viewpoint-delete-${viewpoint.id}`}
+                                className="h-10 w-10 border border-rose-300/20 bg-rose-400/10 text-rose-100 hover:bg-rose-400/20"
+                                aria-label={`Delete ${viewpoint.label}`}
+                                title="Delete viewpoint"
+                                onClick={() =>
+                                  handleDeleteViewpoint(viewpoint.id)
+                                }
+                              >
+                                <TrashIcon />
+                              </IconButton>
+                            </div>
                           </div>
                         </div>
                       ))}
                     </div>
                   ) : (
                     <p className="mt-3 text-sm text-slate-400">
-                      Save a viewpoint to keep a reusable camera stack for this
-                      dataset.
+                      Save a viewpoint to keep a reusable camera preset for any
+                      dataset you load here.
                     </p>
                   )}
                 </div>
-              </section>
+              </CollapsiblePanelCard>
             </div>
           </div>
         </div>
@@ -1118,8 +1361,9 @@ export function PointCloudPreviewApp() {
           displays.
         </p>
         <p>
-          Saved viewpoints persist in local storage for this browser, and the
-          screenshot button downloads the current canvas view as a PNG.
+          Saved viewpoints persist in local storage for this browser across all
+          datasets on this route, and the screenshot button downloads the
+          current canvas view as a PNG.
         </p>
       </InfoModal>
     </>
