@@ -225,11 +225,21 @@ test("point-cloud preview disables dependent controls and saves viewpoints", asy
 test("point-cloud preview can download a screenshot", async ({ page }) => {
   await gotoStableApp(page, "/pointcloud-preview");
 
+  const fileInput = page.locator('input[type="file"]');
+  await fileInput.setInputFiles({
+    name: "tiny-upload.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(validUploadJson, "utf8"),
+  });
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+
   const downloadPromise = page.waitForEvent("download");
   await page.getByTestId("screenshot-button").click();
   const download = await downloadPromise;
 
-  expect(download.suggestedFilename()).toMatch(/^pointcloud-preview-.*\.png$/);
+  expect(download.suggestedFilename()).toMatch(
+    /^tiny-upload-screenshot-\d{8}-\d{6}\.png$/,
+  );
 });
 
 test("point-cloud preview right-side cards can collapse and expand", async ({

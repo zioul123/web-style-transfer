@@ -107,6 +107,29 @@ const fpsLabel = (framesPerSecond: number): string =>
 const brightnessLabel = (brightness: number): string =>
   `${brightness.toFixed(2)}x`;
 
+const screenshotFilenameStemForSourceLabel = (sourceLabel: string): string => {
+  const trimmedLabel = sourceLabel.trim();
+  const withoutExtension = trimmedLabel.replace(/\.[^.]+$/, "");
+  const sanitized = withoutExtension
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return sanitized.length > 0 ? sanitized : "pointcloud-preview";
+};
+
+const screenshotTimestampLabel = (date: Date): string => {
+  const pad = (value: number): string => value.toString().padStart(2, "0");
+  return [
+    date.getFullYear().toString(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    "-",
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join("");
+};
+
 const snapAxisButtons: readonly {
   readonly axis: ViewAxis;
   readonly label: string;
@@ -747,7 +770,7 @@ export function PointCloudPreviewApp() {
 
     const downloadLink = document.createElement("a");
     downloadLink.href = canvas.toDataURL("image/png");
-    downloadLink.download = `pointcloud-preview-${Date.now()}.png`;
+    downloadLink.download = `${screenshotFilenameStemForSourceLabel(assetState.sourceLabel)}-screenshot-${screenshotTimestampLabel(new Date())}.png`;
     downloadLink.click();
   };
 
