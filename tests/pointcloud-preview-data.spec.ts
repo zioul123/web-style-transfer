@@ -32,6 +32,54 @@ test("point-cloud preview parser converts the tiny fixture into typed arrays", (
   expect(data.meshVertexColors).toHaveLength(12);
   expect(data.bounds.min).toEqual([-1, 0, -1]);
   expect(data.bounds.max).toEqual([1, 0, 1]);
+  expect(data.spatialHash.sortedPointPositions).toHaveLength(
+    data.pointPositions.length,
+  );
+  expect(data.spatialHash.sortedPointColors).toHaveLength(
+    data.pointColors.length,
+  );
+  expect(data.spatialHash.cellOffsets).toHaveLength(
+    data.spatialHash.cellCount + 1,
+  );
+  expect(data.spatialHash.cellOffsets[data.spatialHash.cellCount]).toBe(
+    data.pointCount,
+  );
+});
+
+test("point-cloud spatial hash preserves all point/color tuples after sorting", () => {
+  const data = buildPointCloudMeshData({
+    pc_xyz: [
+      [2, 0, 0],
+      [0, 0, 0],
+      [1, 0, 0],
+      [3, 0, 0],
+    ],
+    pc_rgb: [
+      [0.2, 0.1, 0.4],
+      [0.9, 0.8, 0.7],
+      [0.3, 0.5, 0.7],
+      [0.1, 0.9, 0.2],
+    ],
+    m_verts: [
+      [0, 0, 0],
+      [1, 0, 0],
+      [1, 0, 1],
+    ],
+    m_faces: [[0, 1, 2]],
+  });
+
+  const originalTuples = Array.from(
+    { length: data.pointCount },
+    (_, index) =>
+      `${data.pointPositions[index * 3]},${data.pointPositions[index * 3 + 1]},${data.pointPositions[index * 3 + 2]}|${data.pointColors[index * 3]},${data.pointColors[index * 3 + 1]},${data.pointColors[index * 3 + 2]}`,
+  ).sort();
+  const hashedTuples = Array.from(
+    { length: data.pointCount },
+    (_, index) =>
+      `${data.spatialHash.sortedPointPositions[index * 3]},${data.spatialHash.sortedPointPositions[index * 3 + 1]},${data.spatialHash.sortedPointPositions[index * 3 + 2]}|${data.spatialHash.sortedPointColors[index * 3]},${data.spatialHash.sortedPointColors[index * 3 + 1]},${data.spatialHash.sortedPointColors[index * 3 + 2]}`,
+  ).sort();
+
+  expect(hashedTuples).toEqual(originalTuples);
 });
 
 test("point-cloud preview parser rejects mismatched point colour counts", () => {

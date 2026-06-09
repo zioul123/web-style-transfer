@@ -14,7 +14,7 @@ import {
 } from "./math/interpolation";
 import type { PointCloudHitSample, PointCloudMeshData } from "./types";
 
-export const maxFragmentShaderPoints = 512;
+export const maxFragmentShaderPointsPerCell = 256;
 
 type MeshColorMode = "baked" | "fragment-knn";
 
@@ -104,6 +104,8 @@ type SceneContentProps = Omit<PointCloudPreviewSceneProps, "selectedHit"> & {
 };
 
 const minimumSquaredDistance = 1e-16;
+const fragmentShaderNeighborCellRadius = 1;
+const textureMaxWidth = 2048;
 
 const fragmentKnnVertexShader = `
   varying vec3 vSamplePosition;
@@ -114,19 +116,47 @@ const fragmentKnnVertexShader = `
   }
 `;
 
-const fragmentKnnFragmentShader = `
+const buildFragmentKnnFragmentShader = (maxPointsPerCell: number): string => `
   precision highp float;
 
   uniform sampler2D pointPositionTexture;
   uniform sampler2D pointColorTexture;
+  uniform sampler2D cellOffsetTexture;
   uniform float pointTextureWidth;
-  uniform int pointCount;
+  uniform float pointTextureHeight;
+  uniform float cellOffsetTextureWidth;
+  uniform float cellOffsetTextureHeight;
+  uniform vec3 gridMin;
+  uniform vec3 gridCellSize;
+  uniform vec3 gridDimensions;
 
   varying vec3 vSamplePosition;
 
-  vec4 readPointTexture(sampler2D textureSampler, int index) {
-    float u = (float(index) + 0.5) / pointTextureWidth;
-    return texture2D(textureSampler, vec2(u, 0.5));
+  vec4 readTextureValue(
+    sampler2D textureSampler,
+    int index,
+    float textureWidth,
+    float textureHeight
+  ) {
+    float row = floor(float(index) / textureWidth);
+    float column = float(index) - (row * textureWidth);
+    vec2 uv = vec2(
+      (column + 0.5) / textureWidth,
+      (row + 0.5) / textureHeight
+    );
+    return texture2D(textureSampler, uv);
+  }
+
+  int clampCellCoordinate(float value, float minValue, float cellSizeValue, int dimension) {
+    if (dimension <= 1 || cellSizeValue <= 0.0) {
+      return 0;
+    }
+    int coordinate = int(floor((value - minValue) / cellSizeValue));
+    return min(dimension - 1, max(0, coordinate));
+  }
+
+  int flattenCellIndex(ivec3 coordinate, ivec3 dimensions) {
+    return coordinate.x + (coordinate.y * dimensions.x) + (coordinate.z * dimensions.x * dimensions.y);
   }
 
   void insertNeighbor(
@@ -169,26 +199,81 @@ const fragmentKnnFragmentShader = `
     vec3 color1 = vec3(0.0);
     vec3 color2 = vec3(0.0);
 
-    for (int pointIndex = 0; pointIndex < ${maxFragmentShaderPoints}; pointIndex += 1) {
-      if (pointIndex >= pointCount) {
-        break;
+    ivec3 dimensions = ivec3(
+      int(gridDimensions.x + 0.5),
+      int(gridDimensions.y + 0.5),
+      int(gridDimensions.z + 0.5)
+    );
+    ivec3 queryCell = ivec3(
+      clampCellCoordinate(vSamplePosition.x, gridMin.x, gridCellSize.x, dimensions.x),
+      clampCellCoordinate(vSamplePosition.y, gridMin.y, gridCellSize.y, dimensions.y),
+      clampCellCoordinate(vSamplePosition.z, gridMin.z, gridCellSize.z, dimensions.z)
+    );
+
+    for (int cellOffsetZ = -${fragmentShaderNeighborCellRadius}; cellOffsetZ <= ${fragmentShaderNeighborCellRadius}; cellOffsetZ += 1) {
+      for (int cellOffsetY = -${fragmentShaderNeighborCellRadius}; cellOffsetY <= ${fragmentShaderNeighborCellRadius}; cellOffsetY += 1) {
+        for (int cellOffsetX = -${fragmentShaderNeighborCellRadius}; cellOffsetX <= ${fragmentShaderNeighborCellRadius}; cellOffsetX += 1) {
+          ivec3 cellCoordinate = queryCell + ivec3(cellOffsetX, cellOffsetY, cellOffsetZ);
+          if (
+            cellCoordinate.x < 0 || cellCoordinate.x >= dimensions.x ||
+            cellCoordinate.y < 0 || cellCoordinate.y >= dimensions.y ||
+            cellCoordinate.z < 0 || cellCoordinate.z >= dimensions.z
+          ) {
+            continue;
+          }
+
+          int cellIndex = flattenCellIndex(cellCoordinate, dimensions);
+          int rangeStart = int(
+            readTextureValue(
+              cellOffsetTexture,
+              cellIndex,
+              cellOffsetTextureWidth,
+              cellOffsetTextureHeight
+            ).x + 0.5
+          );
+          int rangeEnd = int(
+            readTextureValue(
+              cellOffsetTexture,
+              cellIndex + 1,
+              cellOffsetTextureWidth,
+              cellOffsetTextureHeight
+            ).x + 0.5
+          );
+
+          for (int pointOffset = 0; pointOffset < ${maxPointsPerCell}; pointOffset += 1) {
+            int pointIndex = rangeStart + pointOffset;
+            if (pointIndex >= rangeEnd) {
+              break;
+            }
+
+            vec3 pointPosition = readTextureValue(
+              pointPositionTexture,
+              pointIndex,
+              pointTextureWidth,
+              pointTextureHeight
+            ).xyz;
+            vec3 pointColor = readTextureValue(
+              pointColorTexture,
+              pointIndex,
+              pointTextureWidth,
+              pointTextureHeight
+            ).xyz;
+            vec3 delta = pointPosition - vSamplePosition;
+            float squaredDistance = dot(delta, delta);
+
+            insertNeighbor(
+              squaredDistance,
+              pointColor,
+              distance0,
+              distance1,
+              distance2,
+              color0,
+              color1,
+              color2
+            );
+          }
+        }
       }
-
-      vec3 pointPosition = readPointTexture(pointPositionTexture, pointIndex).xyz;
-      vec3 pointColor = readPointTexture(pointColorTexture, pointIndex).xyz;
-      vec3 delta = pointPosition - vSamplePosition;
-      float squaredDistance = dot(delta, delta);
-
-      insertNeighbor(
-        squaredDistance,
-        pointColor,
-        distance0,
-        distance1,
-        distance2,
-        color0,
-        color1,
-        color2
-      );
     }
 
     vec3 color = vec3(0.0);
@@ -206,9 +291,17 @@ const fragmentKnnFragmentShader = `
   }
 `;
 
-const buildPointTexture = (values: Float32Array): THREE.DataTexture => {
+type PackedTexture = {
+  readonly texture: THREE.DataTexture;
+  readonly width: number;
+  readonly height: number;
+};
+
+const buildPointTexture = (values: Float32Array): PackedTexture => {
   const pointCount = values.length / 3;
-  const textureData = new Float32Array(pointCount * 4);
+  const width = Math.min(Math.max(pointCount, 1), textureMaxWidth);
+  const height = Math.max(1, Math.ceil(pointCount / width));
+  const textureData = new Float32Array(width * height * 4);
   for (let pointIndex = 0; pointIndex < pointCount; pointIndex += 1) {
     const sourceIndex = pointIndex * 3;
     const targetIndex = pointIndex * 4;
@@ -220,8 +313,8 @@ const buildPointTexture = (values: Float32Array): THREE.DataTexture => {
 
   const texture = new THREE.DataTexture(
     textureData,
-    pointCount,
-    1,
+    width,
+    height,
     THREE.RGBAFormat,
     THREE.FloatType,
   );
@@ -231,7 +324,31 @@ const buildPointTexture = (values: Float32Array): THREE.DataTexture => {
   texture.wrapT = THREE.ClampToEdgeWrapping;
   texture.generateMipmaps = false;
   texture.needsUpdate = true;
-  return texture;
+  return { texture, width, height };
+};
+
+const buildScalarTexture = (values: Uint32Array): PackedTexture => {
+  const width = Math.min(Math.max(values.length, 1), textureMaxWidth);
+  const height = Math.max(1, Math.ceil(values.length / width));
+  const textureData = new Float32Array(width * height * 4);
+  for (let valueIndex = 0; valueIndex < values.length; valueIndex += 1) {
+    textureData[valueIndex * 4] = values[valueIndex] ?? 0;
+  }
+
+  const texture = new THREE.DataTexture(
+    textureData,
+    width,
+    height,
+    THREE.RGBAFormat,
+    THREE.FloatType,
+  );
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+  return { texture, width, height };
 };
 
 function SceneContent({
@@ -310,34 +427,62 @@ function SceneContent({
     if (meshColorMode !== "fragment-knn") {
       return null;
     }
-    return buildPointTexture(data.pointPositions);
-  }, [data.pointPositions, meshColorMode]);
+    return buildPointTexture(data.spatialHash.sortedPointPositions);
+  }, [data.spatialHash.sortedPointPositions, meshColorMode]);
 
   const fragmentShaderPointColorTexture = useMemo(() => {
     if (meshColorMode !== "fragment-knn") {
       return null;
     }
-    return buildPointTexture(data.pointColors);
-  }, [data.pointColors, meshColorMode]);
+    return buildPointTexture(data.spatialHash.sortedPointColors);
+  }, [data.spatialHash.sortedPointColors, meshColorMode]);
+
+  const fragmentShaderCellOffsetTexture = useMemo(() => {
+    if (meshColorMode !== "fragment-knn") {
+      return null;
+    }
+    return buildScalarTexture(data.spatialHash.cellOffsets);
+  }, [data.spatialHash.cellOffsets, meshColorMode]);
 
   const fragmentShaderMaterial = useMemo(() => {
     if (
       meshColorMode !== "fragment-knn" ||
       fragmentShaderPointPositionTexture === null ||
-      fragmentShaderPointColorTexture === null
+      fragmentShaderPointColorTexture === null ||
+      fragmentShaderCellOffsetTexture === null
     ) {
       return null;
     }
 
     return new THREE.ShaderMaterial({
       uniforms: {
-        pointPositionTexture: { value: fragmentShaderPointPositionTexture },
-        pointColorTexture: { value: fragmentShaderPointColorTexture },
-        pointTextureWidth: { value: data.pointCount },
-        pointCount: { value: data.pointCount },
+        pointPositionTexture: {
+          value: fragmentShaderPointPositionTexture.texture,
+        },
+        pointColorTexture: { value: fragmentShaderPointColorTexture.texture },
+        cellOffsetTexture: { value: fragmentShaderCellOffsetTexture.texture },
+        pointTextureWidth: { value: fragmentShaderPointPositionTexture.width },
+        pointTextureHeight: {
+          value: fragmentShaderPointPositionTexture.height,
+        },
+        cellOffsetTextureWidth: {
+          value: fragmentShaderCellOffsetTexture.width,
+        },
+        cellOffsetTextureHeight: {
+          value: fragmentShaderCellOffsetTexture.height,
+        },
+        gridMin: { value: new THREE.Vector3(...data.spatialHash.min) },
+        gridCellSize: {
+          value: new THREE.Vector3(...data.spatialHash.cellSize),
+        },
+        gridDimensions: {
+          value: new THREE.Vector3(...data.spatialHash.dimensions),
+        },
       },
       vertexShader: fragmentKnnVertexShader,
-      fragmentShader: fragmentKnnFragmentShader,
+      fragmentShader: buildFragmentKnnFragmentShader(
+        data.spatialHash.maxPointsPerCell,
+      ),
       side: THREE.DoubleSide,
       wireframe: showWireframe,
       polygonOffset: true,
@@ -345,7 +490,11 @@ function SceneContent({
       polygonOffsetUnits: 1,
     });
   }, [
-    data.pointCount,
+    data.spatialHash.cellSize,
+    data.spatialHash.dimensions,
+    data.spatialHash.maxPointsPerCell,
+    data.spatialHash.min,
+    fragmentShaderCellOffsetTexture,
     fragmentShaderPointColorTexture,
     fragmentShaderPointPositionTexture,
     meshColorMode,
@@ -357,12 +506,14 @@ function SceneContent({
       meshGeometry.dispose();
       pointGeometry.dispose();
       debugLineGeometry?.dispose();
-      fragmentShaderPointPositionTexture?.dispose();
-      fragmentShaderPointColorTexture?.dispose();
+      fragmentShaderPointPositionTexture?.texture.dispose();
+      fragmentShaderPointColorTexture?.texture.dispose();
+      fragmentShaderCellOffsetTexture?.texture.dispose();
       fragmentShaderMaterial?.dispose();
     },
     [
       debugLineGeometry,
+      fragmentShaderCellOffsetTexture,
       fragmentShaderMaterial,
       fragmentShaderPointColorTexture,
       fragmentShaderPointPositionTexture,

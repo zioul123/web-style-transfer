@@ -1,5 +1,6 @@
 import { buildMeshVertexColors } from "./math/interpolation";
 import { buildKdTree3d } from "./math/kdTree3d";
+import { buildSpatialHashGrid3d } from "./math/spatialHash3d";
 import type { Bounds3D, PointCloudMeshData, PointCloudMeshJson } from "./types";
 
 const dimensionsPerEntry = 3;
@@ -176,6 +177,7 @@ export const buildPointCloudMeshData = (
   validateFaceIndices(meshIndices, meshVertexCount);
 
   const kdTree = buildKdTree3d(pointPositions);
+  const spatialHash = buildSpatialHashGrid3d(pointPositions, pointColors);
   return {
     meshPositions,
     meshIndices,
@@ -187,6 +189,7 @@ export const buildPointCloudMeshData = (
     ),
     pointPositions,
     pointColors,
+    spatialHash,
     meshVertexCount,
     meshFaceCount,
     pointCount,

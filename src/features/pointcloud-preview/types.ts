@@ -12,6 +12,18 @@ export type Bounds3D = {
   readonly radius: number;
 };
 
+export type SpatialHashGrid3D = {
+  readonly min: readonly [number, number, number];
+  readonly max: readonly [number, number, number];
+  readonly cellSize: readonly [number, number, number];
+  readonly dimensions: readonly [number, number, number];
+  readonly cellCount: number;
+  readonly cellOffsets: Uint32Array;
+  readonly sortedPointPositions: Float32Array;
+  readonly sortedPointColors: Float32Array;
+  readonly maxPointsPerCell: number;
+};
+
 export type NearestNeighbor = {
   readonly index: number;
   readonly squaredDistance: number;
@@ -30,6 +42,7 @@ export type PointCloudMeshData = {
   readonly meshVertexColors: Float32Array;
   readonly pointPositions: Float32Array;
   readonly pointColors: Float32Array;
+  readonly spatialHash: SpatialHashGrid3D;
   readonly meshVertexCount: number;
   readonly meshFaceCount: number;
   readonly pointCount: number;

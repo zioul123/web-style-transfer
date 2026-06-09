@@ -47,6 +47,25 @@ const largeUploadJson = JSON.stringify({
   ],
 });
 
+const denseCellUploadJson = JSON.stringify({
+  pc_xyz: Array.from({ length: 300 }, () => [0.5, 0.5, 0.5]),
+  pc_rgb: Array.from({ length: 300 }, (_, index) => [
+    (index % 7) / 6,
+    (index % 11) / 10,
+    (index % 13) / 12,
+  ]),
+  m_verts: [
+    [-1, 0, 1],
+    [1, 0, 1],
+    [1, 0, -1],
+    [-1, 0, -1],
+  ],
+  m_faces: [
+    [0, 1, 2],
+    [0, 2, 3],
+  ],
+});
+
 test("point-cloud preview boots from the standalone route with the bundled demo", async ({
   page,
 }) => {
@@ -105,7 +124,7 @@ test("point-cloud preview reports upload errors and recovers on a valid upload",
   ).toHaveCount(0);
 });
 
-test("point-cloud preview falls back to baked colours when fragment shading exceeds the point cap", async ({
+test("point-cloud preview keeps fragment shading active for larger uploads via spatial hashing", async ({
   page,
 }) => {
   await gotoStableApp(page, "/pointcloud-preview");
@@ -123,6 +142,28 @@ test("point-cloud preview falls back to baked colours when fragment shading exce
     "fragment-knn",
   );
   await expect(page.getByTestId("mesh-color-mode-status")).toContainText(
-    /falls back to baked vertex colours/i,
+    /Spatial-hash fragment KNN shading active/i,
+  );
+});
+
+test("point-cloud preview falls back to baked colours when one spatial-hash cell is too dense", async ({
+  page,
+}) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  const fileInput = page.locator('input[type="file"]');
+  await fileInput.setInputFiles({
+    name: "dense-cell-upload.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(denseCellUploadJson, "utf8"),
+  });
+
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+  await expect(page.getByTestId("point-sample-count")).toHaveText("300");
+  await expect(page.getByTestId("mesh-color-mode-select")).toHaveValue(
+    "fragment-knn",
+  );
+  await expect(page.getByTestId("mesh-color-mode-status")).toContainText(
+    /dense cell/i,
   );
 });

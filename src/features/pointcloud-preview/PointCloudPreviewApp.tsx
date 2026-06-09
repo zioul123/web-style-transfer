@@ -7,7 +7,7 @@ import {
   type ChangeEvent,
 } from "react";
 import {
-  maxFragmentShaderPoints,
+  maxFragmentShaderPointsPerCell,
   PointCloudPreviewScene,
 } from "./PointCloudPreviewScene";
 import { parsePointCloudMeshText } from "./loadPointCloudMesh";
@@ -167,7 +167,9 @@ export function PointCloudPreviewApp() {
 
   const data = assetState.data;
   const canUseFragmentKnnShading = useMemo(
-    () => data !== null && data.pointCount <= maxFragmentShaderPoints,
+    () =>
+      data !== null &&
+      data.spatialHash.maxPointsPerCell <= maxFragmentShaderPointsPerCell,
     [data],
   );
   const effectiveMeshColorMode: MeshColorMode =
@@ -176,9 +178,9 @@ export function PointCloudPreviewApp() {
       : "baked";
   const meshColorModeDescription =
     effectiveMeshColorMode === "fragment-knn"
-      ? `Fragment KNN shading active (${data?.pointCount ?? 0}/${maxFragmentShaderPoints} points).`
+      ? `Spatial-hash fragment KNN shading active (${data?.pointCount ?? 0} points across ${data?.spatialHash.cellCount ?? 0} cells).`
       : meshColorMode === "fragment-knn" && data !== null
-        ? `Fragment KNN shading is capped at ${maxFragmentShaderPoints} points for now; this dataset falls back to baked vertex colours.`
+        ? `Spatial-hash fragment KNN shading found a dense cell with ${data.spatialHash.maxPointsPerCell} points, which exceeds the current per-cell shader cap of ${maxFragmentShaderPointsPerCell}; this dataset falls back to baked vertex colours.`
         : "Baked vertex colours active.";
 
   return (
