@@ -12,11 +12,32 @@ import {
   pointPositionAt,
   sampleInterpolatedColor,
 } from "./math/interpolation";
-import type { PointCloudHitSample, PointCloudMeshData } from "./types";
+import type {
+  PointCloudHitSample,
+  PointCloudMeshData,
+  PreviewCameraState,
+} from "./types";
 
 export const maxFragmentShaderPointsPerCell = 256;
 
 type MeshColorMode = "baked" | "fragment-knn";
+type ViewAxis = "pos-x" | "neg-x" | "pos-y" | "neg-y" | "pos-z" | "neg-z";
+
+export type PointCloudPreviewCameraCommand =
+  | {
+      readonly id: number;
+      readonly type: "frame";
+    }
+  | {
+      readonly id: number;
+      readonly type: "restore";
+      readonly camera: PreviewCameraState;
+    }
+  | {
+      readonly id: number;
+      readonly type: "snap-axis";
+      readonly axis: ViewAxis;
+    };
 
 type PointCloudPreviewSceneProps = {
   readonly data: PointCloudMeshData;
@@ -26,86 +47,34 @@ type PointCloudPreviewSceneProps = {
   readonly meshColorMode: MeshColorMode;
   readonly showNeighborDebug: boolean;
   readonly pointSize: number;
+  readonly pointGammaCorrection: boolean;
+  readonly swapYZ: boolean;
   readonly selectedHit: PointCloudHitSample | null;
+  readonly cameraCommand: PointCloudPreviewCameraCommand;
   readonly onHoverSampleChange: (sample: PointCloudHitSample | null) => void;
+  readonly onCameraStateChange: (state: PreviewCameraState) => void;
+  readonly onFramesPerSecondChange: (fps: number) => void;
 };
 
 type OrbitCameraControlsProps = {
-  readonly target: readonly [number, number, number];
-};
-
-function OrbitCameraControls({ target }: OrbitCameraControlsProps) {
-  const { camera, gl } = useThree();
-  const controls = useMemo(() => {
-    const nextControls = new OrbitControls(camera, gl.domElement);
-    nextControls.enableDamping = true;
-    nextControls.dampingFactor = 0.08;
-    nextControls.target.set(target[0], target[1], target[2]);
-    nextControls.update();
-    return nextControls;
-  }, [camera, gl.domElement, target]);
-
-  useEffect(() => {
-    return () => {
-      controls.dispose();
-    };
-  }, [controls]);
-
-  useFrame(() => {
-    controls.update();
-  });
-
-  return null;
-}
-
-type CameraFramerProps = {
   readonly data: PointCloudMeshData;
+  readonly command: PointCloudPreviewCameraCommand;
+  readonly onCameraStateChange: (state: PreviewCameraState) => void;
 };
 
-function CameraFramer({ data }: CameraFramerProps) {
-  const setThreeState = useThree((state) => state.set);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-  const radius = Math.max(data.bounds.radius, 0.25);
-  const distance = radius * 2.75;
-  const position = useMemo(
-    () =>
-      [
-        data.bounds.center[0] + distance,
-        data.bounds.center[1] + distance * 0.55,
-        data.bounds.center[2] + distance,
-      ] as const,
-    [data.bounds.center, distance],
-  );
-
-  useEffect(() => {
-    const nextCamera = cameraRef.current;
-    if (nextCamera !== null) {
-      setThreeState({ camera: nextCamera });
-    }
-  }, [setThreeState]);
-
-  return (
-    <perspectiveCamera
-      ref={cameraRef}
-      fov={42}
-      near={Math.max(radius / 200, 0.01)}
-      far={Math.max(radius * 40, 50)}
-      position={position}
-      onUpdate={(camera) => {
-        camera.lookAt(...data.bounds.center);
-        camera.updateProjectionMatrix();
-      }}
-    />
-  );
-}
-
-type SceneContentProps = Omit<PointCloudPreviewSceneProps, "selectedHit"> & {
+type SceneContentProps = Omit<
+  PointCloudPreviewSceneProps,
+  "selectedHit" | "cameraCommand"
+> & {
   readonly highlightSample: PointCloudHitSample | null;
+  readonly transformMatrix: THREE.Matrix4;
+  readonly inverseTransformMatrix: THREE.Matrix4;
 };
 
 const minimumSquaredDistance = 1e-16;
 const fragmentShaderNeighborCellRadius = 1;
 const textureMaxWidth = 2048;
+const cameraStateEpsilon = 1e-5;
 
 const fragmentKnnVertexShader = `
   varying vec3 vSamplePosition;
@@ -297,6 +266,55 @@ type PackedTexture = {
   readonly height: number;
 };
 
+const buildDefaultCameraState = (
+  data: PointCloudMeshData,
+): PreviewCameraState => {
+  const radius = Math.max(data.bounds.radius, 0.25);
+  const distance = radius * 2.75;
+  return {
+    position: [
+      data.bounds.center[0] + distance,
+      data.bounds.center[1] + distance * 0.55,
+      data.bounds.center[2] + distance,
+    ],
+    target: data.bounds.center,
+  };
+};
+
+const axisVectorByView: Record<ViewAxis, readonly [number, number, number]> = {
+  "pos-x": [1, 0, 0],
+  "neg-x": [-1, 0, 0],
+  "pos-y": [0, 1, 0],
+  "neg-y": [0, -1, 0],
+  "pos-z": [0, 0, 1],
+  "neg-z": [0, 0, -1],
+};
+
+const vectorTriplesClose = (
+  left: readonly [number, number, number],
+  right: readonly [number, number, number],
+): boolean =>
+  Math.abs(left[0] - right[0]) <= cameraStateEpsilon &&
+  Math.abs(left[1] - right[1]) <= cameraStateEpsilon &&
+  Math.abs(left[2] - right[2]) <= cameraStateEpsilon;
+
+const srgbToLinearChannel = (value: number): number =>
+  value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+
+const maybeGammaCorrectColors = (
+  colors: Float32Array,
+  enabled: boolean,
+): Float32Array => {
+  if (!enabled) {
+    return colors;
+  }
+  const corrected = new Float32Array(colors.length);
+  for (let index = 0; index < colors.length; index += 1) {
+    corrected[index] = srgbToLinearChannel(colors[index] ?? 0);
+  }
+  return corrected;
+};
+
 const buildPointTexture = (values: Float32Array): PackedTexture => {
   const pointCount = values.length / 3;
   const width = Math.min(Math.max(pointCount, 1), textureMaxWidth);
@@ -351,6 +369,124 @@ const buildScalarTexture = (values: Uint32Array): PackedTexture => {
   return { texture, width, height };
 };
 
+function OrbitCameraControls({
+  data,
+  command,
+  onCameraStateChange,
+}: OrbitCameraControlsProps) {
+  const { camera, gl } = useThree();
+  const controlsRef = useRef<OrbitControls | null>(null);
+  const lastCommandIdRef = useRef<number>(-1);
+  const lastCameraStateRef = useRef<PreviewCameraState | null>(null);
+  const emissionAccumulatorRef = useRef<number>(0);
+
+  useEffect(() => {
+    const controls = new OrbitControls(camera, gl.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controlsRef.current = controls;
+    return () => {
+      controls.dispose();
+      controlsRef.current = null;
+    };
+  }, [camera, gl.domElement]);
+
+  useEffect(() => {
+    const controls = controlsRef.current;
+    if (controls === null || lastCommandIdRef.current === command.id) {
+      return;
+    }
+
+    const nextState =
+      command.type === "frame"
+        ? buildDefaultCameraState(data)
+        : command.type === "restore"
+          ? command.camera
+          : (() => {
+              const currentTarget = [
+                controls.target.x,
+                controls.target.y,
+                controls.target.z,
+              ] as const;
+              const delta = new THREE.Vector3()
+                .copy(camera.position)
+                .sub(controls.target);
+              const distance = Math.max(
+                delta.length(),
+                Math.max(data.bounds.radius, 0.25) * 2.75,
+              );
+              const axis = axisVectorByView[command.axis];
+              return {
+                position: [
+                  currentTarget[0] + axis[0] * distance,
+                  currentTarget[1] + axis[1] * distance,
+                  currentTarget[2] + axis[2] * distance,
+                ] as const,
+                target: currentTarget,
+              };
+            })();
+
+    camera.position.set(...nextState.position);
+    controls.target.set(...nextState.target);
+    camera.lookAt(...nextState.target);
+    camera.updateProjectionMatrix();
+    controls.update();
+    lastCameraStateRef.current = nextState;
+    onCameraStateChange(nextState);
+    lastCommandIdRef.current = command.id;
+  }, [camera, command, data, onCameraStateChange]);
+
+  useFrame((_, delta) => {
+    const controls = controlsRef.current;
+    if (controls === null) {
+      return;
+    }
+    controls.update();
+    emissionAccumulatorRef.current += delta;
+    if (emissionAccumulatorRef.current < 0.1) {
+      return;
+    }
+
+    emissionAccumulatorRef.current = 0;
+    const nextState: PreviewCameraState = {
+      position: [camera.position.x, camera.position.y, camera.position.z],
+      target: [controls.target.x, controls.target.y, controls.target.z],
+    };
+    const previousState = lastCameraStateRef.current;
+    if (
+      previousState !== null &&
+      vectorTriplesClose(previousState.position, nextState.position) &&
+      vectorTriplesClose(previousState.target, nextState.target)
+    ) {
+      return;
+    }
+    lastCameraStateRef.current = nextState;
+    onCameraStateChange(nextState);
+  });
+
+  return null;
+}
+
+function FpsSampler({
+  onFramesPerSecondChange,
+}: Pick<PointCloudPreviewSceneProps, "onFramesPerSecondChange">) {
+  const elapsedRef = useRef<number>(0);
+  const framesRef = useRef<number>(0);
+
+  useFrame((_, delta) => {
+    elapsedRef.current += delta;
+    framesRef.current += 1;
+    if (elapsedRef.current < 0.4) {
+      return;
+    }
+    onFramesPerSecondChange(framesRef.current / elapsedRef.current);
+    elapsedRef.current = 0;
+    framesRef.current = 0;
+  });
+
+  return null;
+}
+
 function SceneContent({
   data,
   showMesh,
@@ -359,9 +495,26 @@ function SceneContent({
   meshColorMode,
   showNeighborDebug,
   pointSize,
+  pointGammaCorrection,
   highlightSample,
+  transformMatrix,
+  inverseTransformMatrix,
   onHoverSampleChange,
 }: SceneContentProps) {
+  const displayMeshVertexColors = useMemo(
+    () =>
+      maybeGammaCorrectColors(
+        data.meshVertexColors,
+        pointGammaCorrection && meshColorMode === "baked",
+      ),
+    [data.meshVertexColors, meshColorMode, pointGammaCorrection],
+  );
+
+  const displayPointColors = useMemo(
+    () => maybeGammaCorrectColors(data.pointColors, pointGammaCorrection),
+    [data.pointColors, pointGammaCorrection],
+  );
+
   const meshGeometry = useMemo(() => {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute(
@@ -370,13 +523,13 @@ function SceneContent({
     );
     geometry.setAttribute(
       "color",
-      new THREE.BufferAttribute(data.meshVertexColors, 3),
+      new THREE.BufferAttribute(displayMeshVertexColors, 3),
     );
     geometry.setIndex(new THREE.BufferAttribute(data.meshIndices, 1));
     geometry.computeVertexNormals();
     geometry.computeBoundingSphere();
     return geometry;
-  }, [data.meshIndices, data.meshPositions, data.meshVertexColors]);
+  }, [data.meshIndices, data.meshPositions, displayMeshVertexColors]);
 
   const pointGeometry = useMemo(() => {
     const geometry = new THREE.BufferGeometry();
@@ -386,11 +539,11 @@ function SceneContent({
     );
     geometry.setAttribute(
       "color",
-      new THREE.BufferAttribute(data.pointColors, 3),
+      new THREE.BufferAttribute(displayPointColors, 3),
     );
     geometry.computeBoundingSphere();
     return geometry;
-  }, [data.pointColors, data.pointPositions]);
+  }, [data.pointPositions, displayPointColors]);
 
   const debugLinePositions = useMemo(() => {
     if (!showNeighborDebug || highlightSample === null) {
@@ -527,7 +680,13 @@ function SceneContent({
 
   const handleIntersection = (event: ThreeEvent<PointerEvent>): void => {
     event.stopPropagation();
-    const hitPoint = [event.point.x, event.point.y, event.point.z] as const;
+    const worldPoint = new THREE.Vector3(
+      event.point.x,
+      event.point.y,
+      event.point.z,
+    );
+    const localPoint = worldPoint.applyMatrix4(inverseTransformMatrix);
+    const hitPoint = [localPoint.x, localPoint.y, localPoint.z] as const;
     const { color, neighbors } = sampleInterpolatedColor(
       data.kdTree,
       data.pointPositions,
@@ -550,66 +709,66 @@ function SceneContent({
     <>
       <color attach="background" args={["#09111f"]} />
       <fog attach="fog" args={["#09111f", 6, 24]} />
-      <CameraFramer data={data} />
-      <OrbitCameraControls target={data.bounds.center} />
-      <gridHelper
-        args={[data.bounds.radius * 6, 12, "#164e63", "#0f172a"]}
-        position={[
-          data.bounds.center[0],
-          data.bounds.min[1],
-          data.bounds.center[2],
-        ]}
-      />
-      {showMesh ? (
-        <mesh
-          geometry={meshGeometry}
-          onPointerMove={handleIntersection}
-          onClick={handleIntersection}
-          onPointerOut={() => onHoverSampleChange(null)}
-        >
-          {fragmentShaderMaterial !== null ? (
-            <primitive object={fragmentShaderMaterial} attach="material" />
-          ) : (
-            <meshBasicMaterial
-              side={THREE.DoubleSide}
-              vertexColors
-              wireframe={showWireframe}
-              polygonOffset
-              polygonOffsetFactor={1}
-              polygonOffsetUnits={1}
-            />
-          )}
-        </mesh>
-      ) : null}
-      {showPoints ? (
-        <points geometry={pointGeometry} renderOrder={1}>
-          <pointsMaterial
-            size={effectivePointSize}
-            sizeAttenuation
-            vertexColors
-            depthWrite={false}
-          />
-        </points>
-      ) : null}
-      {showNeighborDebug && highlightSample !== null ? (
-        <>
-          <mesh position={highlightSample.point}>
-            <sphereGeometry args={[markerRadius, 18, 18]} />
-            <meshBasicMaterial color={highlightSample.color} />
+      <group matrixAutoUpdate={false} matrix={transformMatrix}>
+        <gridHelper
+          args={[data.bounds.radius * 6, 12, "#164e63", "#0f172a"]}
+          position={[
+            data.bounds.center[0],
+            data.bounds.min[1],
+            data.bounds.center[2],
+          ]}
+        />
+        {showMesh ? (
+          <mesh
+            geometry={meshGeometry}
+            onPointerMove={handleIntersection}
+            onClick={handleIntersection}
+            onPointerOut={() => onHoverSampleChange(null)}
+          >
+            {fragmentShaderMaterial !== null ? (
+              <primitive object={fragmentShaderMaterial} attach="material" />
+            ) : (
+              <meshBasicMaterial
+                side={THREE.DoubleSide}
+                vertexColors
+                wireframe={showWireframe}
+                polygonOffset
+                polygonOffsetFactor={1}
+                polygonOffsetUnits={1}
+              />
+            )}
           </mesh>
-          {highlightSample.neighbors.map((neighbor) => (
-            <mesh key={neighbor.index} position={neighbor.position}>
-              <sphereGeometry args={[markerRadius * 0.78, 16, 16]} />
-              <meshBasicMaterial color={neighbor.color} />
+        ) : null}
+        {showPoints ? (
+          <points geometry={pointGeometry} renderOrder={1}>
+            <pointsMaterial
+              size={effectivePointSize}
+              sizeAttenuation
+              vertexColors
+              depthWrite={false}
+            />
+          </points>
+        ) : null}
+        {showNeighborDebug && highlightSample !== null ? (
+          <>
+            <mesh position={highlightSample.point}>
+              <sphereGeometry args={[markerRadius, 18, 18]} />
+              <meshBasicMaterial color={highlightSample.color} />
             </mesh>
-          ))}
-          {debugLineGeometry !== null ? (
-            <lineSegments geometry={debugLineGeometry}>
-              <lineBasicMaterial color="#f8fafc" transparent opacity={0.75} />
-            </lineSegments>
-          ) : null}
-        </>
-      ) : null}
+            {highlightSample.neighbors.map((neighbor) => (
+              <mesh key={neighbor.index} position={neighbor.position}>
+                <sphereGeometry args={[markerRadius * 0.78, 16, 16]} />
+                <meshBasicMaterial color={neighbor.color} />
+              </mesh>
+            ))}
+            {debugLineGeometry !== null ? (
+              <lineSegments geometry={debugLineGeometry}>
+                <lineBasicMaterial color="#f8fafc" transparent opacity={0.75} />
+              </lineSegments>
+            ) : null}
+          </>
+        ) : null}
+      </group>
     </>
   );
 }
@@ -622,9 +781,56 @@ export function PointCloudPreviewScene({
   meshColorMode,
   showNeighborDebug,
   pointSize,
+  pointGammaCorrection,
+  swapYZ,
   selectedHit,
+  cameraCommand,
   onHoverSampleChange,
+  onCameraStateChange,
+  onFramesPerSecondChange,
 }: PointCloudPreviewSceneProps) {
+  const transformMatrix = useMemo(() => {
+    if (!swapYZ) {
+      return new THREE.Matrix4().identity();
+    }
+    const translateToOrigin = new THREE.Matrix4().makeTranslation(
+      -data.bounds.center[0],
+      -data.bounds.center[1],
+      -data.bounds.center[2],
+    );
+    const swapMatrix = new THREE.Matrix4().set(
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+    );
+    const translateBack = new THREE.Matrix4().makeTranslation(
+      data.bounds.center[0],
+      data.bounds.center[1],
+      data.bounds.center[2],
+    );
+    return new THREE.Matrix4()
+      .multiplyMatrices(translateBack, swapMatrix)
+      .multiply(translateToOrigin);
+  }, [data.bounds.center, swapYZ]);
+
+  const inverseTransformMatrix = useMemo(
+    () => transformMatrix.clone().invert(),
+    [transformMatrix],
+  );
+
   return (
     <div
       data-testid="pointcloud-preview-canvas"
@@ -635,6 +841,12 @@ export function PointCloudPreviewScene({
         dpr={[1, 2]}
         gl={{ antialias: true, alpha: false }}
       >
+        <OrbitCameraControls
+          data={data}
+          command={cameraCommand}
+          onCameraStateChange={onCameraStateChange}
+        />
+        <FpsSampler onFramesPerSecondChange={onFramesPerSecondChange} />
         <SceneContent
           data={data}
           showMesh={showMesh}
@@ -643,8 +855,14 @@ export function PointCloudPreviewScene({
           meshColorMode={meshColorMode}
           showNeighborDebug={showNeighborDebug}
           pointSize={pointSize}
+          pointGammaCorrection={pointGammaCorrection}
+          swapYZ={swapYZ}
           highlightSample={selectedHit}
+          transformMatrix={transformMatrix}
+          inverseTransformMatrix={inverseTransformMatrix}
           onHoverSampleChange={onHoverSampleChange}
+          onCameraStateChange={onCameraStateChange}
+          onFramesPerSecondChange={onFramesPerSecondChange}
         />
       </Canvas>
     </div>

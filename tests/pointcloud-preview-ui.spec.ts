@@ -78,18 +78,21 @@ test("point-cloud preview boots from the standalone route with the bundled demo"
   ).toBeVisible();
   await expect(page.getByTestId("pointcloud-preview-canvas")).toBeVisible();
   await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
-    "Bundled tiny example",
+    "Bundled medium example",
   );
   await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
-  await expect(page.getByTestId("mesh-vertex-count")).toHaveText("4");
-  await expect(page.getByTestId("mesh-face-count")).toHaveText("2");
-  await expect(page.getByTestId("point-sample-count")).toHaveText("3");
+  await expect(page.getByTestId("mesh-vertex-count")).toHaveText("64");
+  await expect(page.getByTestId("mesh-face-count")).toHaveText("98");
+  await expect(page.getByTestId("point-sample-count")).toHaveText("191");
   await expect(page.getByTestId("mesh-color-mode-select")).toHaveValue(
     "fragment-knn",
   );
   await expect(page.getByTestId("mesh-color-mode-status")).toContainText(
     /Fragment KNN shading active/i,
   );
+  await expect(page.getByTestId("pointcloud-fps")).toContainText(/FPS/i);
+  await expect(page.getByTestId("save-viewpoint-button")).toBeEnabled();
+  await expect(page.getByTestId("swap-yz-button")).toBeVisible();
 });
 
 test("point-cloud preview reports upload errors and recovers on a valid upload", async ({
@@ -166,4 +169,24 @@ test("point-cloud preview falls back to baked colours when one spatial-hash cell
   await expect(page.getByTestId("mesh-color-mode-status")).toContainText(
     /dense cell/i,
   );
+});
+
+test("point-cloud preview disables dependent controls and saves viewpoints", async ({
+  page,
+}) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await page.getByLabel("Show point cloud").uncheck();
+  await expect(page.getByTestId("point-size-slider")).toBeDisabled();
+
+  await page.getByLabel("Show mesh").uncheck();
+  await expect(page.getByLabel("Wireframe mesh")).toBeDisabled();
+
+  await page.getByTestId("save-viewpoint-button").click();
+  await expect(page.getByTestId("viewpoint-go-1")).toBeVisible();
+
+  await page.getByTestId("swap-yz-button").click();
+  await expect(page.getByTestId("swap-yz-button")).toHaveText(/Y\/Z swapped/i);
+  await page.getByTestId("viewpoint-go-1").click();
+  await expect(page.getByTestId("swap-yz-button")).toHaveText(/Flip Y and Z/i);
 });

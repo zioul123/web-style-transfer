@@ -62,3 +62,8 @@ export type PointCloudHitSample = {
   readonly color: readonly [number, number, number];
   readonly neighbors: readonly NeighborSample[];
 };
+
+export type PreviewCameraState = {
+  readonly position: readonly [number, number, number];
+  readonly target: readonly [number, number, number];
+};
