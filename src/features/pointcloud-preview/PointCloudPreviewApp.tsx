@@ -3,8 +3,10 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent,
+  type ReactNode,
 } from "react";
 import {
   maxFragmentShaderPointsPerCell,
@@ -23,6 +25,7 @@ const bundledMediumExampleUrl = assetUrl(
   "pointcloud-style-transfer/pc-and-mesh-medium-example.json",
 );
 const bundledMediumSourceLabel = "Bundled medium example";
+const savedViewpointsStorageKey = "pointcloud-preview-saved-viewpoints";
 
 type LoadedAssetState =
   | {
@@ -54,6 +57,17 @@ type SavedViewpoint = {
   readonly swapYZ: boolean;
 };
 
+type ViewSettings = {
+  readonly showMesh: boolean;
+  readonly showPoints: boolean;
+  readonly showWireframe: boolean;
+  readonly meshColorMode: MeshColorMode;
+  readonly pointSize: number;
+  readonly disableGammaDecoding: boolean;
+  readonly brightness: number;
+  readonly swapYZ: boolean;
+};
+
 type NextCameraCommand =
   | {
       readonly type: "frame";
@@ -67,6 +81,17 @@ type NextCameraCommand =
       readonly axis: ViewAxis;
     };
 
+const defaultViewSettings: ViewSettings = {
+  showMesh: true,
+  showPoints: true,
+  showWireframe: false,
+  meshColorMode: "fragment-knn",
+  pointSize: 0.035,
+  disableGammaDecoding: false,
+  brightness: 1,
+  swapYZ: false,
+};
+
 const colorToCss = (color: readonly [number, number, number]): string =>
   `rgb(${Math.round(color[0] * 255)} ${Math.round(color[1] * 255)} ${Math.round(
     color[2] * 255,
@@ -77,6 +102,9 @@ const boundsLabel = (values: readonly [number, number, number]): string =>
 
 const fpsLabel = (framesPerSecond: number): string =>
   framesPerSecond > 0 ? `${framesPerSecond.toFixed(1)} FPS` : "Sampling FPS";
+
+const brightnessLabel = (brightness: number): string =>
+  `${brightness.toFixed(2)}x`;
 
 const snapAxisButtons: readonly {
   readonly axis: ViewAxis;
@@ -90,24 +118,159 @@ const snapAxisButtons: readonly {
   { axis: "neg-z", label: "-Z" },
 ];
 
+const readSavedViewpointMap = (): Record<string, readonly SavedViewpoint[]> => {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const raw = window.localStorage.getItem(savedViewpointsStorageKey);
+    if (raw === null) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null) {
+      return {};
+    }
+
+    const output: Record<string, readonly SavedViewpoint[]> = {};
+    Object.entries(parsed as Record<string, unknown>).forEach(
+      ([key, value]) => {
+        if (!Array.isArray(value)) {
+          return;
+        }
+        output[key] = value.flatMap((entry): SavedViewpoint[] => {
+          if (typeof entry !== "object" || entry === null) {
+            return [];
+          }
+          const candidate = entry as Record<string, unknown>;
+          if (
+            typeof candidate.id !== "number" ||
+            typeof candidate.label !== "string" ||
+            typeof candidate.swapYZ !== "boolean" ||
+            !isPreviewCameraState(candidate.camera)
+          ) {
+            return [];
+          }
+          return [
+            {
+              id: candidate.id,
+              label: candidate.label,
+              camera: candidate.camera,
+              swapYZ: candidate.swapYZ,
+            },
+          ];
+        });
+      },
+    );
+    return output;
+  } catch {
+    return {};
+  }
+};
+
+const readSavedViewpointsForSource = (
+  sourceLabel: string,
+): readonly SavedViewpoint[] => readSavedViewpointMap()[sourceLabel] ?? [];
+const isPreviewCameraState = (value: unknown): value is PreviewCameraState => {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    Array.isArray(candidate.position) &&
+    candidate.position.length === 3 &&
+    candidate.position.every((entry) => typeof entry === "number") &&
+    Array.isArray(candidate.target) &&
+    candidate.target.length === 3 &&
+    candidate.target.every((entry) => typeof entry === "number")
+  );
+};
+
+function InfoTooltip({ text }: { readonly text: string }) {
+  return (
+    <span
+      className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-white/15 bg-white/5 text-[11px] font-semibold text-slate-300"
+      title={text}
+    >
+      i
+    </span>
+  );
+}
+
+function LabelWithTooltip({
+  label,
+  tooltip,
+}: {
+  readonly label: string;
+  readonly tooltip?: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span>{label}</span>
+      {tooltip !== undefined ? <InfoTooltip text={tooltip} /> : null}
+    </span>
+  );
+}
+
+function InfoModal({
+  open,
+  onClose,
+  children,
+}: {
+  readonly open: boolean;
+  readonly onClose: () => void;
+  readonly children: ReactNode;
+}) {
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-2xl rounded-[1.1rem] border border-white/10 bg-slate-950 p-6 shadow-2xl shadow-black/40"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
+              Preview info
+            </p>
+            <h2 className="mt-2 text-2xl font-semibold text-white">
+              Point-cloud preview route
+            </h2>
+          </div>
+          <button
+            className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/10"
+            type="button"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+        <div className="mt-4 space-y-4 text-sm leading-6 text-slate-300">
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PointCloudPreviewApp() {
   const fileInputId = useId();
+  const previewHostRef = useRef<HTMLDivElement | null>(null);
   const [assetState, setAssetState] = useState<LoadedAssetState>({
     status: "loading",
     sourceLabel: bundledMediumSourceLabel,
     errorMessage: null,
     data: null,
   });
-  const [showMesh, setShowMesh] = useState<boolean>(true);
-  const [showPoints, setShowPoints] = useState<boolean>(true);
-  const [showWireframe, setShowWireframe] = useState<boolean>(false);
-  const [meshColorMode, setMeshColorMode] =
-    useState<MeshColorMode>("fragment-knn");
-  const [showNeighborDebug, setShowNeighborDebug] = useState<boolean>(true);
-  const [pointSize, setPointSize] = useState<number>(0.035);
-  const [pointGammaCorrection, setPointGammaCorrection] =
-    useState<boolean>(false);
-  const [swapYZ, setSwapYZ] = useState<boolean>(false);
+  const [viewSettings, setViewSettings] =
+    useState<ViewSettings>(defaultViewSettings);
   const [selectedHit, setSelectedHit] = useState<PointCloudHitSample | null>(
     null,
   );
@@ -123,6 +286,22 @@ export function PointCloudPreviewApp() {
   >([]);
   const [nextViewpointId, setNextViewpointId] = useState<number>(1);
   const [framesPerSecond, setFramesPerSecond] = useState<number>(0);
+  const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (assetState.status !== "ready") {
+      return;
+    }
+    const currentSourceLabel = assetState.sourceLabel;
+    const savedViewpointMap = readSavedViewpointMap();
+    window.localStorage.setItem(
+      savedViewpointsStorageKey,
+      JSON.stringify({
+        ...savedViewpointMap,
+        [currentSourceLabel]: savedViewpoints,
+      }),
+    );
+  }, [assetState.sourceLabel, assetState.status, savedViewpoints]);
 
   const issueCameraCommand = (
     nextCommand: NextCameraCommand | ((currentId: number) => NextCameraCommand),
@@ -139,10 +318,18 @@ export function PointCloudPreviewApp() {
     });
   };
 
+  const updateViewSettings = (patch: Partial<ViewSettings>): void => {
+    setViewSettings((currentSettings) => ({
+      ...currentSettings,
+      ...patch,
+    }));
+  };
+
   const applyReadyAsset = (
     data: PointCloudMeshData,
     sourceLabel: string,
   ): void => {
+    const savedViewpointsForSource = readSavedViewpointsForSource(sourceLabel);
     startTransition(() => {
       setAssetState({
         status: "ready",
@@ -151,11 +338,19 @@ export function PointCloudPreviewApp() {
         data,
       });
       setSelectedHit(null);
-      setSwapYZ(false);
-      setSavedViewpoints([]);
-      setNextViewpointId(1);
+      setSavedViewpoints(savedViewpointsForSource);
+      setNextViewpointId(
+        savedViewpointsForSource.reduce(
+          (highestId, viewpoint) => Math.max(highestId, viewpoint.id),
+          0,
+        ) + 1,
+      );
       setCurrentCameraState(null);
       setFramesPerSecond(0);
+      setViewSettings((currentSettings) => ({
+        ...currentSettings,
+        swapYZ: false,
+      }));
       issueCameraCommand({ type: "frame" });
     });
   };
@@ -209,6 +404,9 @@ export function PointCloudPreviewApp() {
         const text = await response.text();
         const data = parsePointCloudMeshText(text);
         if (!isCancelled) {
+          const savedViewpointsForSource = readSavedViewpointsForSource(
+            bundledMediumSourceLabel,
+          );
           startTransition(() => {
             setAssetState({
               status: "ready",
@@ -217,11 +415,19 @@ export function PointCloudPreviewApp() {
               data,
             });
             setSelectedHit(null);
-            setSwapYZ(false);
-            setSavedViewpoints([]);
-            setNextViewpointId(1);
+            setSavedViewpoints(savedViewpointsForSource);
+            setNextViewpointId(
+              savedViewpointsForSource.reduce(
+                (highestId, viewpoint) => Math.max(highestId, viewpoint.id),
+                0,
+              ) + 1,
+            );
             setCurrentCameraState(null);
             setFramesPerSecond(0);
+            setViewSettings((currentSettings) => ({
+              ...currentSettings,
+              swapYZ: false,
+            }));
             issueCameraCommand({ type: "frame" });
           });
         }
@@ -280,26 +486,6 @@ export function PointCloudPreviewApp() {
     }
   };
 
-  const data = assetState.data;
-  const canUseFragmentKnnShading = useMemo(
-    () =>
-      data !== null &&
-      data.spatialHash.maxPointsPerCell <= maxFragmentShaderPointsPerCell,
-    [data],
-  );
-  const effectiveMeshColorMode: MeshColorMode =
-    meshColorMode === "fragment-knn" && canUseFragmentKnnShading
-      ? "fragment-knn"
-      : "baked";
-  const meshColorModeDescription =
-    effectiveMeshColorMode === "fragment-knn"
-      ? `Spatial-hash fragment KNN shading active (${data?.pointCount ?? 0} points across ${data?.spatialHash.cellCount ?? 0} cells).`
-      : meshColorMode === "fragment-knn" && data !== null
-        ? `Spatial-hash fragment KNN shading found a dense cell with ${data.spatialHash.maxPointsPerCell} points, which exceeds the current per-cell shader cap of ${maxFragmentShaderPointsPerCell}; this dataset falls back to baked vertex colours.`
-        : pointGammaCorrection
-          ? "Baked vertex colours active with sRGB gamma decode applied for comparison."
-          : "Baked vertex colours active.";
-
   const handleSaveViewpoint = (): void => {
     if (currentCameraState === null) {
       return;
@@ -310,71 +496,104 @@ export function PointCloudPreviewApp() {
         id: nextId,
         label: `View ${nextId}`,
         camera: currentCameraState,
-        swapYZ,
+        swapYZ: viewSettings.swapYZ,
       },
       ...currentViews,
     ]);
     setNextViewpointId(nextId + 1);
   };
 
-  return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(251,146,60,0.16),_transparent_28rem),radial-gradient(circle_at_bottom_right,_rgba(59,130,246,0.18),_transparent_32rem),linear-gradient(160deg,_#0b1120_0%,_#101826_48%,_#071019_100%)] text-slate-100">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 sm:py-8">
-        <section className="rounded-[2rem] border border-white/10 bg-slate-950/50 p-5 shadow-xl shadow-black/20">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div className="max-w-3xl">
-              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-amber-300">
-                Point-Cloud Mesh Preview
-              </p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                Browser preview for mesh-aligned point clouds
-              </h1>
-              <p className="mt-3 text-sm leading-6 text-slate-300 sm:text-base">
-                This route renders a mesh with precomputed 3-nearest-neighbor
-                surface colours, overlays the aligned point cloud, and inspects
-                the exact neighbour blend at mesh hit points without introducing
-                differentiable rendering into the web app.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-3 text-sm font-medium">
-              <a
-                className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-slate-100 transition hover:bg-white/10"
-                href={assetUrl("")}
-              >
-                Main app
-              </a>
-              <a
-                className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-slate-100 transition hover:bg-white/10"
-                href={assetUrl("benchmark")}
-              >
-                Benchmark
-              </a>
-            </div>
-          </div>
-        </section>
+  const handleRenameViewpoint = (id: number, label: string): void => {
+    setSavedViewpoints((currentViews) =>
+      currentViews.map((viewpoint) =>
+        viewpoint.id === id ? { ...viewpoint, label } : viewpoint,
+      ),
+    );
+  };
 
-        <div className="grid gap-5 xl:grid-cols-[minmax(18rem,0.72fr)_minmax(0,1.5fr)_minmax(20rem,0.92fr)]">
-          <div className="flex flex-col gap-5">
-            <section className="rounded-[2rem] border border-white/10 bg-slate-950/50 p-5 shadow-xl shadow-black/20">
-              <div className="flex flex-col gap-4">
-                <div>
+  const handleScreenshot = (): void => {
+    const canvas = previewHostRef.current?.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) {
+      return;
+    }
+
+    const downloadLink = document.createElement("a");
+    downloadLink.href = canvas.toDataURL("image/png");
+    downloadLink.download = `pointcloud-preview-${Date.now()}.png`;
+    downloadLink.click();
+  };
+
+  const data = assetState.data;
+  const canUseFragmentKnnShading = useMemo(
+    () =>
+      data !== null &&
+      data.spatialHash.maxPointsPerCell <= maxFragmentShaderPointsPerCell,
+    [data],
+  );
+  const effectiveMeshColorMode: MeshColorMode =
+    viewSettings.meshColorMode === "fragment-knn" && canUseFragmentKnnShading
+      ? "fragment-knn"
+      : "baked";
+  const meshColorModeDescription =
+    effectiveMeshColorMode === "fragment-knn"
+      ? `Spatial-hash fragment KNN shading active (${data?.pointCount ?? 0} points across ${data?.spatialHash.cellCount ?? 0} cells).`
+      : viewSettings.meshColorMode === "fragment-knn" && data !== null
+        ? `Spatial-hash fragment KNN shading found a dense cell with ${data.spatialHash.maxPointsPerCell} points, which exceeds the current per-cell shader cap of ${maxFragmentShaderPointsPerCell}; this dataset falls back to baked vertex colours.`
+        : !viewSettings.disableGammaDecoding
+          ? "Baked vertex colours active with gamma decoding enabled."
+          : "Baked vertex colours active with gamma decoding disabled.";
+
+  return (
+    <>
+      <main className="min-h-screen w-screen bg-[linear-gradient(180deg,_#071019_0%,_#0b1120_100%)] text-slate-100">
+        <div className="w-full px-4 py-4">
+          <header className="mb-4 flex items-center justify-between rounded-[1.1rem] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-xl shadow-black/20">
+            <div className="flex items-center gap-6">
+              <h1 className="text-2xl font-semibold tracking-tight text-white">
+                Point-Cloud Mesh Preview
+              </h1>
+              <nav className="flex items-center gap-3 text-sm font-medium">
+                <a
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-slate-100 transition hover:bg-white/10"
+                  href={assetUrl("")}
+                >
+                  Main app
+                </a>
+                <a
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-slate-100 transition hover:bg-white/10"
+                  href={assetUrl("benchmark")}
+                >
+                  Benchmark
+                </a>
+              </nav>
+            </div>
+            <button
+              className="rounded-xl border border-sky-300/20 bg-sky-400/10 px-4 py-2 text-sm font-semibold text-sky-100 transition hover:bg-sky-400/20"
+              type="button"
+              onClick={() => setShowInfoModal(true)}
+            >
+              Info
+            </button>
+          </header>
+
+          <div className="flex items-stretch gap-4">
+            <div className="flex w-[25rem] shrink-0 flex-col gap-4">
+              <section className="rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-5 shadow-xl shadow-black/20">
+                <div className="flex items-center gap-2">
                   <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
                     Data source
                   </p>
-                  <p className="mt-2 text-sm text-slate-300">
-                    Start from the bundled medium preview or upload a JSON
-                    export from the Python mesh style-transfer pipeline.
-                  </p>
+                  <InfoTooltip text="Load the bundled medium preview or upload a point-cloud mesh JSON export from the Python pipeline." />
                 </div>
-                <div className="flex flex-wrap gap-3">
+                <div className="mt-4 flex flex-wrap gap-3">
                   <label
-                    className="cursor-pointer rounded-full bg-amber-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-200"
+                    className="cursor-pointer rounded-xl bg-amber-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-200"
                     htmlFor={fileInputId}
                   >
                     Upload point-cloud mesh JSON
                   </label>
                   <button
-                    className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/10"
+                    className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/10"
                     type="button"
                     onClick={() => {
                       void loadBundledExample(
@@ -396,293 +615,396 @@ export function PointCloudPreviewApp() {
                     }}
                   />
                 </div>
-                <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4 text-sm text-slate-200">
-                  <div className="flex items-center justify-between gap-3">
-                    <span>Current source</span>
+                <div className="mt-4 space-y-2 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-3 text-sm text-slate-200">
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-slate-300">Current source</span>
                     <span
                       data-testid="pointcloud-source-label"
-                      className="font-semibold"
+                      className="text-right font-semibold text-white"
                     >
                       {assetState.sourceLabel}
                     </span>
                   </div>
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <span>Status</span>
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-slate-300">Status</span>
                     <span
                       data-testid="pointcloud-load-status"
-                      className="font-semibold capitalize"
+                      className="text-right font-semibold capitalize text-white"
                     >
                       {assetState.status}
                     </span>
                   </div>
                   {assetState.errorMessage !== null ? (
-                    <p className="mt-3 rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-rose-200">
+                    <p className="rounded-[0.8rem] border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-rose-200">
                       {assetState.errorMessage}
                     </p>
                   ) : null}
                 </div>
-              </div>
-            </section>
+              </section>
 
-            <section className="rounded-[2rem] border border-white/10 bg-slate-950/50 p-5 shadow-xl shadow-black/20">
-              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
-                Dataset stats
-              </p>
-              {data !== null ? (
-                <div className="mt-4 grid gap-3 text-sm text-slate-200 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-                  <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-                    <div className="text-slate-400">Mesh vertices</div>
-                    <div
-                      data-testid="mesh-vertex-count"
-                      className="mt-1 text-2xl font-semibold text-white"
-                    >
-                      {data.meshVertexCount}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-                    <div className="text-slate-400">Mesh faces</div>
-                    <div
-                      data-testid="mesh-face-count"
-                      className="mt-1 text-2xl font-semibold text-white"
-                    >
-                      {data.meshFaceCount}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-                    <div className="text-slate-400">Point samples</div>
-                    <div
-                      data-testid="point-sample-count"
-                      className="mt-1 text-2xl font-semibold text-white"
-                    >
-                      {data.pointCount}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-                    <div className="text-slate-400">Bounds radius</div>
-                    <div className="mt-1 text-2xl font-semibold text-white">
-                      {data.bounds.radius.toFixed(3)}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-                    <div className="text-slate-400">Live FPS</div>
-                    <div className="mt-1 text-2xl font-semibold text-white">
-                      {framesPerSecond > 0 ? framesPerSecond.toFixed(1) : "--"}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-                    <div className="text-slate-400">Axis orientation</div>
-                    <div className="mt-1 text-lg font-semibold text-white">
-                      {swapYZ ? "Y/Z swapped" : "Default XYZ"}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4 sm:col-span-2 xl:col-span-1 2xl:col-span-2">
-                    <div className="text-slate-400">Bounds min/max</div>
-                    <div className="mt-1 font-mono text-xs leading-6 text-slate-200">
-                      min [{boundsLabel(data.bounds.min)}]
-                      <br />
-                      max [{boundsLabel(data.bounds.max)}]
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <p className="mt-4 text-sm text-slate-300">
-                  Load a dataset to inspect mesh and point-cloud counts.
+              <section className="rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-5 shadow-xl shadow-black/20">
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
+                  Dataset stats
                 </p>
-              )}
-            </section>
-          </div>
+                {data !== null ? (
+                  <div className="mt-4 overflow-hidden rounded-[0.95rem] border border-white/10 bg-slate-900/75">
+                    <div className="flex items-center justify-between gap-4 px-4 py-3 text-sm text-slate-200">
+                      <span>Mesh vertices</span>
+                      <span
+                        data-testid="mesh-vertex-count"
+                        className="text-right font-semibold text-white"
+                      >
+                        {data.meshVertexCount}
+                      </span>
+                    </div>
+                    <div className="h-px bg-white/10" />
+                    <div className="flex items-center justify-between gap-4 px-4 py-3 text-sm text-slate-200">
+                      <span>Mesh faces</span>
+                      <span
+                        data-testid="mesh-face-count"
+                        className="text-right font-semibold text-white"
+                      >
+                        {data.meshFaceCount}
+                      </span>
+                    </div>
+                    <div className="h-px bg-white/10" />
+                    <div className="flex items-center justify-between gap-4 px-4 py-3 text-sm text-slate-200">
+                      <LabelWithTooltip
+                        label="Point samples"
+                        tooltip="The number of aligned point-cloud samples available for interpolation and fragment shading."
+                      />
+                      <span
+                        data-testid="point-sample-count"
+                        className="text-right font-semibold text-white"
+                      >
+                        {data.pointCount}
+                      </span>
+                    </div>
+                    <div className="h-px bg-white/10" />
+                    <div className="flex items-center justify-between gap-4 px-4 py-3 text-sm text-slate-200">
+                      <LabelWithTooltip
+                        label="Bounds radius"
+                        tooltip="The preview radius derived from the mesh bounding sphere. It drives framing and size scaling."
+                      />
+                      <span className="text-right font-semibold text-white">
+                        {data.bounds.radius.toFixed(3)}
+                      </span>
+                    </div>
+                    <div className="h-px bg-white/10" />
+                    <div className="flex items-start justify-between gap-4 px-4 py-3 text-sm text-slate-200">
+                      <LabelWithTooltip
+                        label="Bounds"
+                        tooltip="Axis-aligned min and max coordinates of the mesh positions used for this preview."
+                      />
+                      <span className="text-right font-mono text-[11px] leading-5 text-slate-100">
+                        min [{boundsLabel(data.bounds.min)}]
+                        <br />
+                        max [{boundsLabel(data.bounds.max)}]
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-4 text-sm text-slate-300">
+                    Load a dataset to inspect mesh and point-cloud counts.
+                  </p>
+                )}
+              </section>
+            </div>
 
-          <section className="rounded-[2rem] border border-white/10 bg-slate-950/50 p-4 shadow-xl shadow-black/20">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1">
-              <div>
+            <section className="min-w-0 flex-1 rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-4 shadow-xl shadow-black/20">
+              <div className="mb-3 flex items-center justify-between gap-3 px-1">
                 <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
                   Interactive preview
                 </p>
-                <p className="mt-1 text-sm text-slate-300">
-                  Orbit freely, snap to axes, and save viewpoints for repeatable
-                  comparisons.
-                </p>
+                <div
+                  data-testid="pointcloud-fps"
+                  className="rounded-xl border border-emerald-300/25 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100"
+                >
+                  {fpsLabel(framesPerSecond)}
+                </div>
               </div>
               <div
-                data-testid="pointcloud-fps"
-                className="rounded-full border border-emerald-300/25 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100"
+                ref={previewHostRef}
+                className="relative h-[calc(100vh-10.5rem)]"
               >
-                {fpsLabel(framesPerSecond)}
-              </div>
-            </div>
-            {data !== null ? (
-              <PointCloudPreviewScene
-                data={data}
-                showMesh={showMesh}
-                showPoints={showPoints}
-                showWireframe={showWireframe}
-                meshColorMode={effectiveMeshColorMode}
-                showNeighborDebug={showPoints && showNeighborDebug}
-                pointSize={pointSize}
-                pointGammaCorrection={pointGammaCorrection}
-                swapYZ={swapYZ}
-                selectedHit={selectedHit}
-                cameraCommand={cameraCommand}
-                onHoverSampleChange={setSelectedHit}
-                onCameraStateChange={setCurrentCameraState}
-                onFramesPerSecondChange={setFramesPerSecond}
-              />
-            ) : (
-              <div className="flex h-[28rem] items-center justify-center rounded-[2rem] border border-dashed border-white/10 bg-slate-950/50 px-6 text-center text-sm text-slate-300 lg:h-[38rem]">
-                {assetState.status === "loading"
-                  ? `Loading ${assetState.sourceLabel}...`
-                  : "No point-cloud mesh data is loaded yet."}
-              </div>
-            )}
-          </section>
+                {data !== null ? (
+                  <PointCloudPreviewScene
+                    data={data}
+                    showMesh={viewSettings.showMesh}
+                    showPoints={viewSettings.showPoints}
+                    showWireframe={viewSettings.showWireframe}
+                    meshColorMode={effectiveMeshColorMode}
+                    showNeighborDebug
+                    pointSize={viewSettings.pointSize}
+                    pointGammaCorrection={!viewSettings.disableGammaDecoding}
+                    brightness={viewSettings.brightness}
+                    swapYZ={viewSettings.swapYZ}
+                    selectedHit={selectedHit}
+                    cameraCommand={cameraCommand}
+                    onHoverSampleChange={setSelectedHit}
+                    onCameraStateChange={setCurrentCameraState}
+                    onFramesPerSecondChange={setFramesPerSecond}
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center rounded-[1.1rem] border border-dashed border-white/10 bg-slate-950/50 px-6 text-center text-sm text-slate-300">
+                    {assetState.status === "loading"
+                      ? `Loading ${assetState.sourceLabel}...`
+                      : "No point-cloud mesh data is loaded yet."}
+                  </div>
+                )}
 
-          <div className="flex flex-col gap-5">
-            <section className="rounded-[2rem] border border-white/10 bg-slate-950/50 p-5 shadow-xl shadow-black/20">
-              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
-                Viewer controls
-              </p>
-              <div className="mt-4 grid gap-4 text-sm text-slate-200">
-                <div
-                  data-testid="mesh-color-mode-status"
-                  className="rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-300"
-                >
-                  {meshColorModeDescription}
-                </div>
+                {selectedHit !== null ? (
+                  <aside className="pointer-events-none absolute right-4 top-4 z-10 w-[21rem] rounded-[1rem] border border-white/10 bg-slate-950/88 p-4 shadow-2xl shadow-black/35 backdrop-blur-sm">
+                    <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
+                      Hit inspector
+                    </p>
+                    <div className="mt-3 space-y-3 text-sm text-slate-200">
+                      <div className="flex items-center gap-3 rounded-[0.95rem] border border-white/10 bg-slate-900/75 p-3">
+                        <span
+                          aria-label="Hit color swatch"
+                          className="h-10 w-10 rounded-full border border-white/15"
+                          style={{
+                            backgroundColor: colorToCss(selectedHit.color),
+                          }}
+                        />
+                        <div>
+                          <div className="font-semibold text-white">
+                            Interpolated hit colour
+                          </div>
+                          <div className="font-mono text-xs text-slate-300">
+                            {selectedHit.color
+                              .map((value) => value.toFixed(4))
+                              .join(", ")}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="rounded-[0.95rem] border border-white/10 bg-slate-900/75 p-3">
+                        <div className="font-semibold text-white">
+                          Hit point
+                        </div>
+                        <div className="mt-1 font-mono text-xs text-slate-300">
+                          {selectedHit.point
+                            .map((value) => value.toFixed(4))
+                            .join(", ")}
+                        </div>
+                      </div>
+                      {selectedHit.neighbors.map((neighbor, index) => (
+                        <div
+                          key={`${neighbor.index}-${index}`}
+                          className="rounded-[0.95rem] border border-white/10 bg-slate-900/75 p-3"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="font-semibold text-white">
+                              Neighbor {index + 1}
+                            </div>
+                            <div className="text-xs text-slate-300">
+                              index {neighbor.index}
+                            </div>
+                          </div>
+                          <div className="mt-2 font-mono text-xs leading-6 text-slate-300">
+                            distance {neighbor.distance.toFixed(5)}
+                            <br />
+                            pos{" "}
+                            {neighbor.position
+                              .map((value) => value.toFixed(4))
+                              .join(", ")}
+                            <br />
+                            rgb{" "}
+                            {neighbor.color
+                              .map((value) => value.toFixed(4))
+                              .join(", ")}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </aside>
+                ) : null}
+              </div>
+            </section>
 
-                <label>
-                  <span className="mb-2 block text-slate-300">
-                    Mesh colouring
-                  </span>
+            <div className="flex w-[25rem] shrink-0 flex-col gap-4">
+              <section className="rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-5 shadow-xl shadow-black/20">
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
+                  Rendering algorithm
+                </p>
+                <div className="mt-4">
                   <select
                     data-testid="mesh-color-mode-select"
-                    className="w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-amber-300"
-                    value={meshColorMode}
+                    className="w-full rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-amber-300"
+                    value={viewSettings.meshColorMode}
                     onChange={(event) =>
-                      setMeshColorMode(event.target.value as MeshColorMode)
+                      updateViewSettings({
+                        meshColorMode: event.target.value as MeshColorMode,
+                      })
                     }
                   >
                     <option value="fragment-knn">Fragment KNN shading</option>
                     <option value="baked">Baked vertex colours</option>
                   </select>
-                </label>
-
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-4">
-                    <input
-                      className="accent-amber-300"
-                      type="checkbox"
-                      checked={showMesh}
-                      onChange={(event) => setShowMesh(event.target.checked)}
-                    />
-                    Show mesh
-                  </label>
-                  <label
-                    className={`flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-4 ${
-                      showMesh ? "" : "cursor-not-allowed text-slate-500"
-                    }`}
-                  >
-                    <input
-                      className="accent-amber-300"
-                      type="checkbox"
-                      checked={showWireframe}
-                      disabled={!showMesh}
-                      onChange={(event) =>
-                        setShowWireframe(event.target.checked)
-                      }
-                    />
-                    Wireframe mesh
-                  </label>
                 </div>
+                <div
+                  data-testid="mesh-color-mode-status"
+                  className="mt-4 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-3 text-sm text-slate-300"
+                >
+                  {meshColorModeDescription}
+                </div>
+              </section>
 
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-4">
-                    <input
-                      className="accent-amber-300"
-                      type="checkbox"
-                      checked={showPoints}
-                      onChange={(event) => setShowPoints(event.target.checked)}
-                    />
-                    Show point cloud
-                  </label>
-                  <label className="rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-4">
-                    <span
-                      className={`mb-2 block ${
-                        showPoints ? "text-slate-300" : "text-slate-500"
+              <section className="rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-5 shadow-xl shadow-black/20">
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
+                  View options
+                </p>
+                <div className="mt-4 space-y-3 text-sm text-slate-200">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="flex items-center gap-3 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4">
+                      <input
+                        className="accent-amber-300"
+                        type="checkbox"
+                        checked={viewSettings.showMesh}
+                        onChange={(event) =>
+                          updateViewSettings({ showMesh: event.target.checked })
+                        }
+                      />
+                      Show mesh
+                    </label>
+                    <label
+                      className={`flex items-center gap-3 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4 ${
+                        viewSettings.showMesh
+                          ? ""
+                          : "cursor-not-allowed text-slate-500"
                       }`}
                     >
-                      Point size: {pointSize.toFixed(3)}
+                      <input
+                        className="accent-amber-300"
+                        type="checkbox"
+                        checked={viewSettings.showWireframe}
+                        disabled={!viewSettings.showMesh}
+                        onChange={(event) =>
+                          updateViewSettings({
+                            showWireframe: event.target.checked,
+                          })
+                        }
+                      />
+                      Wireframe mesh
+                    </label>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="flex items-center gap-3 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4">
+                      <input
+                        className="accent-amber-300"
+                        type="checkbox"
+                        checked={viewSettings.showPoints}
+                        onChange={(event) =>
+                          updateViewSettings({
+                            showPoints: event.target.checked,
+                          })
+                        }
+                      />
+                      Show point cloud
+                    </label>
+                    <label className="rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4">
+                      <span
+                        className={`mb-2 block ${
+                          viewSettings.showPoints
+                            ? "text-slate-300"
+                            : "text-slate-500"
+                        }`}
+                      >
+                        Point size: {viewSettings.pointSize.toFixed(3)}
+                      </span>
+                      <input
+                        data-testid="point-size-slider"
+                        className="w-full accent-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+                        type="range"
+                        min={0.01}
+                        max={0.12}
+                        step={0.005}
+                        value={viewSettings.pointSize}
+                        disabled={!viewSettings.showPoints}
+                        onChange={(event) =>
+                          updateViewSettings({
+                            pointSize: Number(event.target.value),
+                          })
+                        }
+                      />
+                    </label>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-5 shadow-xl shadow-black/20">
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
+                  Shading options
+                </p>
+                <div className="mt-4 space-y-4 text-sm text-slate-200">
+                  <label className="flex items-center gap-3 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-3">
+                    <input
+                      className="accent-amber-300"
+                      type="checkbox"
+                      checked={viewSettings.disableGammaDecoding}
+                      onChange={(event) =>
+                        updateViewSettings({
+                          disableGammaDecoding: event.target.checked,
+                        })
+                      }
+                    />
+                    Disable gamma decoding
+                  </label>
+                  <label className="block rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4">
+                    <span className="mb-2 block text-slate-300">
+                      Brightness: {brightnessLabel(viewSettings.brightness)}
                     </span>
                     <input
-                      data-testid="point-size-slider"
-                      className="w-full accent-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="w-full accent-amber-300"
                       type="range"
-                      min={0.01}
-                      max={0.12}
-                      step={0.005}
-                      value={pointSize}
-                      disabled={!showPoints}
+                      min={0.5}
+                      max={1.8}
+                      step={0.05}
+                      value={viewSettings.brightness}
                       onChange={(event) =>
-                        setPointSize(Number(event.target.value))
+                        updateViewSettings({
+                          brightness: Number(event.target.value),
+                        })
                       }
                     />
                   </label>
                 </div>
+              </section>
 
-                <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3">
-                  <input
-                    className="accent-amber-300"
-                    type="checkbox"
-                    checked={pointGammaCorrection}
-                    onChange={(event) =>
-                      setPointGammaCorrection(event.target.checked)
-                    }
-                  />
-                  Gamma-decode point cloud and baked mesh colours
-                </label>
-
-                {showPoints ? (
-                  <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3">
-                    <input
-                      className="accent-amber-300"
-                      type="checkbox"
-                      checked={showNeighborDebug}
-                      onChange={(event) =>
-                        setShowNeighborDebug(event.target.checked)
-                      }
-                    />
-                    Show 3-neighbour debug
-                  </label>
-                ) : null}
-              </div>
-            </section>
-
-            <section className="rounded-[2rem] border border-white/10 bg-slate-950/50 p-5 shadow-xl shadow-black/20">
-              <div className="flex flex-col gap-4">
-                <div>
+              <section className="rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-5 shadow-xl shadow-black/20">
+                <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
                     Camera and orientation
                   </p>
-                  <p className="mt-2 text-sm text-slate-300">
-                    Swap the vertical/depth axes, snap to cardinal views, and
-                    save repeatable camera presets.
-                  </p>
+                  <button
+                    data-testid="screenshot-button"
+                    className="rounded-xl border border-emerald-300/20 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-400/20"
+                    type="button"
+                    onClick={handleScreenshot}
+                  >
+                    Screenshot
+                  </button>
                 </div>
 
-                <div className="flex flex-wrap gap-3">
+                <div className="mt-4 flex flex-wrap gap-3">
                   <button
                     data-testid="swap-yz-button"
-                    className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                      swapYZ
+                    className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                      viewSettings.swapYZ
                         ? "bg-amber-300 text-slate-950 hover:bg-amber-200"
                         : "border border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"
                     }`}
                     type="button"
-                    onClick={() => setSwapYZ((currentValue) => !currentValue)}
+                    onClick={() =>
+                      updateViewSettings({
+                        swapYZ: !viewSettings.swapYZ,
+                      })
+                    }
                   >
-                    {swapYZ ? "Y/Z swapped" : "Flip Y and Z"}
+                    {viewSettings.swapYZ ? "Y/Z swapped" : "Flip Y and Z"}
                   </button>
                   <button
-                    className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/10"
+                    className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/10"
                     type="button"
                     onClick={() => issueCameraCommand({ type: "frame" })}
                   >
@@ -690,11 +1012,11 @@ export function PointCloudPreviewApp() {
                   </button>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2">
+                <div className="mt-4 grid grid-cols-3 gap-2">
                   {snapAxisButtons.map((button) => (
                     <button
                       key={button.axis}
-                      className="rounded-2xl border border-white/10 bg-slate-900/70 px-3 py-3 text-sm font-semibold text-slate-100 transition hover:bg-white/10"
+                      className="rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-3 py-3 text-sm font-semibold text-slate-100 transition hover:bg-white/10"
                       type="button"
                       onClick={() =>
                         issueCameraCommand({
@@ -708,14 +1030,14 @@ export function PointCloudPreviewApp() {
                   ))}
                 </div>
 
-                <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
+                <div className="mt-4 rounded-[0.95rem] border border-white/10 bg-slate-900/75 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <span className="font-semibold text-white">
                       Saved viewpoints
                     </span>
                     <button
                       data-testid="save-viewpoint-button"
-                      className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
                       type="button"
                       disabled={currentCameraState === null}
                       onClick={handleSaveViewpoint}
@@ -728,115 +1050,78 @@ export function PointCloudPreviewApp() {
                       {savedViewpoints.map((viewpoint) => (
                         <div
                           key={viewpoint.id}
-                          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3"
+                          className="rounded-[0.95rem] border border-white/10 bg-slate-950/40 p-3"
                         >
-                          <div>
-                            <div className="font-semibold text-white">
-                              {viewpoint.label}
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <input
+                                data-testid={`viewpoint-name-${viewpoint.id}`}
+                                className="w-full rounded-[0.8rem] border border-white/10 bg-slate-900/75 px-3 py-2 text-sm font-semibold text-white outline-none transition focus:border-amber-300"
+                                value={viewpoint.label}
+                                onChange={(event) =>
+                                  handleRenameViewpoint(
+                                    viewpoint.id,
+                                    event.target.value,
+                                  )
+                                }
+                              />
+                              <div className="mt-2 text-xs text-slate-400">
+                                {viewpoint.swapYZ
+                                  ? "Y/Z swapped"
+                                  : "Default axes"}
+                              </div>
                             </div>
-                            <div className="text-xs text-slate-400">
-                              {viewpoint.swapYZ
-                                ? "Y/Z swapped"
-                                : "Default axes"}
-                            </div>
+                            <button
+                              data-testid={`viewpoint-go-${viewpoint.id}`}
+                              className="rounded-xl border border-emerald-300/30 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-400/20"
+                              type="button"
+                              onClick={() => {
+                                updateViewSettings({
+                                  swapYZ: viewpoint.swapYZ,
+                                });
+                                issueCameraCommand({
+                                  type: "restore",
+                                  camera: viewpoint.camera,
+                                });
+                              }}
+                            >
+                              Go to viewpoint
+                            </button>
                           </div>
-                          <button
-                            data-testid={`viewpoint-go-${viewpoint.id}`}
-                            className="rounded-full border border-emerald-300/30 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-400/20"
-                            type="button"
-                            onClick={() => {
-                              setSwapYZ(viewpoint.swapYZ);
-                              issueCameraCommand({
-                                type: "restore",
-                                camera: viewpoint.camera,
-                              });
-                            }}
-                          >
-                            Go to viewpoint
-                          </button>
                         </div>
                       ))}
                     </div>
                   ) : (
                     <p className="mt-3 text-sm text-slate-400">
-                      Save a viewpoint after orbiting or snapping the camera to
-                      build a quick comparison stack.
+                      Save a viewpoint to keep a reusable camera stack for this
+                      dataset.
                     </p>
                   )}
                 </div>
-              </div>
-            </section>
-
-            <section className="rounded-[2rem] border border-white/10 bg-slate-950/50 p-5 shadow-xl shadow-black/20">
-              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
-                Hit inspector
-              </p>
-              {selectedHit !== null ? (
-                <div className="mt-4 space-y-3 text-sm text-slate-200">
-                  <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-                    <span
-                      aria-label="Hit color swatch"
-                      className="h-10 w-10 rounded-full border border-white/15"
-                      style={{ backgroundColor: colorToCss(selectedHit.color) }}
-                    />
-                    <div>
-                      <div className="font-semibold text-white">
-                        Interpolated hit colour
-                      </div>
-                      <div className="font-mono text-xs text-slate-300">
-                        {selectedHit.color
-                          .map((value) => value.toFixed(4))
-                          .join(", ")}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-                    <div className="font-semibold text-white">Hit point</div>
-                    <div className="mt-1 font-mono text-xs text-slate-300">
-                      {selectedHit.point
-                        .map((value) => value.toFixed(4))
-                        .join(", ")}
-                    </div>
-                  </div>
-                  {selectedHit.neighbors.map((neighbor, index) => (
-                    <div
-                      key={`${neighbor.index}-${index}`}
-                      className="rounded-2xl border border-white/10 bg-slate-900/70 p-4"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="font-semibold text-white">
-                          Neighbor {index + 1}
-                        </div>
-                        <div className="text-xs text-slate-300">
-                          index {neighbor.index}
-                        </div>
-                      </div>
-                      <div className="mt-2 font-mono text-xs leading-6 text-slate-300">
-                        distance {neighbor.distance.toFixed(5)}
-                        <br />
-                        pos{" "}
-                        {neighbor.position
-                          .map((value) => value.toFixed(4))
-                          .join(", ")}
-                        <br />
-                        rgb{" "}
-                        {neighbor.color
-                          .map((value) => value.toFixed(4))
-                          .join(", ")}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="mt-4 text-sm text-slate-300">
-                  Hover the mesh surface to inspect the exact
-                  3-nearest-neighbour blend at that hit point.
-                </p>
-              )}
-            </section>
+              </section>
+            </div>
           </div>
         </div>
-      </div>
-    </main>
+      </main>
+
+      <InfoModal open={showInfoModal} onClose={() => setShowInfoModal(false)}>
+        <p>
+          This route renders a mesh with precomputed 3-nearest-neighbor surface
+          colours, overlays the aligned point cloud, and shows the exact
+          neighbour blend at mesh hit points without introducing differentiable
+          rendering into the web app.
+        </p>
+        <p>
+          Use the rendering algorithm controls to compare fragment-space KNN
+          shading against baked vertex colours, then use the shading controls to
+          inspect gamma and brightness differences between point and mesh
+          displays.
+        </p>
+        <p>
+          Saved viewpoints persist in local storage for this browser, and the
+          screenshot button downloads the current canvas view as a PNG.
+        </p>
+      </InfoModal>
+    </>
   );
 }

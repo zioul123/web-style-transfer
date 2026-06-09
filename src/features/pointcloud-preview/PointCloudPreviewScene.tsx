@@ -48,6 +48,7 @@ type PointCloudPreviewSceneProps = {
   readonly showNeighborDebug: boolean;
   readonly pointSize: number;
   readonly pointGammaCorrection: boolean;
+  readonly brightness: number;
   readonly swapYZ: boolean;
   readonly selectedHit: PointCloudHitSample | null;
   readonly cameraCommand: PointCloudPreviewCameraCommand;
@@ -95,6 +96,8 @@ const buildFragmentKnnFragmentShader = (maxPointsPerCell: number): string => `
   uniform float pointTextureHeight;
   uniform float cellOffsetTextureWidth;
   uniform float cellOffsetTextureHeight;
+  uniform float brightness;
+  uniform float gammaDecodeEnabled;
   uniform vec3 gridMin;
   uniform vec3 gridCellSize;
   uniform vec3 gridDimensions;
@@ -126,6 +129,22 @@ const buildFragmentKnnFragmentShader = (maxPointsPerCell: number): string => `
 
   int flattenCellIndex(ivec3 coordinate, ivec3 dimensions) {
     return coordinate.x + (coordinate.y * dimensions.x) + (coordinate.z * dimensions.x * dimensions.y);
+  }
+
+  vec3 encodeGamma(vec3 color) {
+    vec3 lowRange = color * 12.92;
+    vec3 highRange = (1.055 * pow(max(color, vec3(0.0)), vec3(1.0 / 2.4))) - 0.055;
+    bvec3 selector = lessThanEqual(color, vec3(0.0031308));
+    return vec3(
+      selector.x ? lowRange.x : highRange.x,
+      selector.y ? lowRange.y : highRange.y,
+      selector.z ? lowRange.z : highRange.z
+    );
+  }
+
+  vec3 adjustDisplayColor(vec3 color) {
+    vec3 adjusted = gammaDecodeEnabled > 0.5 ? color : encodeGamma(color);
+    return clamp(adjusted * brightness, 0.0, 1.0);
   }
 
   void insertNeighbor(
@@ -232,7 +251,7 @@ const buildFragmentKnnFragmentShader = (maxPointsPerCell: number): string => `
 
             insertNeighbor(
               squaredDistance,
-              pointColor,
+              adjustDisplayColor(pointColor),
               distance0,
               distance1,
               distance2,
@@ -256,7 +275,7 @@ const buildFragmentKnnFragmentShader = (maxPointsPerCell: number): string => `
       color = ((color0 * weight0) + (color1 * weight1) + (color2 * weight2)) / totalWeight;
     }
 
-    gl_FragColor = vec4(color, 1.0);
+    gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
   }
 `;
 
@@ -313,6 +332,47 @@ const maybeGammaCorrectColors = (
     corrected[index] = srgbToLinearChannel(colors[index] ?? 0);
   }
   return corrected;
+};
+
+const applyBrightnessToColors = (
+  colors: Float32Array,
+  brightness: number,
+): Float32Array => {
+  if (Math.abs(brightness - 1) <= Number.EPSILON) {
+    return colors;
+  }
+  const adjusted = new Float32Array(colors.length);
+  for (let index = 0; index < colors.length; index += 1) {
+    adjusted[index] = Math.min(
+      1,
+      Math.max(0, (colors[index] ?? 0) * brightness),
+    );
+  }
+  return adjusted;
+};
+
+const adjustDisplayColors = (
+  colors: Float32Array,
+  gammaDecodingEnabled: boolean,
+  brightness: number,
+): Float32Array =>
+  applyBrightnessToColors(
+    maybeGammaCorrectColors(colors, gammaDecodingEnabled),
+    brightness,
+  );
+
+const adjustDisplayTuple = (
+  color: readonly [number, number, number],
+  gammaDecodingEnabled: boolean,
+  brightness: number,
+): readonly [number, number, number] => {
+  const source = new Float32Array(color);
+  const adjusted = adjustDisplayColors(
+    source,
+    gammaDecodingEnabled,
+    brightness,
+  );
+  return [adjusted[0], adjusted[1], adjusted[2]];
 };
 
 const buildPointTexture = (values: Float32Array): PackedTexture => {
@@ -496,6 +556,7 @@ function SceneContent({
   showNeighborDebug,
   pointSize,
   pointGammaCorrection,
+  brightness,
   highlightSample,
   transformMatrix,
   inverseTransformMatrix,
@@ -503,16 +564,18 @@ function SceneContent({
 }: SceneContentProps) {
   const displayMeshVertexColors = useMemo(
     () =>
-      maybeGammaCorrectColors(
+      adjustDisplayColors(
         data.meshVertexColors,
         pointGammaCorrection && meshColorMode === "baked",
+        brightness,
       ),
-    [data.meshVertexColors, meshColorMode, pointGammaCorrection],
+    [brightness, data.meshVertexColors, meshColorMode, pointGammaCorrection],
   );
 
   const displayPointColors = useMemo(
-    () => maybeGammaCorrectColors(data.pointColors, pointGammaCorrection),
-    [data.pointColors, pointGammaCorrection],
+    () =>
+      adjustDisplayColors(data.pointColors, pointGammaCorrection, brightness),
+    [brightness, data.pointColors, pointGammaCorrection],
   );
 
   const meshGeometry = useMemo(() => {
@@ -631,6 +694,10 @@ function SceneContent({
         gridDimensions: {
           value: new THREE.Vector3(...data.spatialHash.dimensions),
         },
+        brightness: { value: brightness },
+        gammaDecodeEnabled: {
+          value: pointGammaCorrection ? 1 : 0,
+        },
       },
       vertexShader: fragmentKnnVertexShader,
       fragmentShader: buildFragmentKnnFragmentShader(
@@ -647,10 +714,12 @@ function SceneContent({
     data.spatialHash.dimensions,
     data.spatialHash.maxPointsPerCell,
     data.spatialHash.min,
+    brightness,
     fragmentShaderCellOffsetTexture,
     fragmentShaderPointColorTexture,
     fragmentShaderPointPositionTexture,
     meshColorMode,
+    pointGammaCorrection,
     showWireframe,
   ]);
 
@@ -677,6 +746,24 @@ function SceneContent({
 
   const markerRadius = Math.max(data.bounds.radius * 0.018, 0.004);
   const effectivePointSize = Math.max(data.bounds.radius * pointSize, 0.008);
+  const displayHighlightColor = useMemo(
+    () =>
+      highlightSample === null
+        ? null
+        : adjustDisplayTuple(
+            highlightSample.color,
+            pointGammaCorrection,
+            brightness,
+          ),
+    [brightness, highlightSample, pointGammaCorrection],
+  );
+  const displayNeighborColors = useMemo(
+    () =>
+      highlightSample?.neighbors.map((neighbor) =>
+        adjustDisplayTuple(neighbor.color, pointGammaCorrection, brightness),
+      ) ?? [],
+    [brightness, highlightSample?.neighbors, pointGammaCorrection],
+  );
 
   const handleIntersection = (event: ThreeEvent<PointerEvent>): void => {
     event.stopPropagation();
@@ -753,12 +840,14 @@ function SceneContent({
           <>
             <mesh position={highlightSample.point}>
               <sphereGeometry args={[markerRadius, 18, 18]} />
-              <meshBasicMaterial color={highlightSample.color} />
+              <meshBasicMaterial color={displayHighlightColor ?? "#ffffff"} />
             </mesh>
-            {highlightSample.neighbors.map((neighbor) => (
+            {highlightSample.neighbors.map((neighbor, index) => (
               <mesh key={neighbor.index} position={neighbor.position}>
                 <sphereGeometry args={[markerRadius * 0.78, 16, 16]} />
-                <meshBasicMaterial color={neighbor.color} />
+                <meshBasicMaterial
+                  color={displayNeighborColors[index] ?? "#ffffff"}
+                />
               </mesh>
             ))}
             {debugLineGeometry !== null ? (
@@ -782,6 +871,7 @@ export function PointCloudPreviewScene({
   showNeighborDebug,
   pointSize,
   pointGammaCorrection,
+  brightness,
   swapYZ,
   selectedHit,
   cameraCommand,
@@ -839,7 +929,7 @@ export function PointCloudPreviewScene({
       <Canvas
         camera={{ fov: 42, near: 0.01, far: 1000, position: [3, 2, 3] }}
         dpr={[1, 2]}
-        gl={{ antialias: true, alpha: false }}
+        gl={{ antialias: true, alpha: false, preserveDrawingBuffer: true }}
       >
         <OrbitCameraControls
           data={data}
@@ -856,6 +946,7 @@ export function PointCloudPreviewScene({
           showNeighborDebug={showNeighborDebug}
           pointSize={pointSize}
           pointGammaCorrection={pointGammaCorrection}
+          brightness={brightness}
           swapYZ={swapYZ}
           highlightSample={selectedHit}
           transformMatrix={transformMatrix}

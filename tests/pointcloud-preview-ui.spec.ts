@@ -73,7 +73,7 @@ test("point-cloud preview boots from the standalone route with the bundled demo"
 
   await expect(
     page.getByRole("heading", {
-      name: /Browser preview for mesh-aligned point clouds/i,
+      name: /Point-Cloud Mesh Preview/i,
     }),
   ).toBeVisible();
   await expect(page.getByTestId("pointcloud-preview-canvas")).toBeVisible();
@@ -184,9 +184,24 @@ test("point-cloud preview disables dependent controls and saves viewpoints", asy
 
   await page.getByTestId("save-viewpoint-button").click();
   await expect(page.getByTestId("viewpoint-go-1")).toBeVisible();
+  await page.getByTestId("viewpoint-name-1").fill("Top view");
 
   await page.getByTestId("swap-yz-button").click();
   await expect(page.getByTestId("swap-yz-button")).toHaveText(/Y\/Z swapped/i);
   await page.getByTestId("viewpoint-go-1").click();
   await expect(page.getByTestId("swap-yz-button")).toHaveText(/Flip Y and Z/i);
+
+  await page.reload();
+  await expect(page.getByTestId("viewpoint-go-1")).toBeVisible();
+  await expect(page.getByTestId("viewpoint-name-1")).toHaveValue("Top view");
+});
+
+test("point-cloud preview can download a screenshot", async ({ page }) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByTestId("screenshot-button").click();
+  const download = await downloadPromise;
+
+  expect(download.suggestedFilename()).toMatch(/^pointcloud-preview-.*\.png$/);
 });
