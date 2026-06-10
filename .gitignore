@@ -39,3 +39,6 @@ public/vgg19-models/*/manifest.json
 
 # Output folder
 expt
+
+# References
+python-reference/libraries/

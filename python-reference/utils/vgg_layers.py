@@ -1,4 +1,3 @@
-# TODO: Excessive imports, clean it up
 import torch
 import torch.nn as nn
 
