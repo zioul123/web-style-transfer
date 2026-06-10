@@ -1,3 +1,4 @@
+export * from "./digeo";
 export * from "./kdTree3d";
 export * from "./gltf";
 export * from "./mesh";
