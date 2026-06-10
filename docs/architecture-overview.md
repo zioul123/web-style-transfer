@@ -80,8 +80,9 @@ The route currently provides:
   exports;
 - JSON validation, typed-array conversion, bounds calculation, and precomputed
   baked vertex colours in `loadPointCloudMesh.ts`;
-- exact CPU-side 3-nearest-neighbour hit inspection via
-  `math/kdTree3d.ts` and `math/interpolation.ts`;
+- exact CPU-side 3-nearest-neighbour hit inspection via the shared
+  `src/ml/geometry/kdTree3d.ts` helper and feature-local
+  `math/interpolation.ts`;
 - fragment-space mesh colouring backed by a feature-local spatial hash in
   `math/spatialHash3d.ts`, with fallback to baked vertex colours when a dense
   cell would exceed current shader bounds;

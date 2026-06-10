@@ -48,8 +48,6 @@ that matches the task, then follow imports and tests only as needed.
 - `src/ml/geometry/`: CPU-only typed mesh analysis, 3D KD-tree query helpers,
   surface and texture sampling, mesh point batches, geodesic tracing, GLTF
   extraction, and point-cloud preprocessing.
-- `src/features/pointcloud-preview/math/kdTree3d.ts`: compatibility re-export
-  for the shared immutable 3D k-d tree and nearest-neighbour search.
 - `src/features/pointcloud-preview/math/spatialHash3d.ts`: point-sample binning
   and sorted cell ranges used by fragment-space mesh shading.
 - `src/features/style-transfer/modelCache.ts`: IndexedDB model-pack persistence.
