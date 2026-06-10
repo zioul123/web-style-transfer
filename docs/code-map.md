@@ -14,6 +14,7 @@ that matches the task, then follow imports and tests only as needed.
 | `src/shared/`                             | Cross-feature browser asset URL helpers                              |
 | `src/types/worker-protocol/`              | Worker request, response, tensor, op, and pipeline types             |
 | `src/ml/constants/`                       | Shared VGG19 layer/tap constants                                     |
+| `src/ml/geometry/`                        | CPU mesh, KD-tree, trimesh, DiGeo, and point-cloud preprocessing     |
 | `src/ml/ops/`                             | CPU reference helpers used by tests and small parity paths           |
 | `src/ml/worker/main-thread-protocol/`     | Worker message and tensor-op routing                                 |
 | `src/ml/worker/runtime/`                  | WebGPU device, buffers, shapes, caches, and dispatch infrastructure  |
@@ -44,8 +45,12 @@ that matches the task, then follow imports and tests only as needed.
   and cache integration.
 - `src/features/pointcloud-preview/loadPointCloudMesh.ts`: JSON validation,
   typed-array conversion, bounds, and precomputed mesh vertex colours.
-- `src/features/pointcloud-preview/math/kdTree3d.ts`: immutable 3D k-d tree and
-  nearest-neighbour search for point-cloud samples.
+- `src/ml/geometry/`: CPU-only typed mesh analysis, 3D KD-tree query helpers,
+  trimesh-style surface/texture sampling, DiGeo-style mesh point/geodesic
+  helpers, GLTF extraction, and prepare-mesh-data-style point-cloud
+  preprocessing.
+- `src/features/pointcloud-preview/math/kdTree3d.ts`: compatibility re-export
+  for the shared immutable 3D k-d tree and nearest-neighbour search.
 - `src/features/pointcloud-preview/math/spatialHash3d.ts`: point-sample binning
   and sorted cell ranges used by fragment-space mesh shading.
 - `src/features/style-transfer/modelCache.ts`: IndexedDB model-pack persistence.
