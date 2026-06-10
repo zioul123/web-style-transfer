@@ -24,6 +24,64 @@ const validUploadJson = JSON.stringify({
   ],
 });
 
+const alternateUploadJson = JSON.stringify({
+  pc_xyz: [
+    [-0.9, 0, 0.2],
+    [-0.75, -0.25, 0],
+    [-0.75, 0.25, 0],
+    [-0.55, 0, -0.35],
+    [-0.35, 0.15, 0.25],
+  ],
+  pc_rgb: [
+    [0.9, 0.2, 0.15],
+    [0.75, 0.35, 0.1],
+    [0.55, 0.4, 0.2],
+    [0.35, 0.45, 0.35],
+    [0.15, 0.5, 0.55],
+  ],
+  m_verts: [
+    [-1, 0, 1],
+    [1, 0, 1],
+    [1, 0, -1],
+    [-1, 0, -1],
+  ],
+  m_faces: [
+    [0, 1, 2],
+    [0, 2, 3],
+  ],
+});
+
+const appendedUploadJson = JSON.stringify({
+  pc_xyz: [
+    [0, 0, 0],
+    [0.1, 0.2, 0.3],
+    [0.2, 0.3, 0.4],
+    [0.3, 0.4, 0.5],
+    [0.4, 0.5, 0.6],
+    [0.5, 0.6, 0.7],
+    [0.6, 0.7, 0.8],
+  ],
+  pc_rgb: [
+    [0.1, 0.1, 0.9],
+    [0.2, 0.2, 0.8],
+    [0.3, 0.3, 0.7],
+    [0.4, 0.4, 0.6],
+    [0.5, 0.5, 0.5],
+    [0.6, 0.6, 0.4],
+    [0.7, 0.7, 0.3],
+  ],
+  m_verts: [
+    [-1, 0, 1],
+    [1, 0, 1],
+    [1, 0, -1],
+    [-1, 0, -1],
+  ],
+  m_faces: [
+    [0, 1, 2],
+    [0, 2, 3],
+  ],
+});
+
 const largeUploadJson = JSON.stringify({
   pc_xyz: Array.from({ length: 513 }, (_, index) => [
     (index % 19) / 18,
@@ -132,6 +190,106 @@ test("point-cloud preview reports upload errors and recovers on a valid upload",
   await expect(
     page.getByText(/must contain m_verts, m_faces, pc_xyz, and pc_rgb/i),
   ).toHaveCount(0);
+});
+
+test("point-cloud preview queues multiple uploads and lazily switches between them", async ({
+  page,
+}) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  const fileInput = page.locator('input[type="file"]');
+  const uploadRows = page.locator('[data-testid^="pointcloud-upload-row-"]');
+
+  await fileInput.setInputFiles([
+    {
+      name: "tiny-a.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(validUploadJson, "utf8"),
+    },
+    {
+      name: "tiny-b.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(alternateUploadJson, "utf8"),
+    },
+  ]);
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "tiny-a.json",
+  );
+  await expect(page.getByTestId("point-sample-count")).toHaveText("3");
+  await expect(uploadRows).toHaveCount(2);
+  await expect(page.getByTestId("pointcloud-upload-status-1")).toHaveText(
+    "ready",
+  );
+  await expect(page.getByTestId("pointcloud-upload-status-2")).toHaveText(
+    "queued",
+  );
+
+  await fileInput.setInputFiles([
+    {
+      name: "append-upload.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(appendedUploadJson, "utf8"),
+    },
+    {
+      name: "invalid-queued.json",
+      mimeType: "application/json",
+      buffer: Buffer.from('{"m_verts":"broken"}', "utf8"),
+    },
+  ]);
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "append-upload.json",
+  );
+  await expect(page.getByTestId("point-sample-count")).toHaveText("7");
+  await expect(uploadRows).toHaveCount(4);
+  await expect(page.getByTestId("pointcloud-upload-status-4")).toHaveText(
+    "queued",
+  );
+
+  await page.getByTestId("pointcloud-upload-select-2").click();
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "tiny-b.json",
+  );
+  await expect(page.getByTestId("point-sample-count")).toHaveText("5");
+
+  await page.getByTestId("pointcloud-upload-remove-2").click();
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "append-upload.json",
+  );
+  await expect(page.getByTestId("point-sample-count")).toHaveText("7");
+  await expect(uploadRows).toHaveCount(3);
+
+  await page.getByTestId("pointcloud-upload-select-4").click();
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("error");
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "invalid-queued.json",
+  );
+  await expect(page.getByTestId("pointcloud-upload-status-4")).toHaveText(
+    "error",
+  );
+  await expect(page.getByTestId("pointcloud-upload-row-4")).toBeVisible();
+  await expect(
+    page.getByText(/must contain m_verts, m_faces, pc_xyz, and pc_rgb/i),
+  ).toBeVisible();
+
+  await page.getByTestId("pointcloud-upload-remove-4").click();
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "append-upload.json",
+  );
+  await expect(page.getByTestId("point-sample-count")).toHaveText("7");
+
+  await page.getByTestId("pointcloud-upload-remove-3").click();
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "tiny-a.json",
+  );
+  await expect(page.getByTestId("point-sample-count")).toHaveText("3");
+
+  await page.getByTestId("pointcloud-upload-remove-1").click();
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "Bundled medium example",
+  );
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+  await expect(uploadRows).toHaveCount(0);
 });
 
 test("point-cloud preview keeps fragment shading active for larger uploads via spatial hashing", async ({

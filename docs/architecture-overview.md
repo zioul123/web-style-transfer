@@ -76,8 +76,9 @@ not couple preview-only behavior back into the optimization stack.
 
 The route currently provides:
 
-- loading of committed demo assets or uploaded mesh-plus-point-cloud JSON
-  exports;
+- loading of committed demo assets or a session-local queue of uploaded
+  mesh-plus-point-cloud JSON exports, with inactive uploads kept as `File`
+  references until selected;
 - JSON validation, typed-array conversion, bounds calculation, and precomputed
   baked vertex colours in `loadPointCloudMesh.ts`;
 - exact CPU-side 3-nearest-neighbour hit inspection via the shared
