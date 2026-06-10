@@ -23,6 +23,8 @@ Web Style Transfer is a correctness-first React/TypeScript/WebGPU application.
   multi-file documentation changes.
 - Use `$repo-doc-audit` when the task is to verify documentation coverage for an
   existing diff, branch, or completed change and patch only missing docs.
+- Use `$artifact-pr-summary` to draft a PR description or branch summary from
+  prior `.agent-artifacts` task folders.
 - Use `$python-reference` only for PyTorch reference, fixture, quantization, or
   numerical parity work.
 - Use `$repo-review` for independent final-diff review.
