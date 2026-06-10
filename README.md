@@ -228,6 +228,8 @@ Detailed procedures use repo-local Codex skills, so their full instructions are
 loaded only when relevant:
 
 - `$repo-change`: staged workflow for non-trivial repository changes.
+- `$repo-doc-audit`: documentation-coverage audit for an existing diff or
+  branch, with narrow doc-only follow-up updates.
 - `$python-reference`: PyTorch exporters, fixtures, quantization, and parity.
 - `$repo-review`: independent final-diff review.
 
@@ -243,10 +245,12 @@ flowchart TD
 
     route -->|"Bounded or trivial"| local["Current agent"]
     route -->|"Non-trivial repo change"| change["Skill: $repo-change"]
+    route -->|"Docs coverage audit or docs-only follow-up"| docAudit["Skill: $repo-doc-audit"]
     route -->|"PyTorch, fixtures, quantization, parity"| python["Skill: $python-reference"]
     route -->|"Review request or final diff"| reviewSkill["Skill: $repo-review"]
 
     change --> artifacts["Task artifacts<br/>task, plan, context map,<br/>touched files, review, PR summary"]
+    docAudit --> artifacts
     python --> change
 
     change -.->|"Uncertain or cross-area retrieval"| explorer["Agent: repo-explorer<br/>read-only context map"]

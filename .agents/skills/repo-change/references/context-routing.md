@@ -8,6 +8,7 @@ Start with `docs/code-map.md`. Load other guidance only when the task matches.
 | Cross-layer ownership or data-flow change                    | `docs/architecture.md`                              |
 | Scope, approval, dependency, migration, or security question | `docs/change-policy.md`                             |
 | Final review                                                 | `docs/review-rubric.md`                             |
+| Documentation coverage audit for an existing diff            | invoke `$repo-doc-audit`                            |
 | Phase status or roadmap change                               | `docs/webgpu-style-transfer-plan.md`                |
 | User-facing setup, commands, or behavior                     | relevant `README.md` section                        |
 | Detailed current module flow                                 | relevant section of `docs/architecture-overview.md` |
