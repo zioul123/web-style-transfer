@@ -1,5 +1,6 @@
 import {
   startTransition,
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -27,6 +28,16 @@ const bundledMediumExampleUrl = assetUrl(
 );
 const bundledMediumSourceLabel = "Bundled medium example";
 const savedViewpointsStorageKey = "pointcloud-preview-saved-viewpoints";
+
+type UploadedPointCloudFileStatus = "idle" | "loading" | "ready" | "error";
+
+type UploadedPointCloudFile = {
+  readonly id: number;
+  readonly file: File;
+  readonly label: string;
+  readonly status: UploadedPointCloudFileStatus;
+  readonly errorMessage: string | null;
+};
 
 type LoadedAssetState =
   | {
@@ -103,6 +114,10 @@ const boundsLabel = (values: readonly [number, number, number]): string =>
 
 const fpsLabel = (framesPerSecond: number): string =>
   framesPerSecond > 0 ? `${framesPerSecond.toFixed(1)} FPS` : "Sampling FPS";
+
+const uploadedFileStatusLabel = (
+  status: UploadedPointCloudFileStatus,
+): string => (status === "idle" ? "queued" : status);
 
 const brightnessLabel = (brightness: number): string =>
   `${brightness.toFixed(2)}x`;
@@ -383,6 +398,25 @@ function RotateCcwIcon() {
   );
 }
 
+function XIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M4.25 4.25L11.75 11.75M11.75 4.25L4.25 11.75"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function EyeOpenIcon() {
   return (
     <svg
@@ -512,6 +546,9 @@ function InfoModal({
 export function PointCloudPreviewApp() {
   const fileInputId = useId();
   const previewHostRef = useRef<HTMLDivElement | null>(null);
+  const nextUploadedFileIdRef = useRef<number>(1);
+  const activeLoadRequestIdRef = useRef<number>(0);
+  const currentCameraStateRef = useRef<PreviewCameraState | null>(null);
   const [assetState, setAssetState] = useState<LoadedAssetState>({
     status: "loading",
     sourceLabel: bundledMediumSourceLabel,
@@ -538,6 +575,12 @@ export function PointCloudPreviewApp() {
   );
   const [framesPerSecond, setFramesPerSecond] = useState<number>(0);
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
+  const [uploadedFiles, setUploadedFiles] = useState<
+    readonly UploadedPointCloudFile[]
+  >([]);
+  const [activeUploadedFileId, setActiveUploadedFileId] = useState<
+    number | null
+  >(null);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -549,20 +592,25 @@ export function PointCloudPreviewApp() {
     );
   }, [savedViewpoints]);
 
-  const issueCameraCommand = (
-    nextCommand: NextCameraCommand | ((currentId: number) => NextCameraCommand),
-  ): void => {
-    setCameraCommand((currentCommand) => {
-      const resolvedCommand =
-        typeof nextCommand === "function"
-          ? nextCommand(currentCommand.id)
-          : nextCommand;
-      return {
-        ...resolvedCommand,
-        id: currentCommand.id + 1,
-      };
-    });
-  };
+  const issueCameraCommand = useCallback(
+    (
+      nextCommand:
+        | NextCameraCommand
+        | ((currentId: number) => NextCameraCommand),
+    ): void => {
+      setCameraCommand((currentCommand) => {
+        const resolvedCommand =
+          typeof nextCommand === "function"
+            ? nextCommand(currentCommand.id)
+            : nextCommand;
+        return {
+          ...resolvedCommand,
+          id: currentCommand.id + 1,
+        };
+      });
+    },
+    [],
+  );
 
   const updateViewSettings = (patch: Partial<ViewSettings>): void => {
     setViewSettings((currentSettings) => ({
@@ -571,26 +619,137 @@ export function PointCloudPreviewApp() {
     }));
   };
 
-  const applyReadyAsset = (
-    data: PointCloudMeshData,
-    sourceLabel: string,
-  ): void => {
-    startTransition(() => {
-      setAssetState({
-        status: "ready",
-        sourceLabel,
-        errorMessage: null,
-        data,
+  const beginAssetLoadRequest = useCallback((): number => {
+    activeLoadRequestIdRef.current += 1;
+    return activeLoadRequestIdRef.current;
+  }, []);
+
+  const handleCameraStateChange = (state: PreviewCameraState): void => {
+    currentCameraStateRef.current = state;
+    setCurrentCameraState(state);
+  };
+
+  const applyReadyAsset = useCallback(
+    (
+      data: PointCloudMeshData,
+      sourceLabel: string,
+      options: {
+        readonly preserveCurrentView?: boolean;
+        readonly frameCamera?: boolean;
+      } = {},
+    ): void => {
+      const shouldPreserveCurrentView = options.preserveCurrentView === true;
+      const shouldFrameCamera =
+        options.frameCamera ?? !shouldPreserveCurrentView;
+      startTransition(() => {
+        setAssetState({
+          status: "ready",
+          sourceLabel,
+          errorMessage: null,
+          data,
+        });
+        setSelectedHit(null);
+        if (!shouldPreserveCurrentView) {
+          currentCameraStateRef.current = null;
+          setCurrentCameraState(null);
+        }
+        setFramesPerSecond(0);
+        if (!shouldPreserveCurrentView) {
+          setViewSettings((currentSettings) => ({
+            ...currentSettings,
+            swapYZ: false,
+          }));
+        }
+        if (shouldFrameCamera) {
+          issueCameraCommand({ type: "frame" });
+        }
       });
-      setSelectedHit(null);
-      setCurrentCameraState(null);
-      setFramesPerSecond(0);
-      setViewSettings((currentSettings) => ({
-        ...currentSettings,
-        swapYZ: false,
-      }));
-      issueCameraCommand({ type: "frame" });
+    },
+    [issueCameraCommand],
+  );
+
+  const setUploadedFileStatus = (
+    id: number,
+    status: UploadedPointCloudFileStatus,
+    errorMessage: string | null,
+  ): void => {
+    setUploadedFiles((currentFiles) =>
+      currentFiles.map((uploadedFile) =>
+        uploadedFile.id === id
+          ? {
+              ...uploadedFile,
+              status,
+              errorMessage,
+            }
+          : uploadedFile,
+      ),
+    );
+  };
+
+  const loadQueuedFile = async (
+    uploadedFile: UploadedPointCloudFile,
+  ): Promise<void> => {
+    if (
+      activeUploadedFileId === uploadedFile.id &&
+      assetState.status === "ready"
+    ) {
+      return;
+    }
+
+    const requestId = beginAssetLoadRequest();
+    const shouldFrameCamera = currentCameraStateRef.current === null;
+    setActiveUploadedFileId(uploadedFile.id);
+    setUploadedFiles((currentFiles) =>
+      currentFiles.map((currentFile) =>
+        currentFile.id === uploadedFile.id
+          ? {
+              ...currentFile,
+              status: "loading",
+              errorMessage: null,
+            }
+          : currentFile.status === "loading"
+            ? {
+                ...currentFile,
+                status: "idle",
+                errorMessage: null,
+              }
+            : currentFile,
+      ),
+    );
+    setAssetState({
+      status: "loading",
+      sourceLabel: uploadedFile.label,
+      errorMessage: null,
+      data: null,
     });
+
+    try {
+      const text = await uploadedFile.file.text();
+      const data = parsePointCloudMeshText(text);
+      if (activeLoadRequestIdRef.current !== requestId) {
+        return;
+      }
+      applyReadyAsset(data, uploadedFile.label, {
+        preserveCurrentView: true,
+        frameCamera: shouldFrameCamera,
+      });
+      setUploadedFileStatus(uploadedFile.id, "ready", null);
+    } catch (error) {
+      if (activeLoadRequestIdRef.current !== requestId) {
+        return;
+      }
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Unable to parse uploaded JSON.";
+      setAssetState({
+        status: "error",
+        sourceLabel: uploadedFile.label,
+        errorMessage,
+        data: null,
+      });
+      setUploadedFileStatus(uploadedFile.id, "error", errorMessage);
+    }
   };
 
   const loadBundledExample = async (
@@ -598,6 +757,19 @@ export function PointCloudPreviewApp() {
     sourceLabel: string,
     fallbackErrorMessage: string,
   ): Promise<void> => {
+    const requestId = beginAssetLoadRequest();
+    setActiveUploadedFileId(null);
+    setUploadedFiles((currentFiles) =>
+      currentFiles.map((uploadedFile) =>
+        uploadedFile.status === "loading"
+          ? {
+              ...uploadedFile,
+              status: "idle",
+              errorMessage: null,
+            }
+          : uploadedFile,
+      ),
+    );
     setAssetState({
       status: "loading",
       sourceLabel,
@@ -611,8 +783,16 @@ export function PointCloudPreviewApp() {
         throw new Error(`HTTP ${response.status}`);
       }
       const text = await response.text();
-      applyReadyAsset(parsePointCloudMeshText(text), sourceLabel);
+      if (activeLoadRequestIdRef.current !== requestId) {
+        return;
+      }
+      applyReadyAsset(parsePointCloudMeshText(text), sourceLabel, {
+        frameCamera: true,
+      });
     } catch (error) {
+      if (activeLoadRequestIdRef.current !== requestId) {
+        return;
+      }
       setAssetState({
         status: "error",
         sourceLabel,
@@ -627,6 +807,8 @@ export function PointCloudPreviewApp() {
     let isCancelled = false;
 
     const loadInitialExample = async (): Promise<void> => {
+      const requestId = beginAssetLoadRequest();
+      setActiveUploadedFileId(null);
       setAssetState({
         status: "loading",
         sourceLabel: bundledMediumSourceLabel,
@@ -641,26 +823,13 @@ export function PointCloudPreviewApp() {
         }
         const text = await response.text();
         const data = parsePointCloudMeshText(text);
-        if (!isCancelled) {
-          startTransition(() => {
-            setAssetState({
-              status: "ready",
-              sourceLabel: bundledMediumSourceLabel,
-              errorMessage: null,
-              data,
-            });
-            setSelectedHit(null);
-            setCurrentCameraState(null);
-            setFramesPerSecond(0);
-            setViewSettings((currentSettings) => ({
-              ...currentSettings,
-              swapYZ: false,
-            }));
-            issueCameraCommand({ type: "frame" });
+        if (!isCancelled && activeLoadRequestIdRef.current === requestId) {
+          applyReadyAsset(data, bundledMediumSourceLabel, {
+            frameCamera: true,
           });
         }
       } catch (error) {
-        if (isCancelled) {
+        if (isCancelled || activeLoadRequestIdRef.current !== requestId) {
           return;
         }
         setAssetState({
@@ -679,39 +848,64 @@ export function PointCloudPreviewApp() {
     return () => {
       isCancelled = true;
     };
-  }, []);
+  }, [applyReadyAsset, beginAssetLoadRequest]);
 
   const handleFileUpload = async (
     event: ChangeEvent<HTMLInputElement>,
   ): Promise<void> => {
-    const file = event.target.files?.[0] ?? null;
-    if (file === null) {
+    const files = Array.from(event.target.files ?? []);
+    if (files.length === 0) {
       return;
     }
 
-    setAssetState({
-      status: "loading",
-      sourceLabel: file.name,
-      errorMessage: null,
-      data: null,
+    const nextUploadedFiles = files.map((file): UploadedPointCloudFile => {
+      const id = nextUploadedFileIdRef.current;
+      nextUploadedFileIdRef.current += 1;
+      return {
+        id,
+        file,
+        label: file.name,
+        status: "idle",
+        errorMessage: null,
+      };
     });
 
-    try {
-      const text = await file.text();
-      applyReadyAsset(parsePointCloudMeshText(text), file.name);
-    } catch (error) {
-      setAssetState({
-        status: "error",
-        sourceLabel: file.name,
-        errorMessage:
-          error instanceof Error
-            ? error.message
-            : "Unable to parse uploaded JSON.",
-        data: null,
-      });
-    } finally {
-      event.target.value = "";
+    setUploadedFiles((currentFiles) => [...currentFiles, ...nextUploadedFiles]);
+    event.target.value = "";
+    await loadQueuedFile(nextUploadedFiles[0]);
+  };
+
+  const handleQueuedFileRemove = (removedFileId: number): void => {
+    const currentIndex = uploadedFiles.findIndex(
+      (uploadedFile) => uploadedFile.id === removedFileId,
+    );
+    if (currentIndex === -1) {
+      return;
     }
+
+    const nextUploadedFiles = uploadedFiles.filter(
+      (uploadedFile) => uploadedFile.id !== removedFileId,
+    );
+    setUploadedFiles(nextUploadedFiles);
+
+    if (activeUploadedFileId !== removedFileId) {
+      return;
+    }
+
+    const nextActiveFile =
+      nextUploadedFiles[currentIndex] ??
+      nextUploadedFiles[currentIndex - 1] ??
+      null;
+    if (nextActiveFile !== null) {
+      void loadQueuedFile(nextActiveFile);
+      return;
+    }
+
+    void loadBundledExample(
+      bundledMediumExampleUrl,
+      bundledMediumSourceLabel,
+      "Unable to load the bundled medium example.",
+    );
   };
 
   const handleSaveViewpoint = (): void => {
@@ -889,6 +1083,7 @@ export function PointCloudPreviewApp() {
                     id={fileInputId}
                     className="sr-only"
                     type="file"
+                    multiple
                     accept=".json,application/json"
                     onChange={(event) => {
                       void handleFileUpload(event);
@@ -919,6 +1114,70 @@ export function PointCloudPreviewApp() {
                       {assetState.errorMessage}
                     </p>
                   ) : null}
+                </div>
+                <div
+                  data-testid="pointcloud-upload-list"
+                  className="mt-4 max-h-[30rem] space-y-2 overflow-y-auto rounded-[0.95rem] border border-white/10 bg-slate-900/75 p-2"
+                >
+                  {uploadedFiles.length > 0 ? (
+                    uploadedFiles.map((uploadedFile) => {
+                      const isActive = activeUploadedFileId === uploadedFile.id;
+                      return (
+                        <div
+                          key={uploadedFile.id}
+                          data-testid={`pointcloud-upload-row-${uploadedFile.id}`}
+                          className={`grid grid-cols-[minmax(0,1fr)_auto] items-stretch gap-2 rounded-[0.8rem] border p-1 ${
+                            isActive
+                              ? "border-amber-300/60 bg-amber-300/10"
+                              : "border-white/10 bg-slate-950/45"
+                          }`}
+                        >
+                          <button
+                            data-testid={`pointcloud-upload-select-${uploadedFile.id}`}
+                            className="min-w-0 rounded-[0.65rem] px-3 py-2 text-left transition hover:bg-white/10"
+                            type="button"
+                            aria-current={isActive ? "true" : undefined}
+                            title={uploadedFile.label}
+                            onClick={() => {
+                              void loadQueuedFile(uploadedFile);
+                            }}
+                          >
+                            <span className="block truncate text-sm font-semibold text-white">
+                              {uploadedFile.label}
+                            </span>
+                            <span
+                              data-testid={`pointcloud-upload-status-${uploadedFile.id}`}
+                              className={`mt-1 block text-xs capitalize ${
+                                uploadedFile.status === "error"
+                                  ? "text-rose-200"
+                                  : uploadedFile.status === "loading"
+                                    ? "text-amber-100"
+                                    : "text-slate-400"
+                              }`}
+                            >
+                              {uploadedFileStatusLabel(uploadedFile.status)}
+                            </span>
+                          </button>
+                          <button
+                            data-testid={`pointcloud-upload-remove-${uploadedFile.id}`}
+                            className="inline-flex h-10 w-10 items-center justify-center self-center rounded-[0.65rem] border border-white/10 bg-white/5 text-slate-200 transition hover:border-rose-300/40 hover:bg-rose-400/10 hover:text-rose-100"
+                            type="button"
+                            aria-label={`Remove ${uploadedFile.label}`}
+                            title={`Remove ${uploadedFile.label}`}
+                            onClick={() =>
+                              handleQueuedFileRemove(uploadedFile.id)
+                            }
+                          >
+                            <XIcon />
+                          </button>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <p className="px-3 py-2 text-sm text-slate-400">
+                      No uploads queued.
+                    </p>
+                  )}
                 </div>
               </section>
 
@@ -1029,7 +1288,7 @@ export function PointCloudPreviewApp() {
                     selectedHit={selectedHit}
                     cameraCommand={cameraCommand}
                     onHoverSampleChange={setSelectedHit}
-                    onCameraStateChange={setCurrentCameraState}
+                    onCameraStateChange={handleCameraStateChange}
                     onFramesPerSecondChange={setFramesPerSecond}
                   />
                 ) : (
