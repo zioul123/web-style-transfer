@@ -1,4 +1,10 @@
-import { analyzeMeshGeometry } from "./mesh";
+import {
+  ensureMeshGeometryAnalysis,
+  meshFaceNormal,
+  meshFaceVertex,
+  meshFaceVertexIndex,
+} from "./mesh";
+import { createMeshPointBatch, interpolateMeshPointBatch } from "./meshPoints";
 import {
   addVec3,
   crossVec3,
@@ -10,17 +16,13 @@ import {
   scaleVec3,
   subtractVec3,
   vec3At,
+  writeVec3At,
 } from "./vector3";
 import type { MeshGeometryAnalysis, MeshGeometryInput } from "./mesh";
+import type { MeshPointBatch } from "./meshPoints";
 import type { Vec3 } from "./vector3";
 
 export const surfaceAwareAngleCount = 8;
-
-export type MeshPointBatch = {
-  readonly faces: Int32Array;
-  readonly uvs: Float32Array;
-  readonly count: number;
-};
 
 export type SurfaceAwareDirectionBatch = {
   readonly directions: Float32Array;
@@ -57,47 +59,6 @@ const squareDirectionScales = [
   Math.SQRT2,
 ] as const;
 
-const ensureMeshAnalysis = (
-  mesh: MeshGeometryInput | MeshGeometryAnalysis,
-): MeshGeometryAnalysis =>
-  "faceAreas" in mesh ? mesh : analyzeMeshGeometry(mesh);
-
-const writeVec3 = (output: Float32Array, index: number, value: Vec3): void => {
-  const baseIndex = index * dimensionsPerVec3;
-  output[baseIndex] = value[0];
-  output[baseIndex + 1] = value[1];
-  output[baseIndex + 2] = value[2];
-};
-
-const faceVertexIndex = (
-  mesh: MeshGeometryAnalysis,
-  faceIndex: number,
-  localIndex: 0 | 1 | 2,
-): number => mesh.faces[faceIndex * 3 + localIndex];
-
-const faceVertex = (
-  mesh: MeshGeometryAnalysis,
-  faceIndex: number,
-  localIndex: 0 | 1 | 2,
-): Vec3 => vec3At(mesh.vertices, faceVertexIndex(mesh, faceIndex, localIndex));
-
-const faceNormal = (mesh: MeshGeometryAnalysis, faceIndex: number): Vec3 =>
-  vec3At(mesh.faceNormals, faceIndex);
-
-const faceBarycentricToPosition = (
-  mesh: MeshGeometryAnalysis,
-  faceIndex: number,
-  barycentric: Barycentric,
-): Vec3 => {
-  const a = faceVertex(mesh, faceIndex, 0);
-  const b = faceVertex(mesh, faceIndex, 1);
-  const c = faceVertex(mesh, faceIndex, 2);
-  return addVec3(
-    addVec3(scaleVec3(a, barycentric[0]), scaleVec3(b, barycentric[1])),
-    scaleVec3(c, barycentric[2]),
-  );
-};
-
 const projectOntoPlane = (value: Vec3, normal: Vec3): Vec3 =>
   subtractVec3(value, scaleVec3(normal, dotVec3(value, normal)));
 
@@ -131,9 +92,9 @@ const triEdgeCoords = (
   faceIndex: number,
   direction: Vec3,
 ): Barycentric => {
-  const a = faceVertex(mesh, faceIndex, 0);
-  const b = faceVertex(mesh, faceIndex, 1);
-  const c = faceVertex(mesh, faceIndex, 2);
+  const a = meshFaceVertex(mesh, faceIndex, 0);
+  const b = meshFaceVertex(mesh, faceIndex, 1);
+  const c = meshFaceVertex(mesh, faceIndex, 2);
   const e1 = subtractVec3(b, a);
   const e2 = subtractVec3(c, a);
   const d00 = dotVec3(e1, e1);
@@ -193,14 +154,14 @@ const commonVertices = (
   readonly rightOther?: number;
 } => {
   const left = [
-    faceVertexIndex(mesh, leftFace, 0),
-    faceVertexIndex(mesh, leftFace, 1),
-    faceVertexIndex(mesh, leftFace, 2),
+    meshFaceVertexIndex(mesh, leftFace, 0),
+    meshFaceVertexIndex(mesh, leftFace, 1),
+    meshFaceVertexIndex(mesh, leftFace, 2),
   ];
   const right = [
-    faceVertexIndex(mesh, rightFace, 0),
-    faceVertexIndex(mesh, rightFace, 1),
-    faceVertexIndex(mesh, rightFace, 2),
+    meshFaceVertexIndex(mesh, rightFace, 0),
+    meshFaceVertexIndex(mesh, rightFace, 1),
+    meshFaceVertexIndex(mesh, rightFace, 2),
   ];
   const common = left.filter((vertex) => right.includes(vertex));
   return {
@@ -222,13 +183,15 @@ const nextBarycentricAcrossEdge = (
 
   const next: Barycentric = [0, 0, 0];
   for (let currentLocal = 0; currentLocal < 3; currentLocal += 1) {
-    const vertex = faceVertexIndex(
+    const vertex = meshFaceVertexIndex(
       mesh,
       currentFace,
       currentLocal as 0 | 1 | 2,
     );
     for (let nextLocal = 0; nextLocal < 3; nextLocal += 1) {
-      if (faceVertexIndex(mesh, nextFace, nextLocal as 0 | 1 | 2) === vertex) {
+      if (
+        meshFaceVertexIndex(mesh, nextFace, nextLocal as 0 | 1 | 2) === vertex
+      ) {
         next[nextLocal] = currentBarycentric[currentLocal];
       }
     }
@@ -294,7 +257,7 @@ const traceSingleGeodesic = (
     [1 - startUv[0] - startUv[1], startUv[0], startUv[1]],
     options.eps,
   );
-  let currentNormal = faceNormal(mesh, currentFace);
+  let currentNormal = meshFaceNormal(mesh, currentFace);
   let projectedDirection = projectOntoPlane(direction, currentNormal);
   const pathLength = lengthVec3(projectedDirection);
   if (pathLength < options.eps) {
@@ -387,99 +350,6 @@ const traceSingleGeodesic = (
   };
 };
 
-export const createMeshPointBatch = (
-  faces: ArrayLike<number>,
-  uvs: ArrayLike<number>,
-): MeshPointBatch => {
-  if (uvs.length !== faces.length * dimensionsPerVec2) {
-    throw new Error("MeshPointBatch uvs must have shape [N, 2].");
-  }
-
-  const normalizedFaces = new Int32Array(faces.length);
-  for (let index = 0; index < faces.length; index += 1) {
-    const face = faces[index];
-    if (!Number.isInteger(face) || face < 0) {
-      throw new Error(
-        `MeshPointBatch face ${index} must be a non-negative integer.`,
-      );
-    }
-    normalizedFaces[index] = face;
-  }
-
-  const normalizedUvs = new Float32Array(uvs.length);
-  for (let index = 0; index < uvs.length; index += 1) {
-    const uv = uvs[index];
-    if (!Number.isFinite(uv)) {
-      throw new Error(`MeshPointBatch uv ${index} must be finite.`);
-    }
-    normalizedUvs[index] = uv;
-  }
-
-  return {
-    faces: normalizedFaces,
-    uvs: normalizedUvs,
-    count: normalizedFaces.length,
-  };
-};
-
-export const meshPointBatchFromBarycentric = (
-  faces: ArrayLike<number>,
-  barycentric: ArrayLike<number>,
-): MeshPointBatch => {
-  if (barycentric.length !== faces.length * 3) {
-    throw new Error("Barycentric coordinates must have shape [N, 3].");
-  }
-  const uvs = new Float32Array(faces.length * dimensionsPerVec2);
-  for (let index = 0; index < faces.length; index += 1) {
-    uvs[index * dimensionsPerVec2] = barycentric[index * 3 + 1];
-    uvs[index * dimensionsPerVec2 + 1] = barycentric[index * 3 + 2];
-  }
-  return createMeshPointBatch(faces, uvs);
-};
-
-export const meshPointBatchBarycentric = (
-  batch: MeshPointBatch,
-): Float32Array => {
-  const output = new Float32Array(batch.count * 3);
-  for (let index = 0; index < batch.count; index += 1) {
-    const uvBase = index * dimensionsPerVec2;
-    const baryBase = index * 3;
-    const u = batch.uvs[uvBase];
-    const v = batch.uvs[uvBase + 1];
-    output[baryBase] = 1 - u - v;
-    output[baryBase + 1] = u;
-    output[baryBase + 2] = v;
-  }
-  return output;
-};
-
-export const interpolateMeshPointBatch = (
-  meshInput: MeshGeometryInput | MeshGeometryAnalysis,
-  batch: MeshPointBatch,
-): Float32Array => {
-  const mesh = ensureMeshAnalysis(meshInput);
-  const output = new Float32Array(batch.count * dimensionsPerVec3);
-  for (let index = 0; index < batch.count; index += 1) {
-    const face = batch.faces[index];
-    if (face < 0 || face >= mesh.faceCount) {
-      throw new Error(
-        `MeshPointBatch face ${index} references an invalid face.`,
-      );
-    }
-    const uvBase = index * dimensionsPerVec2;
-    writeVec3(
-      output,
-      index,
-      faceBarycentricToPosition(mesh, face, [
-        1 - batch.uvs[uvBase] - batch.uvs[uvBase + 1],
-        batch.uvs[uvBase],
-        batch.uvs[uvBase + 1],
-      ]),
-    );
-  }
-  return output;
-};
-
 export const generateSurfaceAwareDirections = (
   meshInput: MeshGeometryInput | MeshGeometryAnalysis,
   samples: MeshPointBatch,
@@ -489,7 +359,7 @@ export const generateSurfaceAwareDirections = (
     readonly unitScale?: number;
   },
 ): SurfaceAwareDirectionBatch => {
-  const mesh = ensureMeshAnalysis(meshInput);
+  const mesh = ensureMeshGeometryAnalysis(meshInput);
   const orientationTolerance = options?.orientationTolerance ?? 0.95;
   const unitScale = options?.unitScale ?? 1;
   const directions = new Float32Array(
@@ -502,7 +372,7 @@ export const generateSurfaceAwareDirections = (
 
   for (let sampleIndex = 0; sampleIndex < samples.count; sampleIndex += 1) {
     const face = samples.faces[sampleIndex];
-    const normal = faceNormal(mesh, face);
+    const normal = meshFaceNormal(mesh, face);
     const initial =
       normal[0] < orientationTolerance ? primaryDirection : secondaryDirection;
     const tangent = scaleVec3(
@@ -522,7 +392,7 @@ export const generateSurfaceAwareDirections = (
         scaleVec3(crossVec3(normal, scaled), Math.sin(theta)),
       );
       const outputIndex = sampleIndex * surfaceAwareAngleCount + angleIndex;
-      writeVec3(directions, outputIndex, rotated);
+      writeVec3At(directions, outputIndex, rotated);
       repeatedFaces[outputIndex] = face;
       const sourceUvBase = sampleIndex * dimensionsPerVec2;
       const outputUvBase = outputIndex * dimensionsPerVec2;
@@ -551,7 +421,7 @@ export const traceGeodesics = (
     throw new Error("Geodesic directions must have shape [N, 3].");
   }
 
-  const mesh = ensureMeshAnalysis(meshInput);
+  const mesh = ensureMeshGeometryAnalysis(meshInput);
   const resolvedOptions: Required<TraceGeodesicOptions> = {
     gradient: "none",
     maxSteps: options?.maxSteps ?? 2000,

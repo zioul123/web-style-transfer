@@ -1,16 +1,17 @@
 import { KdTree3D } from "./kdTree3d";
-import { analyzeMeshGeometry } from "./mesh";
 import {
-  addVec3,
+  ensureMeshGeometryAnalysis,
+  interpolateMeshFacePosition,
+} from "./mesh";
+import {
   dimensionsPerVec2,
   dimensionsPerVec3,
-  scaleVec3,
-  subtractVec3,
   vec2At,
   vec3At,
+  writeVec3At,
 } from "./vector3";
 import type { MeshGeometryAnalysis, MeshGeometryInput } from "./mesh";
-import type { Vec2, Vec3 } from "./vector3";
+import type { Vec2 } from "./vector3";
 
 export type UvWrapMode = "wrap" | "clip";
 
@@ -55,11 +56,6 @@ type SampleSurfaceEvenOptions = SampleSurfaceOptions & {
 type SampleTextureOptions = {
   readonly wrapMode?: UvWrapMode;
 };
-
-const ensureMeshAnalysis = (
-  mesh: MeshGeometryInput | MeshGeometryAnalysis,
-): MeshGeometryAnalysis =>
-  "faceAreas" in mesh ? mesh : analyzeMeshGeometry(mesh);
 
 export const createSeededRandom = (seed: number): RandomSource => {
   let state = seed >>> 0;
@@ -123,22 +119,6 @@ const cumulativeWeights = (
   return weights;
 };
 
-const faceVertex = (
-  mesh: MeshGeometryAnalysis,
-  faceIndex: number,
-  localIndex: 0 | 1 | 2,
-): Vec3 => {
-  const vertexIndex = mesh.faces[faceIndex * 3 + localIndex];
-  return vec3At(mesh.vertices, vertexIndex);
-};
-
-const writeVec3 = (output: Float32Array, index: number, value: Vec3): void => {
-  const baseIndex = index * dimensionsPerVec3;
-  output[baseIndex] = value[0];
-  output[baseIndex + 1] = value[1];
-  output[baseIndex + 2] = value[2];
-};
-
 const writeBarycentric = (
   output: Float32Array,
   index: number,
@@ -170,7 +150,7 @@ export const sampleSurface = (
     throw new Error("sampleSurface count must be a non-negative integer.");
   }
 
-  const mesh = ensureMeshAnalysis(meshInput);
+  const mesh = ensureMeshGeometryAnalysis(meshInput);
   const random = randomFromOptions(options);
   const weights = cumulativeWeights(mesh.faceAreas, options?.faceWeight);
   const totalWeight = weights[weights.length - 1];
@@ -192,13 +172,11 @@ export const sampleSurface = (
     const w = 1 - u - v;
     writeBarycentric(barycentric, sampleIndex, w, u, v);
 
-    const a = faceVertex(mesh, faceIndex, 0);
-    const b = faceVertex(mesh, faceIndex, 1);
-    const c = faceVertex(mesh, faceIndex, 2);
-    const ab = subtractVec3(b, a);
-    const ac = subtractVec3(c, a);
-    const point = addVec3(addVec3(a, scaleVec3(ab, u)), scaleVec3(ac, v));
-    writeVec3(points, sampleIndex, point);
+    writeVec3At(
+      points,
+      sampleIndex,
+      interpolateMeshFacePosition(mesh, faceIndex, [w, u, v]),
+    );
   }
 
   return {
@@ -252,7 +230,7 @@ export const removeClosePointsByDegree = (
     if (mask[pointIndex] === 0) {
       continue;
     }
-    writeVec3(filtered, outputIndex, vec3At(points, pointIndex));
+    writeVec3At(filtered, outputIndex, vec3At(points, pointIndex));
     outputIndex += 1;
   }
 
@@ -268,7 +246,7 @@ export const sampleSurfaceEven = (
   count: number,
   options?: SampleSurfaceEvenOptions,
 ): SurfaceSampleResult => {
-  const mesh = ensureMeshAnalysis(meshInput);
+  const mesh = ensureMeshGeometryAnalysis(meshInput);
   const radius =
     options?.radius ?? Math.sqrt(mesh.area / Math.max(1, 3 * count));
   const oversampled = sampleSurface(mesh, count * 3, options);
@@ -288,7 +266,7 @@ export const sampleSurfaceEven = (
       continue;
     }
 
-    writeVec3(points, outputIndex, vec3At(oversampled.points, sampleIndex));
+    writeVec3At(points, outputIndex, vec3At(oversampled.points, sampleIndex));
     faceIndices[outputIndex] = oversampled.faceIndices[sampleIndex];
     const inputBaryBase = sampleIndex * 3;
     writeBarycentric(
@@ -315,7 +293,7 @@ export const interpolateFaceVertexUvs = (
   barycentric: ArrayLike<number>,
   wrapMode: UvWrapMode = "wrap",
 ): Float32Array => {
-  const mesh = ensureMeshAnalysis(meshInput);
+  const mesh = ensureMeshGeometryAnalysis(meshInput);
   if (mesh.uvs === undefined) {
     throw new Error("Mesh UVs are required for UV interpolation.");
   }
@@ -439,7 +417,7 @@ export const sampleTexturedSurfacePointCloud = (
   samplesPerFace: number,
   options?: SampleSurfaceOptions & SampleTextureOptions,
 ): TexturedSurfacePointCloud => {
-  const mesh = ensureMeshAnalysis(meshInput);
+  const mesh = ensureMeshGeometryAnalysis(meshInput);
   const sampleCount = Math.floor(mesh.faceCount * samplesPerFace);
   const samples = sampleSurfaceEven(mesh, sampleCount, {
     ...options,

@@ -14,6 +14,21 @@ export const vec2At = (values: ArrayLike<number>, index: number): Vec2 => {
   return [values[baseIndex], values[baseIndex + 1]];
 };
 
+type MutableNumberArray = {
+  [index: number]: number;
+};
+
+export const writeVec3At = (
+  output: MutableNumberArray,
+  index: number,
+  value: Vec3,
+): void => {
+  const baseIndex = index * dimensionsPerVec3;
+  output[baseIndex] = value[0];
+  output[baseIndex + 1] = value[1];
+  output[baseIndex + 2] = value[2];
+};
+
 export const subtractVec3 = (left: Vec3, right: Vec3): Vec3 => [
   left[0] - right[0],
   left[1] - right[1],

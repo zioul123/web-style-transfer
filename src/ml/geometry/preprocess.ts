@@ -1,25 +1,27 @@
 import {
-  generateSurfaceAwareDirections,
   interpolateMeshPointBatch,
   meshPointBatchFromBarycentric,
+} from "./meshPoints";
+import {
+  generateSurfaceAwareDirections,
   reshapeGeodesicEndpoints,
   traceGeodesics,
-} from "./digeo";
+} from "./surfaceGeodesics";
 import { KdTree3D } from "./kdTree3d";
-import { analyzeMeshGeometry } from "./mesh";
-import { sampleTexturedSurfacePointCloud } from "./trimesh";
+import { ensureMeshGeometryAnalysis } from "./mesh";
+import { sampleTexturedSurfacePointCloud } from "./surfaceSampling";
 import { dimensionsPerVec3, vec3At } from "./vector3";
+import type { MeshPointBatch } from "./meshPoints";
 import type {
   EndpointReshapeResult,
-  MeshPointBatch,
   SurfaceAwareDirectionBatch,
-} from "./digeo";
+} from "./surfaceGeodesics";
 import type { MeshGeometryAnalysis, MeshGeometryInput } from "./mesh";
 import type {
   TexturedSurfacePointCloud,
   TextureData,
   UvWrapMode,
-} from "./trimesh";
+} from "./surfaceSampling";
 import type { Vec3 } from "./vector3";
 
 export type PreparedPointCloudLayer = TexturedSurfacePointCloud & {
@@ -74,11 +76,6 @@ const defaultRadiusFactor = 0.6;
 const defaultGeodesicDistRatio = 2;
 const defaultConvAttenuation = 0.6827;
 const defaultKnnK = 8;
-
-const ensureMeshAnalysis = (
-  mesh: MeshGeometryInput | MeshGeometryAnalysis,
-): MeshGeometryAnalysis =>
-  "faceAreas" in mesh ? mesh : analyzeMeshGeometry(mesh);
 
 const ensurePositiveFinite = (value: number, name: string): void => {
   if (!Number.isFinite(value) || value <= 0) {
@@ -241,7 +238,7 @@ export const prepareMeshPointCloudData = (
   texture: TextureData,
   options?: PrepareMeshPointCloudOptions,
 ): PreparedMeshPointCloudData => {
-  const mesh = ensureMeshAnalysis(meshInput);
+  const mesh = ensureMeshGeometryAnalysis(meshInput);
   const radiusFactor = options?.radiusFactor ?? defaultRadiusFactor;
   const samplesPerFace = options?.samplesPerFace ?? defaultSamplesPerFace;
   const geodesicDistRatio =

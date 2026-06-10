@@ -128,7 +128,7 @@ const makeTinyGltf = (): string => {
   });
 };
 
-test("trimesh-style surface sampling uses weighted faces and triangle point picking", () => {
+test("surface sampling uses weighted faces and triangle point picking", () => {
   const mesh = analyzeMeshGeometry({
     vertices: new Float32Array([
       0, 0, 0, 1, 0, 0, 0, 1, 0, 10, 0, 0, 12, 0, 0, 10, 2, 0,
@@ -231,7 +231,7 @@ test("textured surface point cloud returns sampled positions, barycentric UVs, a
   expect(pointCloud.colors[0]).toBeLessThanOrEqual(1);
 });
 
-test("GLTF extraction uses GLTFLoader geometry and flips V coordinates like trimesh", async () => {
+test("GLTF extraction uses GLTFLoader geometry and flips V coordinates for texture sampling", async () => {
   installProgressEventPolyfill();
 
   const mesh = await parseGltfMeshGeometry(makeTinyGltf());

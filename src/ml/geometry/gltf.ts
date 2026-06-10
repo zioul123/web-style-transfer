@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { createMeshGeometry } from "./mesh";
 import type { MeshGeometry } from "./mesh";
-import type { TextureData } from "./trimesh";
+import type { TextureData } from "./surfaceSampling";
 
 export type ExtractedGltfMesh = MeshGeometry & {
   readonly texture?: TextureData;

@@ -90,19 +90,47 @@ const toFaceArray = (
   return output;
 };
 
-const faceVertexIndex = (
-  faces: Uint32Array,
+export const isMeshGeometryAnalysis = (
+  mesh: MeshGeometryInput | MeshGeometryAnalysis,
+): mesh is MeshGeometryAnalysis => "faceAreas" in mesh;
+
+export const ensureMeshGeometryAnalysis = (
+  mesh: MeshGeometryInput | MeshGeometryAnalysis,
+): MeshGeometryAnalysis =>
+  isMeshGeometryAnalysis(mesh) ? mesh : analyzeMeshGeometry(mesh);
+
+export const meshFaceVertexIndex = (
+  mesh: Pick<MeshGeometry, "faces">,
   faceIndex: number,
   localVertexIndex: 0 | 1 | 2,
-): number => faces[faceIndex * 3 + localVertexIndex];
+): number => mesh.faces[faceIndex * 3 + localVertexIndex];
 
-const faceVertex = (
-  vertices: Float32Array,
-  faces: Uint32Array,
+export const meshFaceVertex = (
+  mesh: Pick<MeshGeometry, "vertices" | "faces">,
   faceIndex: number,
   localVertexIndex: 0 | 1 | 2,
 ): Vec3 =>
-  vec3At(vertices, faceVertexIndex(faces, faceIndex, localVertexIndex));
+  vec3At(mesh.vertices, meshFaceVertexIndex(mesh, faceIndex, localVertexIndex));
+
+export const meshFaceNormal = (
+  mesh: Pick<MeshGeometryAnalysis, "faceNormals">,
+  faceIndex: number,
+): Vec3 => vec3At(mesh.faceNormals, faceIndex);
+
+export const interpolateMeshFacePosition = (
+  mesh: Pick<MeshGeometry, "vertices" | "faces">,
+  faceIndex: number,
+  barycentric: readonly [number, number, number],
+): Vec3 => {
+  const a = meshFaceVertex(mesh, faceIndex, 0);
+  const b = meshFaceVertex(mesh, faceIndex, 1);
+  const c = meshFaceVertex(mesh, faceIndex, 2);
+  return [
+    a[0] * barycentric[0] + b[0] * barycentric[1] + c[0] * barycentric[2],
+    a[1] * barycentric[0] + b[1] * barycentric[1] + c[1] * barycentric[2],
+    a[2] * barycentric[0] + b[2] * barycentric[1] + c[2] * barycentric[2],
+  ];
+};
 
 const edgeKey = (left: number, right: number): string =>
   left < right ? `${left}:${right}` : `${right}:${left}`;
@@ -137,16 +165,16 @@ export const analyzeMeshGeometry = (
   input: MeshGeometryInput,
 ): MeshGeometryAnalysis => {
   const geometry = createMeshGeometry(input);
-  const { vertices, faces, vertexCount, faceCount } = geometry;
+  const { vertices, vertexCount, faceCount } = geometry;
   const faceAreas = new Float32Array(faceCount);
   const faceNormals = new Float32Array(faceCount * dimensionsPerVec3);
   const vertexNormalSums = new Float64Array(vertexCount * dimensionsPerVec3);
   let area = 0;
 
   for (let faceIndex = 0; faceIndex < faceCount; faceIndex += 1) {
-    const a = faceVertex(vertices, faces, faceIndex, 0);
-    const b = faceVertex(vertices, faces, faceIndex, 1);
-    const c = faceVertex(vertices, faces, faceIndex, 2);
+    const a = meshFaceVertex(geometry, faceIndex, 0);
+    const b = meshFaceVertex(geometry, faceIndex, 1);
+    const c = meshFaceVertex(geometry, faceIndex, 2);
     const ab = subtractVec3(b, a);
     const ac = subtractVec3(c, a);
     const cross = crossVec3(ab, ac);
@@ -165,8 +193,8 @@ export const analyzeMeshGeometry = (
       localVertexIndex < 3;
       localVertexIndex += 1
     ) {
-      const vertexIndex = faceVertexIndex(
-        faces,
+      const vertexIndex = meshFaceVertexIndex(
+        geometry,
         faceIndex,
         localVertexIndex as 0 | 1 | 2,
       );
@@ -202,8 +230,8 @@ export const analyzeMeshGeometry = (
     for (let localEdgeIndex = 0; localEdgeIndex < 3; localEdgeIndex += 1) {
       const [leftLocalIndex, rightLocalIndex] =
         localEdgeVertexIndices[localEdgeIndex];
-      const left = faceVertexIndex(faces, faceIndex, leftLocalIndex);
-      const right = faceVertexIndex(faces, faceIndex, rightLocalIndex);
+      const left = meshFaceVertexIndex(geometry, faceIndex, leftLocalIndex);
+      const right = meshFaceVertexIndex(geometry, faceIndex, rightLocalIndex);
       const minVertex = Math.min(left, right);
       const maxVertex = Math.max(left, right);
       const key = edgeKey(left, right);
@@ -247,8 +275,8 @@ export const analyzeMeshGeometry = (
       localVertexIndex < 3;
       localVertexIndex += 1
     ) {
-      const vertexIndex = faceVertexIndex(
-        faces,
+      const vertexIndex = meshFaceVertexIndex(
+        geometry,
         faceIndex,
         localVertexIndex as 0 | 1 | 2,
       );
