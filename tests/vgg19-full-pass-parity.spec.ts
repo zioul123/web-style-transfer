@@ -279,18 +279,19 @@ test("vgg19 full pass matches conv5_1 style and relu4_2 content losses", async (
   );
   if (!result.ok) return;
 
-  const styleLayerPairs = Object.entries(
-    result.expected.expectedStyleLossByLayer,
-  ).map(([layerName, expectedLoss]) => ({
-    layerName,
-    expectedLoss,
-    actualLoss: result.styleLossByLayer[layerName],
-    diff: (result.styleLossByLayer[layerName] ?? Number.NaN) - expectedLoss,
-  }));
-  console.log(
-    "phase3 full-pass style-loss pairs",
-    JSON.stringify(styleLayerPairs),
-  );
+  // You can uncomment this to verify the loss errors.
+  // const styleLayerPairs = Object.entries(
+  //   result.expected.expectedStyleLossByLayer,
+  // ).map(([layerName, expectedLoss]) => ({
+  //   layerName,
+  //   expectedLoss,
+  //   actualLoss: result.styleLossByLayer[layerName],
+  //   diff: (result.styleLossByLayer[layerName] ?? Number.NaN) - expectedLoss,
+  // }));
+  // console.log(
+  //   "phase3 full-pass style-loss pairs",
+  //   JSON.stringify(styleLayerPairs),
+  // );
 
   expect(result.init.type).toBe("webgpu-init-result");
   if (result.init.type !== "webgpu-init-result")

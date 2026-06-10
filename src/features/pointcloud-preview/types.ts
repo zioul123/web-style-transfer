@@ -1,4 +1,4 @@
-import type { KdTree3DNode, NearestNeighbor } from "../../ml/geometry/kdTree3d";
+import type { KdTree3DNode } from "../../ml/geometry/kdTree3d";
 
 export type PointCloudMeshJson = {
   readonly m_verts: readonly (readonly [number, number, number])[];
@@ -25,8 +25,6 @@ export type SpatialHashGrid3D = {
   readonly sortedPointColors: Float32Array;
   readonly maxPointsPerCell: number;
 };
-
-export type { KdTree3DNode, NearestNeighbor };
 
 export type PointCloudMeshData = {
   readonly meshPositions: Float32Array;
