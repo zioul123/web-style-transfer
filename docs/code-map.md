@@ -110,6 +110,10 @@ assertion layer.
 - `AGENTS.md`: compact always-loaded invariants, routing, and completion rules.
 - `.agents/skills/repo-change/`: progressively disclosed implementation
   workflow, context routing, delegation, and artifact contract.
+- `.agents/skills/repo-doc-audit/`: focused documentation-coverage audit and
+  narrow docs-update workflow for an existing diff or branch.
+- `.agents/skills/artifact-pr-summary/`: branch-level PR description synthesis
+  from prior task artifacts.
 - `.agents/skills/python-reference/`: fixture/exporter routing loaded only for
   Python reference and numerical parity tasks.
 - `.agents/skills/repo-review/`: independent final-diff review procedure.

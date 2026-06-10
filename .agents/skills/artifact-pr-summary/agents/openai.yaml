@@ -1,0 +1,4 @@
+interface:
+  display_name: "Artifact PR Summary"
+  short_description: "Draft GitHub-ready PR descriptions from prior .agent-artifacts runs"
+  default_prompt: "Review the relevant .agent-artifacts task folders for this branch and draft a concise PR description with summary, key changes, validation, risks, and follow-ups."

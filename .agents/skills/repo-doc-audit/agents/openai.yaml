@@ -1,0 +1,4 @@
+interface:
+  display_name: "Repository Documentation Audit"
+  short_description: "Check branch docs coverage and patch gaps"
+  default_prompt: "Use $repo-doc-audit to verify this repository change has the required documentation updates and add only the missing docs."
