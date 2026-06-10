@@ -14,6 +14,7 @@ that matches the task, then follow imports and tests only as needed.
 | `src/shared/`                             | Cross-feature browser asset URL helpers                              |
 | `src/types/worker-protocol/`              | Worker request, response, tensor, op, and pipeline types             |
 | `src/ml/constants/`                       | Shared VGG19 layer/tap constants                                     |
+| `src/ml/geometry/`                        | CPU mesh, KD-tree, surface sampling, geodesics, and preprocessing    |
 | `src/ml/ops/`                             | CPU reference helpers used by tests and small parity paths           |
 | `src/ml/worker/main-thread-protocol/`     | Worker message and tensor-op routing                                 |
 | `src/ml/worker/runtime/`                  | WebGPU device, buffers, shapes, caches, and dispatch infrastructure  |
@@ -44,8 +45,9 @@ that matches the task, then follow imports and tests only as needed.
   and cache integration.
 - `src/features/pointcloud-preview/loadPointCloudMesh.ts`: JSON validation,
   typed-array conversion, bounds, and precomputed mesh vertex colours.
-- `src/features/pointcloud-preview/math/kdTree3d.ts`: immutable 3D k-d tree and
-  nearest-neighbour search for point-cloud samples.
+- `src/ml/geometry/`: CPU-only typed mesh analysis, 3D KD-tree query helpers,
+  surface and texture sampling, mesh point batches, geodesic tracing, GLTF
+  extraction, and point-cloud preprocessing.
 - `src/features/pointcloud-preview/math/spatialHash3d.ts`: point-sample binning
   and sorted cell ranges used by fragment-space mesh shading.
 - `src/features/style-transfer/modelCache.ts`: IndexedDB model-pack persistence.

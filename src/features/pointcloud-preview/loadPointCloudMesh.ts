@@ -1,5 +1,5 @@
 import { buildMeshVertexColors } from "./math/interpolation";
-import { buildKdTree3d } from "./math/kdTree3d";
+import { buildKdTree3d } from "../../ml/geometry/kdTree3d";
 import { buildSpatialHashGrid3d } from "./math/spatialHash3d";
 import type { Bounds3D, PointCloudMeshData, PointCloudMeshJson } from "./types";
 

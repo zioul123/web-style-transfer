@@ -1,5 +1,8 @@
-import type { KdTree3DNode, NearestNeighbor } from "../types";
-import { findKNearestNeighbors } from "./kdTree3d";
+import {
+  findKNearestNeighbors,
+  type KdTree3DNode,
+  type NearestNeighbor,
+} from "../../../ml/geometry/kdTree3d";
 
 const dimensionsPerPoint = 3;
 const minimumSquaredDistance = 1e-16;

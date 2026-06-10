@@ -8,7 +8,7 @@ import { sampleInterpolatedColor } from "../src/features/pointcloud-preview/math
 import {
   buildKdTree3d,
   findKNearestNeighbors,
-} from "../src/features/pointcloud-preview/math/kdTree3d";
+} from "../src/ml/geometry/kdTree3d";
 import type { PointCloudMeshJson } from "../src/features/pointcloud-preview/types";
 
 const tinyFixture = JSON.parse(
