@@ -73,6 +73,34 @@ export const createCpuVectorOps = (
     return out;
   },
 
+  updateClampAndScaleByScalarBuffer: async (
+    input: Float32Array,
+    direction: Float32Array,
+    scalarBuffer: Float32Array,
+    updateScalarScale: number,
+    stepScalarScale: number,
+  ): Promise<readonly [Float32Array, Float32Array]> => {
+    const updateScalar = scalarBuffer[0] * updateScalarScale;
+    const stepScalar = scalarBuffer[0] * stepScalarScale;
+    const nextInput = new Float32Array(count);
+    const nextStep = new Float32Array(count);
+    for (let i = 0; i < count; i += 1) {
+      nextInput[i] = clampUnit(input[i] - direction[i] * updateScalar);
+      nextStep[i] = direction[i] * stepScalar;
+    }
+    return [nextInput, nextStep] as const;
+  },
+
+  lbfgsInitialStepSizeBuffer: async (
+    grad: Float32Array,
+    learningRate: number,
+  ): Promise<Float32Array> => {
+    let total = 0;
+    for (let i = 0; i < count; i += 1) total += Math.abs(grad[i]);
+    const stepSize = Math.min(1, total === 0 ? 1 : 1 / total) * learningRate;
+    return new Float32Array([stepSize]);
+  },
+
   dot: async (a: Float32Array, b: Float32Array): Promise<number> => {
     let total = 0;
     for (let i = 0; i < count; i += 1) total += a[i] * b[i];
@@ -109,6 +137,21 @@ export const createCpuVectorOps = (
     for (let i = 0; i < count; i += 1)
       out[i] = clampUnit(input[i] - learningRate * direction[i]);
     return out;
+  },
+
+  updateClampAndScale: async (
+    input: Float32Array,
+    direction: Float32Array,
+    learningRate: number,
+    stepScale: number,
+  ): Promise<readonly [Float32Array, Float32Array]> => {
+    const nextInput = new Float32Array(count);
+    const nextStep = new Float32Array(count);
+    for (let i = 0; i < count; i += 1) {
+      nextInput[i] = clampUnit(input[i] - learningRate * direction[i]);
+      nextStep[i] = direction[i] * stepScale;
+    }
+    return [nextInput, nextStep] as const;
   },
 
   adamUpdateClamp: async (

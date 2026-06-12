@@ -11,16 +11,22 @@ import {
   type ReactNode,
 } from "react";
 import {
+  PointCloudPreviewPointSizeControl,
+  PreviewVisibilityToggleButton,
+} from "./PreviewViewControls";
+import {
   maxFragmentShaderPointsPerCell,
   PointCloudPreviewScene,
-  type PointCloudPreviewCameraCommand,
 } from "./PointCloudPreviewScene";
+import { PointCloudHitInspector } from "./PointCloudHitInspector";
 import { parsePointCloudMeshText } from "./loadPointCloudMesh";
 import type {
-  PointCloudHitSample,
+  MeshColorMode,
   PointCloudMeshData,
+  PointCloudPreviewViewAxis,
   PreviewCameraState,
 } from "./types";
+import { usePointCloudPreviewController } from "./usePointCloudPreviewController";
 import { assetUrl } from "../../shared/assetUrls";
 
 const bundledMediumExampleUrl = assetUrl(
@@ -59,55 +65,12 @@ type LoadedAssetState =
       readonly data: null;
     };
 
-type MeshColorMode = "baked" | "fragment-knn";
-type ViewAxis = "pos-x" | "neg-x" | "pos-y" | "neg-y" | "pos-z" | "neg-z";
-
 type SavedViewpoint = {
   readonly id: number;
   readonly label: string;
   readonly camera: PreviewCameraState;
   readonly swapYZ: boolean;
 };
-
-type ViewSettings = {
-  readonly showMesh: boolean;
-  readonly showPoints: boolean;
-  readonly showWireframe: boolean;
-  readonly meshColorMode: MeshColorMode;
-  readonly pointSize: number;
-  readonly disableGammaDecoding: boolean;
-  readonly brightness: number;
-  readonly swapYZ: boolean;
-};
-
-type NextCameraCommand =
-  | {
-      readonly type: "frame";
-    }
-  | {
-      readonly type: "restore";
-      readonly camera: PreviewCameraState;
-    }
-  | {
-      readonly type: "snap-axis";
-      readonly axis: ViewAxis;
-    };
-
-const defaultViewSettings: ViewSettings = {
-  showMesh: true,
-  showPoints: true,
-  showWireframe: false,
-  meshColorMode: "fragment-knn",
-  pointSize: 0.035,
-  disableGammaDecoding: false,
-  brightness: 1,
-  swapYZ: false,
-};
-
-const colorToCss = (color: readonly [number, number, number]): string =>
-  `rgb(${Math.round(color[0] * 255)} ${Math.round(color[1] * 255)} ${Math.round(
-    color[2] * 255,
-  )})`;
 
 const boundsLabel = (values: readonly [number, number, number]): string =>
   values.map((value) => value.toFixed(3)).join(", ");
@@ -146,7 +109,7 @@ const screenshotTimestampLabel = (date: Date): string => {
 };
 
 const snapAxisButtons: readonly {
-  readonly axis: ViewAxis;
+  readonly axis: PointCloudPreviewViewAxis;
   readonly label: string;
 }[] = [
   { axis: "pos-x", label: "+X" },
@@ -417,85 +380,6 @@ function XIcon() {
   );
 }
 
-function EyeOpenIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-4 w-4"
-      viewBox="0 0 16 16"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path
-        d="M1.75 8C2.9 5.82 5.2 4.25 8 4.25C10.8 4.25 13.1 5.82 14.25 8C13.1 10.18 10.8 11.75 8 11.75C5.2 11.75 2.9 10.18 1.75 8Z"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <circle cx="8" cy="8" r="1.75" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
-  );
-}
-
-function EyeClosedIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-4 w-4"
-      viewBox="0 0 16 16"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path
-        d="M2.25 2.25L13.75 13.75"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinecap="round"
-      />
-      <path
-        d="M6.55 4.46C7.01 4.32 7.49 4.25 8 4.25C10.8 4.25 13.1 5.82 14.25 8C13.75 8.95 13.03 9.79 12.14 10.45M9.52 9.54C9.13 9.95 8.58 10.2 8 10.2C6.83 10.2 5.88 9.25 5.88 8.08C5.88 7.5 6.12 6.97 6.51 6.58M3.86 5.56C2.98 6.22 2.26 7.06 1.75 8C2.9 10.18 5.2 11.75 8 11.75C8.5 11.75 8.99 11.68 9.45 11.54"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function VisibilityToggleButton({
-  label,
-  visible,
-  disabled = false,
-  testId,
-  onClick,
-}: {
-  readonly label: string;
-  readonly visible: boolean;
-  readonly disabled?: boolean;
-  readonly testId: string;
-  readonly onClick: () => void;
-}) {
-  return (
-    <button
-      data-testid={testId}
-      className={`flex items-center justify-between gap-3 rounded-[0.95rem] border px-4 py-4 text-sm font-semibold transition ${
-        disabled
-          ? "cursor-not-allowed border-white/10 bg-slate-900/55 text-slate-500"
-          : "border-white/10 bg-slate-900/75 text-slate-100 hover:bg-white/10"
-      }`}
-      type="button"
-      aria-pressed={visible}
-      aria-label={`${visible ? "Hide" : "Show"} ${label}`}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      <span>{label}</span>
-      {visible ? <EyeOpenIcon /> : <EyeClosedIcon />}
-    </button>
-  );
-}
-
 function InfoModal({
   open,
   onClose,
@@ -548,32 +432,32 @@ export function PointCloudPreviewApp() {
   const previewHostRef = useRef<HTMLDivElement | null>(null);
   const nextUploadedFileIdRef = useRef<number>(1);
   const activeLoadRequestIdRef = useRef<number>(0);
-  const currentCameraStateRef = useRef<PreviewCameraState | null>(null);
   const [assetState, setAssetState] = useState<LoadedAssetState>({
     status: "loading",
     sourceLabel: bundledMediumSourceLabel,
     errorMessage: null,
     data: null,
   });
-  const [viewSettings, setViewSettings] =
-    useState<ViewSettings>(defaultViewSettings);
-  const [selectedHit, setSelectedHit] = useState<PointCloudHitSample | null>(
-    null,
-  );
-  const [cameraCommand, setCameraCommand] =
-    useState<PointCloudPreviewCameraCommand>({
-      id: 0,
-      type: "frame",
-    });
-  const [currentCameraState, setCurrentCameraState] =
-    useState<PreviewCameraState | null>(null);
+  const {
+    viewSettings,
+    updateViewSettings,
+    selectedHit,
+    setSelectedHit,
+    framesPerSecond,
+    setFramesPerSecond,
+    cameraCommand,
+    cameraState: currentCameraState,
+    cameraStateRef: currentCameraStateRef,
+    handleCameraStateChange,
+    issueCameraCommand,
+    resetPreviewInteraction,
+  } = usePointCloudPreviewController();
   const [savedViewpoints, setSavedViewpoints] = useState<
     readonly SavedViewpoint[]
   >(() => readSavedViewpoints());
   const [nextViewpointId, setNextViewpointId] = useState<number>(() =>
     nextViewpointIdFor(readSavedViewpoints()),
   );
-  const [framesPerSecond, setFramesPerSecond] = useState<number>(0);
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
   const [uploadedFiles, setUploadedFiles] = useState<
     readonly UploadedPointCloudFile[]
@@ -592,42 +476,10 @@ export function PointCloudPreviewApp() {
     );
   }, [savedViewpoints]);
 
-  const issueCameraCommand = useCallback(
-    (
-      nextCommand:
-        | NextCameraCommand
-        | ((currentId: number) => NextCameraCommand),
-    ): void => {
-      setCameraCommand((currentCommand) => {
-        const resolvedCommand =
-          typeof nextCommand === "function"
-            ? nextCommand(currentCommand.id)
-            : nextCommand;
-        return {
-          ...resolvedCommand,
-          id: currentCommand.id + 1,
-        };
-      });
-    },
-    [],
-  );
-
-  const updateViewSettings = (patch: Partial<ViewSettings>): void => {
-    setViewSettings((currentSettings) => ({
-      ...currentSettings,
-      ...patch,
-    }));
-  };
-
   const beginAssetLoadRequest = useCallback((): number => {
     activeLoadRequestIdRef.current += 1;
     return activeLoadRequestIdRef.current;
   }, []);
-
-  const handleCameraStateChange = (state: PreviewCameraState): void => {
-    currentCameraStateRef.current = state;
-    setCurrentCameraState(state);
-  };
 
   const applyReadyAsset = useCallback(
     (
@@ -648,24 +500,18 @@ export function PointCloudPreviewApp() {
           errorMessage: null,
           data,
         });
-        setSelectedHit(null);
+        resetPreviewInteraction({
+          clearCameraState: !shouldPreserveCurrentView,
+        });
         if (!shouldPreserveCurrentView) {
-          currentCameraStateRef.current = null;
-          setCurrentCameraState(null);
-        }
-        setFramesPerSecond(0);
-        if (!shouldPreserveCurrentView) {
-          setViewSettings((currentSettings) => ({
-            ...currentSettings,
-            swapYZ: false,
-          }));
+          updateViewSettings({ swapYZ: false });
         }
         if (shouldFrameCamera) {
           issueCameraCommand({ type: "frame" });
         }
       });
     },
-    [issueCameraCommand],
+    [issueCameraCommand, resetPreviewInteraction, updateViewSettings],
   );
 
   const setUploadedFileStatus = (
@@ -1300,70 +1146,7 @@ export function PointCloudPreviewApp() {
                 )}
 
                 {selectedHit !== null ? (
-                  <aside className="pointer-events-none absolute right-4 top-4 z-10 w-[21rem] rounded-[1rem] border border-white/10 bg-slate-950/88 p-4 shadow-2xl shadow-black/35 backdrop-blur-sm">
-                    <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
-                      Hit inspector
-                    </p>
-                    <div className="mt-3 space-y-3 text-sm text-slate-200">
-                      <div className="flex items-center gap-3 rounded-[0.95rem] border border-white/10 bg-slate-900/75 p-3">
-                        <span
-                          aria-label="Hit color swatch"
-                          className="h-10 w-10 rounded-full border border-white/15"
-                          style={{
-                            backgroundColor: colorToCss(selectedHit.color),
-                          }}
-                        />
-                        <div>
-                          <div className="font-semibold text-white">
-                            Interpolated hit colour
-                          </div>
-                          <div className="font-mono text-xs text-slate-300">
-                            {selectedHit.color
-                              .map((value) => value.toFixed(4))
-                              .join(", ")}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="rounded-[0.95rem] border border-white/10 bg-slate-900/75 p-3">
-                        <div className="font-semibold text-white">
-                          Hit point
-                        </div>
-                        <div className="mt-1 font-mono text-xs text-slate-300">
-                          {selectedHit.point
-                            .map((value) => value.toFixed(4))
-                            .join(", ")}
-                        </div>
-                      </div>
-                      {selectedHit.neighbors.map((neighbor, index) => (
-                        <div
-                          key={`${neighbor.index}-${index}`}
-                          className="rounded-[0.95rem] border border-white/10 bg-slate-900/75 p-3"
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="font-semibold text-white">
-                              Neighbor {index + 1}
-                            </div>
-                            <div className="text-xs text-slate-300">
-                              index {neighbor.index}
-                            </div>
-                          </div>
-                          <div className="mt-2 font-mono text-xs leading-6 text-slate-300">
-                            distance {neighbor.distance.toFixed(5)}
-                            <br />
-                            pos{" "}
-                            {neighbor.position
-                              .map((value) => value.toFixed(4))
-                              .join(", ")}
-                            <br />
-                            rgb{" "}
-                            {neighbor.color
-                              .map((value) => value.toFixed(4))
-                              .join(", ")}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </aside>
+                  <PointCloudHitInspector hit={selectedHit} />
                 ) : null}
               </div>
             </section>
@@ -1378,7 +1161,7 @@ export function PointCloudPreviewApp() {
               >
                 <div className="space-y-3 text-sm text-slate-200">
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <VisibilityToggleButton
+                    <PreviewVisibilityToggleButton
                       label="Mesh"
                       testId="toggle-mesh-button"
                       visible={viewSettings.showMesh}
@@ -1386,7 +1169,7 @@ export function PointCloudPreviewApp() {
                         updateViewSettings({ showMesh: !viewSettings.showMesh })
                       }
                     />
-                    <VisibilityToggleButton
+                    <PreviewVisibilityToggleButton
                       label="Wireframe"
                       testId="toggle-wireframe-button"
                       visible={viewSettings.showWireframe}
@@ -1399,7 +1182,7 @@ export function PointCloudPreviewApp() {
                     />
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <VisibilityToggleButton
+                    <PreviewVisibilityToggleButton
                       label="Point cloud"
                       testId="toggle-points-button"
                       visible={viewSettings.showPoints}
@@ -1409,32 +1192,13 @@ export function PointCloudPreviewApp() {
                         })
                       }
                     />
-                    <label className="rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4">
-                      <span
-                        className={`mb-2 block ${
-                          viewSettings.showPoints
-                            ? "text-slate-300"
-                            : "text-slate-500"
-                        }`}
-                      >
-                        Point size: {viewSettings.pointSize.toFixed(3)}
-                      </span>
-                      <input
-                        data-testid="point-size-slider"
-                        className="w-full accent-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
-                        type="range"
-                        min={0.01}
-                        max={0.12}
-                        step={0.005}
-                        value={viewSettings.pointSize}
-                        disabled={!viewSettings.showPoints}
-                        onChange={(event) =>
-                          updateViewSettings({
-                            pointSize: Number(event.target.value),
-                          })
-                        }
-                      />
-                    </label>
+                    <PointCloudPreviewPointSizeControl
+                      viewSettings={viewSettings}
+                      testId="point-size-slider"
+                      onPointSizeChange={(pointSize) =>
+                        updateViewSettings({ pointSize })
+                      }
+                    />
                   </div>
                 </div>
               </CollapsiblePanelCard>

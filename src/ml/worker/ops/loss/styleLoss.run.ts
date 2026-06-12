@@ -85,6 +85,7 @@ export const runStyleLossTermsFromTargetGramBuffer = async (
   termsPass.dispatchWorkgroups(workgroupCount);
   termsPass.end();
   gpuDevice.queue.submit([termsEncoder.finish()]);
+  uniformBuffer.destroy();
 
   let currentCount = workgroupCount;
   while (currentCount > 1) {
@@ -245,6 +246,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   pass.dispatchWorkgroups(Math.ceil(count / 64));
   pass.end();
   gpuDevice.queue.submit([encoder.finish()]);
+  uniformBuffer.destroy();
   return ownedBuffer(outBuffer);
 };
 

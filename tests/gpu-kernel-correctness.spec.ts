@@ -13,7 +13,7 @@ test("gpu vector reductions match cpu references", async ({ page }) => {
     const device = await adapter.requestDevice();
     const { createGpuVectorOps } =
       await import("/src/ml/worker/pipelines/optimization/input-optimizer/gpuVectorOps.ts");
-    const { uploadToOwnedBuffer, releaseOwnedBuffer } =
+    const { uploadToOwnedBuffer, readGpuBufferToArray, releaseOwnedBuffer } =
       await import("/src/ml/worker/runtime/bufferKernels.ts");
 
     const count = 3 * 128 + 17;
@@ -33,10 +33,65 @@ test("gpu vector reductions match cpu references", async ({ page }) => {
 
     const aBuffer = uploadToOwnedBuffer(device, a);
     const bBuffer = uploadToOwnedBuffer(device, b);
+    const scalarBuffer = uploadToOwnedBuffer(device, new Float32Array([0.25]));
     try {
       const ops = createGpuVectorOps(device, count);
       const dot = await ops.dot(aBuffer, bBuffer);
       const abs = await ops.absSum(aBuffer);
+      const [fusedInput, fusedStep] = await ops.updateClampAndScale(
+        aBuffer,
+        bBuffer,
+        -0.25,
+        0.25,
+      );
+      const [scalarFusedInput, scalarFusedStep] =
+        await ops.updateClampAndScaleByScalarBuffer(
+          aBuffer,
+          bBuffer,
+          scalarBuffer,
+          -1,
+          1,
+        );
+      const fusedInputValues = await readGpuBufferToArray(
+        device,
+        fusedInput.buffer,
+        count,
+      );
+      const fusedStepValues = await readGpuBufferToArray(
+        device,
+        fusedStep.buffer,
+        count,
+      );
+      const scalarFusedInputValues = await readGpuBufferToArray(
+        device,
+        scalarFusedInput.buffer,
+        count,
+      );
+      const scalarFusedStepValues = await readGpuBufferToArray(
+        device,
+        scalarFusedStep.buffer,
+        count,
+      );
+      releaseOwnedBuffer(fusedInput);
+      releaseOwnedBuffer(fusedStep);
+      releaseOwnedBuffer(scalarFusedInput);
+      releaseOwnedBuffer(scalarFusedStep);
+      let fusedMaxDiff = 0;
+      let scalarFusedMaxDiff = 0;
+      for (let i = 0; i < count; i += 1) {
+        const expectedInput = Math.max(0, Math.min(1, a[i] + b[i] * 0.25));
+        const expectedStep = b[i] * 0.25;
+        fusedMaxDiff = Math.max(
+          fusedMaxDiff,
+          Math.abs(fusedInputValues[i] - expectedInput),
+          Math.abs(fusedStepValues[i] - expectedStep),
+        );
+        scalarFusedMaxDiff = Math.max(
+          scalarFusedMaxDiff,
+          Math.abs(scalarFusedInputValues[i] - expectedInput),
+          Math.abs(scalarFusedStepValues[i] - expectedStep),
+        );
+      }
       return {
         ok: true as const,
         dot,
@@ -45,10 +100,13 @@ test("gpu vector reductions match cpu references", async ({ page }) => {
         expectedAbs,
         dotDiff: Math.abs(dot - expectedDot),
         absDiff: Math.abs(abs - expectedAbs),
+        fusedMaxDiff,
+        scalarFusedMaxDiff,
       };
     } finally {
       releaseOwnedBuffer(aBuffer);
       releaseOwnedBuffer(bBuffer);
+      releaseOwnedBuffer(scalarBuffer);
       device.destroy();
     }
   });
@@ -61,6 +119,8 @@ test("gpu vector reductions match cpu references", async ({ page }) => {
     result.absDiff,
     `abs=${result.abs}, expectedAbs=${result.expectedAbs}`,
   ).toBeLessThan(1e-2);
+  expect(result.fusedMaxDiff).toBeLessThan(1e-6);
+  expect(result.scalarFusedMaxDiff).toBeLessThan(1e-6);
 });
 
 test("fused conv+relu op matches separate ops", async ({ page }) => {

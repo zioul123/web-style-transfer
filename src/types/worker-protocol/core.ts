@@ -5,9 +5,54 @@ export type TensorData = {
   values: Float32Array;
 };
 
+export type FeatureMatrixShape = {
+  pointCount: number;
+  channelCount: number;
+};
+
+export type FeatureMatrixData = FeatureMatrixShape & {
+  values: Float32Array;
+};
+
 export type WorkerTensor = {
   shape: TensorShape;
   values: number[];
+};
+
+export type WorkerFeatureMatrix = FeatureMatrixShape & {
+  values: number[];
+};
+
+export type PointCloudKnnData = {
+  sampleCount: number;
+  kernelPointCount: number;
+  neighborCount: number;
+  indices: Uint32Array;
+  weights: Float32Array;
+};
+
+export type WorkerFloatArray = number[] | Float32Array;
+export type WorkerUnsignedIndexArray = number[] | Uint32Array | Int32Array;
+export type WorkerSignedIndexArray = number[] | Int32Array;
+
+export type WorkerPointCloudKnn = {
+  sampleCount: number;
+  kernelPointCount: number;
+  neighborCount: number;
+  indices: WorkerUnsignedIndexArray;
+  weights: WorkerFloatArray;
+};
+
+export type SurfacePoolData = {
+  inputPointCount: number;
+  outputPointCount: number;
+  mapping: Int32Array;
+};
+
+export type WorkerSurfacePoolMap = {
+  inputPointCount: number;
+  outputPointCount: number;
+  mapping: WorkerSignedIndexArray;
 };
 
 export type WorkerTensorOperand =

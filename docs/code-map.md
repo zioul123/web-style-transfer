@@ -5,22 +5,23 @@ that matches the task, then follow imports and tests only as needed.
 
 ## Main Source Directories
 
-| Path                                      | Contents                                                             |
-| ----------------------------------------- | -------------------------------------------------------------------- |
-| `src/features/pointcloud-preview/`        | Point-cloud mesh preview page, loaders, math, and R3F scene          |
-| `src/features/style-transfer/components/` | Main UI panels and preview/control components                        |
-| `src/features/style-transfer/hooks/`      | Main-thread style-transfer orchestration                             |
-| `src/features/style-transfer/benchmark/`  | Model-pack benchmark and acceptance helpers                          |
-| `src/shared/`                             | Cross-feature browser asset URL helpers                              |
-| `src/types/worker-protocol/`              | Worker request, response, tensor, op, and pipeline types             |
-| `src/ml/constants/`                       | Shared VGG19 layer/tap constants                                     |
-| `src/ml/geometry/`                        | CPU mesh, KD-tree, surface sampling, geodesics, and preprocessing    |
-| `src/ml/ops/`                             | CPU reference helpers used by tests and small parity paths           |
-| `src/ml/worker/main-thread-protocol/`     | Worker message and tensor-op routing                                 |
-| `src/ml/worker/runtime/`                  | WebGPU device, buffers, shapes, caches, and dispatch infrastructure  |
-| `src/ml/worker/ops/`                      | Convolution, ReLU, pooling, normalization, Gram, and loss operations |
-| `src/ml/worker/pipelines/optimization/`   | Optimizers and fixed optimization pipelines                          |
-| `src/ml/worker/models/vgg19/`             | Model-pack validation and weight decoding                            |
+| Path                                      | Contents                                                                          |
+| ----------------------------------------- | --------------------------------------------------------------------------------- |
+| `src/features/pointcloud-preview/`        | Point-cloud mesh preview page, loaders, math, and R3F scene                       |
+| `src/features/style-transfer/components/` | Main UI panels and preview/control components                                     |
+| `src/features/style-transfer/hooks/`      | Main-thread style-transfer orchestration                                          |
+| `src/features/style-transfer/benchmark/`  | Model-pack benchmark and acceptance helpers                                       |
+| `src/shared/`                             | Cross-feature browser asset URL helpers                                           |
+| `src/types/worker-protocol/`              | Worker request, response, tensor, op, and pipeline types                          |
+| `src/ml/constants/`                       | Shared VGG19 layer/tap constants                                                  |
+| `src/ml/pointcloud/`                      | Shared point-cloud feature, KNN, kernel, and surface-pool metadata helpers        |
+| `src/ml/geometry/`                        | CPU mesh, KD-tree, surface sampling, geodesics, and preprocessing                 |
+| `src/ml/ops/`                             | CPU reference helpers used by tests and small parity paths                        |
+| `src/ml/worker/main-thread-protocol/`     | Worker message and tensor-op routing                                              |
+| `src/ml/worker/runtime/`                  | WebGPU device, buffers, shapes, caches, and dispatch infrastructure               |
+| `src/ml/worker/ops/`                      | Convolution, ReLU, pooling, normalization, point-cloud, Gram, and loss operations |
+| `src/ml/worker/pipelines/optimization/`   | Optimizers and fixed optimization pipelines                                       |
+| `src/ml/worker/models/vgg19/`             | Model-pack validation and weight decoding                                         |
 
 ## Important Entry Points
 
@@ -48,6 +49,9 @@ that matches the task, then follow imports and tests only as needed.
 - `src/ml/geometry/`: CPU-only typed mesh analysis, 3D KD-tree query helpers,
   surface and texture sampling, mesh point batches, geodesic tracing, GLTF
   extraction, and point-cloud preprocessing.
+- `src/ml/pointcloud/metadata.ts`: shared point-cloud feature-matrix, KNN,
+  kernel-index, and surface-pool validation used by CPU references and worker
+  kernels.
 - `src/features/pointcloud-preview/math/spatialHash3d.ts`: point-sample binning
   and sorted cell ranges used by fragment-space mesh shading.
 - `src/features/style-transfer/modelCache.ts`: IndexedDB model-pack persistence.
@@ -60,6 +64,8 @@ that matches the task, then follow imports and tests only as needed.
   and format decoding.
 - `src/ml/worker/runtime/bufferKernels.ts`: uploads, readbacks, owned outputs,
   and reusable buffer helpers.
+- `src/ml/worker/ops/pointcloud/`: WebGPU point-cloud feature matrix ops for
+  exp, normalize, optimized/scalar point-cloud convolution, and surface pooling.
 - `src/ml/worker/runtime/optimizationContext.ts`: per-run resource lifecycle.
 - `src/ml/worker/runtime/computePipelineCache.ts`: cached WebGPU pipelines.
 - `src/ml/worker/pipelines/optimization/trackedOps.ts`: pipeline operations that
@@ -67,7 +73,7 @@ that matches the task, then follow imports and tests only as needed.
 - `src/ml/worker/pipelines/optimization/input-optimizer/`: SGD, Adam, LBFGS,
   and CPU/GPU vector operations.
 - `src/ml/worker/pipelines/optimization/layerSchedules.ts` and
-  `style-transfer/vgg19Plan.ts`: fixed VGG execution order and taps.
+  `style-transfer/vgg19Plan.ts`: fixed image VGG execution order and taps.
 
 ## Tests And Fixtures
 
@@ -138,6 +144,9 @@ assertion layer.
   more focused internal import.
 - Use discriminated unions and exhaustive `switch` statements for protocol
   variants.
+- End-to-end point-cloud style-transfer composition is intentionally absent from
+  this branch. Do not infer or recreate it from the standalone viewer, geometry,
+  metadata, or operator modules.
 - Use response type guards from the protocol/test helpers before accessing
   variant-specific fields.
 - Respect `assetUrl()` and `vgg19ModelUrl()` for base paths and external hosting.

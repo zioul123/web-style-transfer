@@ -17,8 +17,7 @@ export const createInputOptimizer = <TVector>(
   let adamM: TVector | null = null;
   let adamV: TVector | null = null;
   let previousGrad: TVector | null = null;
-  let previousDirection: TVector | null = null;
-  let previousStepSize: number | null = null;
+  let previousStep: TVector | null = null;
   let lbfgsIteration = 0;
   let lbfgsHDiag = 1;
   const lbfgsHistory: LbfgsHistoryEntry<TVector>[] = [];
@@ -42,26 +41,27 @@ export const createInputOptimizer = <TVector>(
   };
 
   const addLbfgsHistory = async (grad: TVector): Promise<void> => {
-    if (
-      previousDirection === null ||
-      previousGrad === null ||
-      previousStepSize === null
-    )
-      return;
-    const oldStep = await ops.scale(previousDirection, previousStepSize);
-    const oldDir = await ops.sub(grad, previousGrad);
-    const [ys, yy] = await ops.dotPairWithRight(oldStep, oldDir, oldDir);
-    if (ys > 1e-10) {
-      lbfgsHDiag = ys / yy;
-      lbfgsHistory.push({ oldDir, oldStep, rho: 1 / ys });
-      if (lbfgsHistory.length > config.lbfgsMemory) {
-        const removed = lbfgsHistory.shift();
-        if (removed !== undefined) disposeHistoryEntry(removed);
+    if (previousStep === null || previousGrad === null) return;
+    const oldStep = previousStep;
+    let oldDir: TVector | null = null;
+    try {
+      oldDir = await ops.sub(grad, previousGrad);
+      const [ys, yy] = await ops.dotPairWithRight(oldStep, oldDir, oldDir);
+      previousStep = null;
+      if (ys > 1e-10) {
+        lbfgsHDiag = ys / yy;
+        lbfgsHistory.push({ oldDir, oldStep, rho: 1 / ys });
+        oldDir = null;
+        if (lbfgsHistory.length > config.lbfgsMemory) {
+          const removed = lbfgsHistory.shift();
+          if (removed !== undefined) disposeHistoryEntry(removed);
+        }
+        return;
       }
-      return;
+      ops.dispose(oldStep);
+    } finally {
+      if (oldDir !== null) ops.dispose(oldDir);
     }
-    ops.dispose(oldStep);
-    ops.dispose(oldDir);
   };
 
   const makeLbfgsDirection = async (grad: TVector): Promise<TVector> => {
@@ -118,18 +118,37 @@ export const createInputOptimizer = <TVector>(
       await addLbfgsHistory(grad);
     }
     const direction = await makeLbfgsDirection(grad);
-    const stepSize =
-      lbfgsIteration === 1
-        ? Math.min(1, 1 / (await ops.absSum(grad))) * config.learningRate
-        : config.learningRate;
-    const nextInput = await ops.updateClamp(input, direction, -stepSize);
+    let nextInput: TVector;
+    let nextPreviousStep: TVector;
+    if (lbfgsIteration === 1) {
+      const stepSizeBuffer = await ops.lbfgsInitialStepSizeBuffer(
+        grad,
+        config.learningRate,
+      );
+      [nextInput, nextPreviousStep] =
+        await ops.updateClampAndScaleByScalarBuffer(
+          input,
+          direction,
+          stepSizeBuffer,
+          -1,
+          1,
+        );
+      ops.dispose(stepSizeBuffer);
+    } else {
+      [nextInput, nextPreviousStep] = await ops.updateClampAndScale(
+        input,
+        direction,
+        -config.learningRate,
+        config.learningRate,
+      );
+    }
 
     const nextPreviousGrad = await ops.clone(grad);
     if (previousGrad !== null) ops.dispose(previousGrad);
-    if (previousDirection !== null) ops.dispose(previousDirection);
+    if (previousStep !== null) ops.dispose(previousStep);
     previousGrad = nextPreviousGrad;
-    previousDirection = direction;
-    previousStepSize = stepSize;
+    previousStep = nextPreviousStep;
+    ops.dispose(direction);
     return nextInput;
   };
 
@@ -147,13 +166,12 @@ export const createInputOptimizer = <TVector>(
     if (adamM !== null) ops.dispose(adamM);
     if (adamV !== null) ops.dispose(adamV);
     if (previousGrad !== null) ops.dispose(previousGrad);
-    if (previousDirection !== null) ops.dispose(previousDirection);
+    if (previousStep !== null) ops.dispose(previousStep);
     for (const entry of lbfgsHistory) disposeHistoryEntry(entry);
     adamM = null;
     adamV = null;
     previousGrad = null;
-    previousDirection = null;
-    previousStepSize = null;
+    previousStep = null;
     lbfgsIteration = 0;
     lbfgsHDiag = 1;
     lbfgsHistory.length = 0;

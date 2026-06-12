@@ -1,14 +1,13 @@
 import {
   ownedBuffer,
+  readGpuBufferToArray,
   releaseOwnedBuffer,
   type GpuBufferRef,
   type OwnedGpuBuffer,
 } from "../../../runtime/bufferKernels";
 import {
-  BUFFER_USAGE_MAP_READ_COPY_DST,
   BUFFER_USAGE_STORAGE_COPY_SRC,
   BUFFER_USAGE_STORAGE_COPY_DST,
-  MAP_MODE_READ,
 } from "../../../runtime/gpuFlags";
 import { getOrCreateComputePipeline } from "../../../runtime/computePipelineCache";
 import { runBinaryOpToBuffer } from "../../../runtime/shaderRunner";
@@ -75,6 +74,32 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   out[i] = input[i] + direction[i] * scalarBuffer[0] * scalarScale[0];
 }`;
 
+const makeUpdateClampAndScaleByScalarShader = (count: number): string => `
+@group(0) @binding(0) var<storage, read> input: array<f32>;
+@group(0) @binding(1) var<storage, read> direction: array<f32>;
+@group(0) @binding(2) var<storage, read> scalarBuffer: array<f32>;
+@group(0) @binding(3) var<storage, read> scales: array<f32>;
+@group(0) @binding(4) var<storage, read_write> nextInput: array<f32>;
+@group(0) @binding(5) var<storage, read_write> nextStep: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  let updateScalar = scalarBuffer[0] * scales[0];
+  let stepScalar = scalarBuffer[0] * scales[1];
+  nextInput[i] = clamp(input[i] - direction[i] * updateScalar, 0.0, 1.0);
+  nextStep[i] = direction[i] * stepScalar;
+}`;
+
+const makeLbfgsInitialStepSizeShader = (learningRate: number): string => `
+@group(0) @binding(0) var<storage, read> absSum: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(1)
+fn main() {
+  let safeAbsSum = max(absSum[0], 0.00000000000000000001);
+  out[0] = min(1.0, 1.0 / safeAbsSum) * ${learningRate};
+}`;
+
 const makeUpdateClampShader = (count: number): string => `
 @group(0) @binding(0) var<storage, read> input: array<f32>;
 @group(0) @binding(1) var<storage, read> direction: array<f32>;
@@ -85,6 +110,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= ${count}u) { return; }
   out[i] = clamp(input[i] - learningRate[0] * direction[i], 0.0, 1.0);
+}`;
+
+const makeUpdateClampAndScaleShader = (count: number): string => `
+@group(0) @binding(0) var<storage, read> input: array<f32>;
+@group(0) @binding(1) var<storage, read> direction: array<f32>;
+@group(0) @binding(2) var<storage, read> scales: array<f32>;
+@group(0) @binding(3) var<storage, read_write> nextInput: array<f32>;
+@group(0) @binding(4) var<storage, read_write> nextStep: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${count}u) { return; }
+  nextInput[i] = clamp(input[i] - scales[0] * direction[i], 0.0, 1.0);
+  nextStep[i] = direction[i] * scales[1];
 }`;
 
 const makeAdamUpdateClampShader = (
@@ -375,6 +414,106 @@ const runAddScaledByScalarShader = (
   return ownedBuffer(outBuffer);
 };
 
+const runUpdateClampAndScaleByScalarShader = (
+  device: GPUDevice,
+  pipeline: GPUComputePipeline,
+  input: GpuBufferRef,
+  direction: GpuBufferRef,
+  scalarBuffer: GpuBufferRef,
+  count: number,
+  scalesBuffer: GPUBuffer,
+): readonly [OwnedGpuBuffer, OwnedGpuBuffer] => {
+  const nextInputBuffer = device.createBuffer({
+    size: count * Float32Array.BYTES_PER_ELEMENT,
+    usage: BUFFER_USAGE_STORAGE_COPY_SRC,
+  });
+  const nextStepBuffer = device.createBuffer({
+    size: count * Float32Array.BYTES_PER_ELEMENT,
+    usage: BUFFER_USAGE_STORAGE_COPY_SRC,
+  });
+  const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: input.buffer } },
+      { binding: 1, resource: { buffer: direction.buffer } },
+      { binding: 2, resource: { buffer: scalarBuffer.buffer } },
+      { binding: 3, resource: { buffer: scalesBuffer } },
+      { binding: 4, resource: { buffer: nextInputBuffer } },
+      { binding: 5, resource: { buffer: nextStepBuffer } },
+    ],
+  });
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.dispatchWorkgroups(Math.ceil(count / 64));
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  return [ownedBuffer(nextInputBuffer), ownedBuffer(nextStepBuffer)] as const;
+};
+
+const runLbfgsInitialStepSizeShader = (
+  device: GPUDevice,
+  pipeline: GPUComputePipeline,
+  absSumBuffer: GpuBufferRef,
+): OwnedGpuBuffer => {
+  const outBuffer = device.createBuffer({
+    size: Float32Array.BYTES_PER_ELEMENT,
+    usage: BUFFER_USAGE_STORAGE_COPY_SRC,
+  });
+  const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: absSumBuffer.buffer } },
+      { binding: 1, resource: { buffer: outBuffer } },
+    ],
+  });
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.dispatchWorkgroups(1);
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  return ownedBuffer(outBuffer);
+};
+
+const runUpdateClampAndScaleShader = (
+  device: GPUDevice,
+  pipeline: GPUComputePipeline,
+  input: GpuBufferRef,
+  direction: GpuBufferRef,
+  count: number,
+  scalesBuffer: GPUBuffer,
+): readonly [OwnedGpuBuffer, OwnedGpuBuffer] => {
+  const nextInputBuffer = device.createBuffer({
+    size: count * Float32Array.BYTES_PER_ELEMENT,
+    usage: BUFFER_USAGE_STORAGE_COPY_SRC,
+  });
+  const nextStepBuffer = device.createBuffer({
+    size: count * Float32Array.BYTES_PER_ELEMENT,
+    usage: BUFFER_USAGE_STORAGE_COPY_SRC,
+  });
+  const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: input.buffer } },
+      { binding: 1, resource: { buffer: direction.buffer } },
+      { binding: 2, resource: { buffer: scalesBuffer } },
+      { binding: 3, resource: { buffer: nextInputBuffer } },
+      { binding: 4, resource: { buffer: nextStepBuffer } },
+    ],
+  });
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.dispatchWorkgroups(Math.ceil(count / 64));
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  return [ownedBuffer(nextInputBuffer), ownedBuffer(nextStepBuffer)] as const;
+};
+
 const runAddScaledByDotAndScalarShader = (
   device: GPUDevice,
   pipeline: GPUComputePipeline,
@@ -446,24 +585,8 @@ const readScalar = async (
   device: GPUDevice,
   sourceBuffer: GPUBuffer,
 ): Promise<number> => {
-  const readBuffer = device.createBuffer({
-    size: Float32Array.BYTES_PER_ELEMENT,
-    usage: BUFFER_USAGE_MAP_READ_COPY_DST,
-  });
-  const encoder = device.createCommandEncoder();
-  encoder.copyBufferToBuffer(
-    sourceBuffer,
-    0,
-    readBuffer,
-    0,
-    Float32Array.BYTES_PER_ELEMENT,
-  );
-  device.queue.submit([encoder.finish()]);
-  await readBuffer.mapAsync(MAP_MODE_READ);
-  const scalar = new Float32Array(readBuffer.getMappedRange().slice(0))[0];
-  readBuffer.unmap();
-  readBuffer.destroy();
-  return scalar;
+  const values = await readGpuBufferToArray(device, sourceBuffer, 1);
+  return values[0];
 };
 
 const dotProduct = async (
@@ -497,9 +620,11 @@ const dotProduct = async (
     current = next;
     currentCount = nextCount;
   }
-  const scalar = await readScalar(device, current.buffer);
-  releaseOwnedBuffer(current);
-  return scalar;
+  try {
+    return await readScalar(device, current.buffer);
+  } finally {
+    releaseOwnedBuffer(current);
+  }
 };
 
 const dotToScalarBuffer = async (
@@ -545,6 +670,20 @@ const absSum = async (
   input: GpuBufferRef,
   count: number,
 ): Promise<number> => {
+  const current = await absSumToScalarBuffer(device, getPipeline, input, count);
+  try {
+    return await readScalar(device, current.buffer);
+  } finally {
+    releaseOwnedBuffer(current);
+  }
+};
+
+const absSumToScalarBuffer = async (
+  device: GPUDevice,
+  getPipeline: (key: string, shader: string) => GPUComputePipeline,
+  input: GpuBufferRef,
+  count: number,
+): Promise<OwnedGpuBuffer> => {
   let current = runSingleInputShader(
     device,
     getPipeline(`abs:${count}`, makeAbsShader(count)),
@@ -568,9 +707,7 @@ const absSum = async (
     current = next;
     currentCount = nextCount;
   }
-  const scalar = await readScalar(device, current.buffer);
-  releaseOwnedBuffer(current);
-  return scalar;
+  return current;
 };
 
 const dotPairWithRight = async (
@@ -609,25 +746,12 @@ const dotPairWithRight = async (
     current = next;
     currentCount = nextCount;
   }
-  const readBuffer = device.createBuffer({
-    size: 2 * Float32Array.BYTES_PER_ELEMENT,
-    usage: BUFFER_USAGE_MAP_READ_COPY_DST,
-  });
-  const encoder = device.createCommandEncoder();
-  encoder.copyBufferToBuffer(
-    current.buffer,
-    0,
-    readBuffer,
-    0,
-    2 * Float32Array.BYTES_PER_ELEMENT,
-  );
-  device.queue.submit([encoder.finish()]);
-  await readBuffer.mapAsync(MAP_MODE_READ);
-  const pair = new Float32Array(readBuffer.getMappedRange().slice(0));
-  readBuffer.unmap();
-  readBuffer.destroy();
-  releaseOwnedBuffer(current);
-  return [pair[0], pair[1]] as const;
+  try {
+    const pair = await readGpuBufferToArray(device, current.buffer, 2);
+    return [pair[0], pair[1]] as const;
+  } finally {
+    releaseOwnedBuffer(current);
+  }
 };
 
 export const createGpuVectorOps = (
@@ -635,23 +759,31 @@ export const createGpuVectorOps = (
   count: number,
 ): InputOptimizerVectorOps<GpuBufferRef> => {
   const getPipeline = createPipelineCache(device);
-  const clonePipeline = getPipeline("clone", makeCloneShader(count));
-  const scalePipeline = getPipeline("scale", makeScaleShader(count));
+  const clonePipeline = getPipeline(`clone:${count}`, makeCloneShader(count));
+  const scalePipeline = getPipeline(`scale:${count}`, makeScaleShader(count));
   const addScaledPipeline = getPipeline(
-    "add-scaled",
+    `add-scaled:${count}`,
     makeAddScaledShader(count),
   );
   const addScaledByDotAndScalarPipeline = getPipeline(
-    "add-scaled-by-dot-and-scalar",
+    `add-scaled-by-dot-and-scalar:${count}`,
     makeAddScaledByDotAndScalarShader(count),
   );
   const addScaledByScalarPipeline = getPipeline(
-    "add-scaled-by-scalar",
+    `add-scaled-by-scalar:${count}`,
     makeAddScaledByScalarShader(count),
   );
+  const updateClampAndScaleByScalarPipeline = getPipeline(
+    `update-clamp-and-scale-by-scalar:${count}`,
+    makeUpdateClampAndScaleByScalarShader(count),
+  );
   const updateClampPipeline = getPipeline(
-    "update-clamp",
+    `update-clamp:${count}`,
     makeUpdateClampShader(count),
+  );
+  const updateClampAndScalePipeline = getPipeline(
+    `update-clamp-and-scale:${count}`,
+    makeUpdateClampAndScaleShader(count),
   );
   const scalarParameterBuffer = device.createBuffer({
     size: Float32Array.BYTES_PER_ELEMENT,
@@ -666,6 +798,10 @@ export const createGpuVectorOps = (
     usage: BUFFER_USAGE_STORAGE_COPY_DST,
   });
   const dotAndScalarScalesParameterBuffer = device.createBuffer({
+    size: Float32Array.BYTES_PER_ELEMENT * 2,
+    usage: BUFFER_USAGE_STORAGE_COPY_DST,
+  });
+  const updateAndStepScalesParameterBuffer = device.createBuffer({
     size: Float32Array.BYTES_PER_ELEMENT * 2,
     usage: BUFFER_USAGE_STORAGE_COPY_DST,
   });
@@ -784,6 +920,53 @@ export const createGpuVectorOps = (
       );
     },
 
+    updateClampAndScaleByScalarBuffer: async (
+      input: GpuBufferRef,
+      direction: GpuBufferRef,
+      scalarBuffer: GpuBufferRef,
+      updateScalarScale: number,
+      stepScalarScale: number,
+    ): Promise<readonly [GpuBufferRef, GpuBufferRef]> => {
+      device.queue.writeBuffer(
+        updateAndStepScalesParameterBuffer,
+        0,
+        new Float32Array([updateScalarScale, stepScalarScale]),
+      );
+      return runUpdateClampAndScaleByScalarShader(
+        device,
+        updateClampAndScaleByScalarPipeline,
+        input,
+        direction,
+        scalarBuffer,
+        count,
+        updateAndStepScalesParameterBuffer,
+      );
+    },
+
+    lbfgsInitialStepSizeBuffer: async (
+      grad: GpuBufferRef,
+      learningRate: number,
+    ): Promise<GpuBufferRef> => {
+      const absSumBuffer = await absSumToScalarBuffer(
+        device,
+        getPipeline,
+        grad,
+        count,
+      );
+      try {
+        return runLbfgsInitialStepSizeShader(
+          device,
+          getPipeline(
+            `lbfgs-initial-step-size:${learningRate}`,
+            makeLbfgsInitialStepSizeShader(learningRate),
+          ),
+          absSumBuffer,
+        );
+      } finally {
+        releaseOwnedBuffer(absSumBuffer);
+      }
+    },
+
     dot: async (a: GpuBufferRef, b: GpuBufferRef): Promise<number> =>
       dotProduct(device, getPipeline, a, b, count),
 
@@ -812,6 +995,27 @@ export const createGpuVectorOps = (
         [{ binding: 3, resource: { buffer: learningRateParameterBuffer } }],
       );
       return out;
+    },
+
+    updateClampAndScale: async (
+      input: GpuBufferRef,
+      direction: GpuBufferRef,
+      learningRate: number,
+      stepScale: number,
+    ): Promise<readonly [GpuBufferRef, GpuBufferRef]> => {
+      device.queue.writeBuffer(
+        updateAndStepScalesParameterBuffer,
+        0,
+        new Float32Array([learningRate, stepScale]),
+      );
+      return runUpdateClampAndScaleShader(
+        device,
+        updateClampAndScalePipeline,
+        input,
+        direction,
+        count,
+        updateAndStepScalesParameterBuffer,
+      );
     },
 
     adamUpdateClamp: async (

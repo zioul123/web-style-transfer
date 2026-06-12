@@ -1,7 +1,12 @@
 import type { WorkerRequest } from "../../../types";
 
 type TensorOpRequest = Extract<WorkerRequest, { type: "tensor-op" }>;
-import { createTensor } from "../../index";
+import {
+  createFeatureMatrix,
+  createPointCloudKnn,
+  createSurfacePoolMap,
+  createTensor,
+} from "../../tensor";
 import {
   runConv2dBackwardInputReadback,
   runConv2dForwardReadback,
@@ -15,6 +20,20 @@ import {
   runNormalizeBackward,
   runNormalizeForward,
 } from "../ops/normalization/normalize.run";
+import {
+  runPointFeatureNormalizeBackwardReadback,
+  runPointFeatureNormalizeForwardReadback,
+  runPointwiseExpBackwardReadback,
+  runPointwiseExpForwardReadback,
+} from "../ops/pointcloud/featureMatrix.run";
+import {
+  runPointCloudConvBackwardFeaturesReadback,
+  runPointCloudConvForwardReadback,
+} from "../ops/pointcloud/pcConv.run";
+import {
+  runSurfacePoolBackwardReadback,
+  runSurfacePoolForwardReadback,
+} from "../ops/pointcloud/surfacePool.run";
 import {
   runMaxPool2dBackward,
   runMaxPool2dForward,
@@ -107,6 +126,176 @@ export const routeTensorOp = async (
         input.shape,
         payload.mean,
         payload.std,
+      );
+      sendTensorOpResult(payload.id, { values: output });
+      return;
+    }
+    if (payload.op === "exp-forward") {
+      const input = createFeatureMatrix(
+        payload.input.pointCount,
+        payload.input.channelCount,
+        payload.input.values,
+      );
+      const output = await runPointwiseExpForwardReadback(input.values);
+      sendTensorOpResult(payload.id, { values: output });
+      return;
+    }
+    if (payload.op === "exp-backward") {
+      const input = createFeatureMatrix(
+        payload.input.pointCount,
+        payload.input.channelCount,
+        payload.input.values,
+      );
+      const gradOut = createFeatureMatrix(
+        payload.gradOut.pointCount,
+        payload.gradOut.channelCount,
+        payload.gradOut.values,
+      );
+      if (
+        input.pointCount !== gradOut.pointCount ||
+        input.channelCount !== gradOut.channelCount
+      ) {
+        throw new Error("exp-backward input and gradOut shapes must match.");
+      }
+      const output = await runPointwiseExpBackwardReadback(
+        input.values,
+        gradOut.values,
+      );
+      sendTensorOpResult(payload.id, { values: output });
+      return;
+    }
+    if (payload.op === "point-feature-normalize-forward") {
+      const input = createFeatureMatrix(
+        payload.input.pointCount,
+        payload.input.channelCount,
+        payload.input.values,
+      );
+      const output = await runPointFeatureNormalizeForwardReadback(
+        input.values,
+        { pointCount: input.pointCount, channelCount: input.channelCount },
+        payload.mean,
+        payload.std,
+      );
+      sendTensorOpResult(payload.id, { values: output });
+      return;
+    }
+    if (payload.op === "point-feature-normalize-backward") {
+      const gradOut = createFeatureMatrix(
+        payload.gradOut.pointCount,
+        payload.gradOut.channelCount,
+        payload.gradOut.values,
+      );
+      const output = await runPointFeatureNormalizeBackwardReadback(
+        gradOut.values,
+        { pointCount: gradOut.pointCount, channelCount: gradOut.channelCount },
+        payload.std,
+      );
+      sendTensorOpResult(payload.id, { values: output });
+      return;
+    }
+    if (payload.op === "pc-conv-forward") {
+      const input = createFeatureMatrix(
+        payload.input.pointCount,
+        payload.input.channelCount,
+        payload.input.values,
+      );
+      const knn = createPointCloudKnn(
+        payload.knn.sampleCount,
+        payload.knn.kernelPointCount,
+        payload.knn.neighborCount,
+        payload.knn.indices,
+        payload.knn.weights,
+      );
+      const weight = createTensor(payload.weight.shape, payload.weight.values);
+      const output = await runPointCloudConvForwardReadback(
+        input.values,
+        { pointCount: input.pointCount, channelCount: input.channelCount },
+        knn.indices,
+        knn.weights,
+        knn.sampleCount,
+        knn.neighborCount,
+        weight.values,
+        weight.shape,
+        payload.bias,
+        payload.kernelIndexMap,
+        payload.pcConvForwardKernel,
+        payload.pcConvMaxIntermediateBytes,
+      );
+      sendTensorOpResult(payload.id, { values: output });
+      return;
+    }
+    if (payload.op === "pc-conv-backward-features") {
+      const gradOut = createFeatureMatrix(
+        payload.gradOut.pointCount,
+        payload.gradOut.channelCount,
+        payload.gradOut.values,
+      );
+      const knn = createPointCloudKnn(
+        payload.knn.sampleCount,
+        payload.knn.kernelPointCount,
+        payload.knn.neighborCount,
+        payload.knn.indices,
+        payload.knn.weights,
+      );
+      const weight = createTensor(payload.weight.shape, payload.weight.values);
+      const output = await runPointCloudConvBackwardFeaturesReadback(
+        gradOut.values,
+        payload.inputShape,
+        knn.indices,
+        knn.weights,
+        knn.sampleCount,
+        knn.neighborCount,
+        weight.values,
+        weight.shape,
+        payload.kernelIndexMap,
+        payload.pcConvBackwardFeaturesKernel,
+        payload.pcConvMaxIntermediateBytes,
+      );
+      sendTensorOpResult(payload.id, { values: output });
+      return;
+    }
+    if (payload.op === "surface-pool-forward") {
+      const input = createFeatureMatrix(
+        payload.input.pointCount,
+        payload.input.channelCount,
+        payload.input.values,
+      );
+      const pool = createSurfacePoolMap(
+        payload.pool.inputPointCount,
+        payload.pool.outputPointCount,
+        payload.pool.mapping,
+      );
+      const output = await runSurfacePoolForwardReadback(
+        input.values,
+        { pointCount: input.pointCount, channelCount: input.channelCount },
+        pool.outputPointCount,
+        pool.mapping,
+      );
+      sendTensorOpResult(payload.id, { values: output });
+      return;
+    }
+    if (payload.op === "surface-pool-backward") {
+      const input = createFeatureMatrix(
+        payload.input.pointCount,
+        payload.input.channelCount,
+        payload.input.values,
+      );
+      const gradOut = createFeatureMatrix(
+        payload.gradOut.pointCount,
+        payload.gradOut.channelCount,
+        payload.gradOut.values,
+      );
+      const pool = createSurfacePoolMap(
+        payload.pool.inputPointCount,
+        payload.pool.outputPointCount,
+        payload.pool.mapping,
+      );
+      const output = await runSurfacePoolBackwardReadback(
+        input.values,
+        gradOut.values,
+        { pointCount: input.pointCount, channelCount: input.channelCount },
+        pool.outputPointCount,
+        pool.mapping,
       );
       sendTensorOpResult(payload.id, { values: output });
       return;

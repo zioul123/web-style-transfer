@@ -56,8 +56,8 @@ const toFullWeights = async (
     const layer = cache[layerIndex];
     if (layer === undefined) continue;
     weights[`conv${layerIndex}.weightShape`] = [...layer.shape];
-    weights[`conv${layerIndex}.weightValues`] = Array.from(layer.values);
-    weights[`conv${layerIndex}.biasValues`] = Array.from(layer.bias);
+    weights[`conv${layerIndex}.weightValues`] = layer.values;
+    weights[`conv${layerIndex}.biasValues`] = layer.bias;
   }
   return weights;
 };

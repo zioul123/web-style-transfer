@@ -27,9 +27,12 @@ import {
   runReluBackwardBuffer,
   runReluForwardBuffer,
 } from "../../ops/relu/relu.run";
-import type { GpuBufferRef, OwnedGpuBuffer } from "../../runtime/bufferKernels";
+import {
+  setKernelRuntimeOptions,
+  type GpuBufferRef,
+  type OwnedGpuBuffer,
+} from "../../runtime/bufferKernels";
 import { BUFFER_USAGE_STORAGE_COPY_SRC } from "../../runtime/gpuFlags";
-import { setKernelRuntimeOptions } from "../../runtime/bufferKernels";
 import type {
   OptimizationRuntimeContext,
   OptimizationShape4D,
@@ -42,8 +45,8 @@ import {
 } from "./updateKernels";
 import type {
   WorkerKernelFamily,
-  WorkerKernelStats,
   WorkerKernelOptimizationFlags,
+  WorkerKernelStats,
 } from "../../../../types";
 
 export type TensorShape4D = OptimizationShape4D;

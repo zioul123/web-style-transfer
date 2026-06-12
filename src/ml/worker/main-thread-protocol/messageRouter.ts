@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 
 import type { WorkerRequest } from "../../../types";
-import { createTensor } from "../../index";
+import { createTensor } from "../../tensor";
 import { runFirstPoolOptimizer } from "../pipelines/optimization/firstPoolOptimizer";
 import {
   clearStyleTransferSession,

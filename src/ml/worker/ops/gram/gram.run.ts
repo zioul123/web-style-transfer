@@ -48,7 +48,7 @@ export const runGramMatrixBuffer = async (
     kernelVariant === "symmetric-parallel-dot"
       ? (channels * (channels + 1)) / 2
       : outCount;
-  return ownedBuffer(
+  const outBuffer =
     kernelVariant === "symmetric-parallel-dot"
       ? runUnaryShaderToBufferWithDispatch(
           gpuDevice,
@@ -60,8 +60,9 @@ export const runGramMatrixBuffer = async (
         )
       : runUnaryShaderToBuffer(gpuDevice, shader, input.buffer, outCount, [
           { binding: 1, resource: { buffer: uniformBuffer } },
-        ]),
-  );
+        ]);
+  uniformBuffer.destroy();
+  return ownedBuffer(outBuffer);
 };
 
 export const runGramMatrix = async (
@@ -107,18 +108,18 @@ export const runGramBackwardBuffer = async (
     0,
     new Uint32Array([channels, spatial, norm, 0]),
   );
-  return ownedBuffer(
-    runUnaryShaderToBuffer(
-      gpuDevice,
-      makeGramBackwardShader(shape[1] * shape[2] * shape[3]),
-      input.buffer,
-      shape[1] * shape[2] * shape[3],
-      [
-        { binding: 1, resource: { buffer: gradOut.buffer } },
-        { binding: 2, resource: { buffer: uniformBuffer } },
-      ],
-    ),
+  const outBuffer = runUnaryShaderToBuffer(
+    gpuDevice,
+    makeGramBackwardShader(shape[1] * shape[2] * shape[3]),
+    input.buffer,
+    shape[1] * shape[2] * shape[3],
+    [
+      { binding: 1, resource: { buffer: gradOut.buffer } },
+      { binding: 2, resource: { buffer: uniformBuffer } },
+    ],
   );
+  uniformBuffer.destroy();
+  return ownedBuffer(outBuffer);
 };
 
 export const runGramBackward = async (

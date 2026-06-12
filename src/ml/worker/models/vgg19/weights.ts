@@ -1,8 +1,9 @@
 import type { TensorShape4D } from "../../runtime/tensorShapes";
+import { FingerprintBuilder } from "../../runtime/fingerprint";
 
 export type Vgg19WeightsRecord = Record<
   string,
-  number[] | [number, number, number, number]
+  number[] | Float32Array | [number, number, number, number]
 >;
 
 type ManifestTensorEntry = {
@@ -59,12 +60,35 @@ const MAX_VGG19_FEATURE_LAYER_INDEX = 29;
 
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
-const isNumberArray = (value: unknown): value is number[] =>
-  Array.isArray(value) && value.every(isFiniteNumber);
 const isTensorShape4D = (value: unknown): value is TensorShape4D =>
   Array.isArray(value) &&
   value.length === 4 &&
   value.every((d) => Number.isInteger(d) && d > 0);
+
+const toFiniteFloat32Array = (
+  value: unknown,
+  fingerprint?: FingerprintBuilder,
+): Float32Array | null => {
+  if (value instanceof Float32Array) {
+    fingerprint?.addWord(value.length);
+    for (let index = 0; index < value.length; index += 1) {
+      const entry = value[index];
+      if (!Number.isFinite(entry)) return null;
+      fingerprint?.addFloat32(entry);
+    }
+    return value;
+  }
+  if (!Array.isArray(value)) return null;
+  const out = new Float32Array(value.length);
+  fingerprint?.addWord(value.length);
+  for (let index = 0; index < value.length; index += 1) {
+    const entry = value[index];
+    if (!isFiniteNumber(entry)) return null;
+    out[index] = entry;
+    fingerprint?.addFloat32(entry);
+  }
+  return out;
+};
 
 const tensorElemCount = (shape: readonly number[]): number =>
   shape.reduce((a, b) => a * b, 1);
@@ -168,6 +192,23 @@ const decodeWeights = (
 export const parseVgg19ConvLayerCache = (
   weights: Vgg19WeightsRecord,
 ): Vgg19ConvLayerCache => {
+  return parseVgg19ConvLayerCacheInternal(weights).convLayerCache;
+};
+
+export const parseVgg19ConvLayerCacheWithFingerprint = (
+  weights: Vgg19WeightsRecord,
+): {
+  convLayerCache: Vgg19ConvLayerCache;
+  fingerprint: string;
+} => parseVgg19ConvLayerCacheInternal(weights, new FingerprintBuilder());
+
+const parseVgg19ConvLayerCacheInternal = (
+  weights: Vgg19WeightsRecord,
+  fingerprint?: FingerprintBuilder,
+): {
+  convLayerCache: Vgg19ConvLayerCache;
+  fingerprint: string;
+} => {
   const convLayerCache: Vgg19ConvLayerCache = {};
   for (
     let layerIndex = 0;
@@ -177,19 +218,22 @@ export const parseVgg19ConvLayerCache = (
     const weightShape = weights[`conv${layerIndex}.weightShape`];
     const weightValues = weights[`conv${layerIndex}.weightValues`];
     const biasValues = weights[`conv${layerIndex}.biasValues`];
-    if (
-      isTensorShape4D(weightShape) &&
-      isNumberArray(weightValues) &&
-      isNumberArray(biasValues)
-    ) {
-      convLayerCache[layerIndex] = {
-        shape: weightShape,
-        values: new Float32Array(weightValues),
-        bias: new Float32Array(biasValues),
-      };
-    }
+    if (!isTensorShape4D(weightShape)) continue;
+    fingerprint?.addWord(layerIndex);
+    for (const dimension of weightShape) fingerprint?.addWord(dimension);
+    const values = toFiniteFloat32Array(weightValues, fingerprint);
+    const bias = toFiniteFloat32Array(biasValues, fingerprint);
+    if (values === null || bias === null) continue;
+    convLayerCache[layerIndex] = {
+      shape: weightShape,
+      values,
+      bias,
+    };
   }
-  return convLayerCache;
+  return {
+    convLayerCache,
+    fingerprint: fingerprint?.digest() ?? "",
+  };
 };
 
 const hex = (bytes: Uint8Array): string =>

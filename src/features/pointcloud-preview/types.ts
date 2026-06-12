@@ -57,3 +57,40 @@ export type PreviewCameraState = {
   readonly position: readonly [number, number, number];
   readonly target: readonly [number, number, number];
 };
+
+export type MeshColorMode = "baked" | "fragment-knn";
+
+export type PointCloudPreviewViewAxis =
+  | "pos-x"
+  | "neg-x"
+  | "pos-y"
+  | "neg-y"
+  | "pos-z"
+  | "neg-z";
+
+export type PointCloudPreviewCameraCommand =
+  | {
+      readonly id: number;
+      readonly type: "frame";
+    }
+  | {
+      readonly id: number;
+      readonly type: "restore";
+      readonly camera: PreviewCameraState;
+    }
+  | {
+      readonly id: number;
+      readonly type: "snap-axis";
+      readonly axis: PointCloudPreviewViewAxis;
+    };
+
+export type PointCloudPreviewViewSettings = {
+  readonly showMesh: boolean;
+  readonly showPoints: boolean;
+  readonly showWireframe: boolean;
+  readonly meshColorMode: MeshColorMode;
+  readonly pointSize: number;
+  readonly disableGammaDecoding: boolean;
+  readonly brightness: number;
+  readonly swapYZ: boolean;
+};

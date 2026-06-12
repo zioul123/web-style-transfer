@@ -110,3 +110,25 @@ test("prepareMeshPointCloudData returns finite multi-resolution samples and geod
     expectFiniteArray(geodesic.knn.weights);
   }
 });
+
+test("prepareMeshPointCloudData keeps fractional positive budgets non-empty", () => {
+  const mesh = analyzeMeshGeometry({
+    vertices: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+    faces: new Uint32Array([0, 1, 2]),
+    uvs: new Float32Array([0, 0, 1, 0, 0, 1]),
+  });
+
+  const prepared = prepareMeshPointCloudData(mesh, tinyTexture, {
+    radiusFactor: 0.01,
+    samplesPerFace: [0.125],
+    geodesicDistRatio: 0.5,
+    convAttenuation: 0.6827,
+    knnK: [1],
+    seed: 7,
+  });
+
+  expect(prepared.pointClouds).toHaveLength(1);
+  expect(prepared.pointClouds[0].samplesPerFace).toBe(0.125);
+  expect(prepared.pointClouds[0].count).toBe(1);
+  expect(prepared.geodesicLayers[0].knn.indices).toHaveLength(9);
+});

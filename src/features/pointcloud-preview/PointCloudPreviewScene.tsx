@@ -13,31 +13,15 @@ import {
   sampleInterpolatedColor,
 } from "./math/interpolation";
 import type {
+  MeshColorMode,
   PointCloudHitSample,
   PointCloudMeshData,
+  PointCloudPreviewCameraCommand,
+  PointCloudPreviewViewAxis,
   PreviewCameraState,
 } from "./types";
 
 export const maxFragmentShaderPointsPerCell = 256;
-
-type MeshColorMode = "baked" | "fragment-knn";
-type ViewAxis = "pos-x" | "neg-x" | "pos-y" | "neg-y" | "pos-z" | "neg-z";
-
-export type PointCloudPreviewCameraCommand =
-  | {
-      readonly id: number;
-      readonly type: "frame";
-    }
-  | {
-      readonly id: number;
-      readonly type: "restore";
-      readonly camera: PreviewCameraState;
-    }
-  | {
-      readonly id: number;
-      readonly type: "snap-axis";
-      readonly axis: ViewAxis;
-    };
 
 type PointCloudPreviewSceneProps = {
   readonly data: PointCloudMeshData;
@@ -300,7 +284,10 @@ const buildDefaultCameraState = (
   };
 };
 
-const axisVectorByView: Record<ViewAxis, readonly [number, number, number]> = {
+const axisVectorByView: Record<
+  PointCloudPreviewViewAxis,
+  readonly [number, number, number]
+> = {
   "pos-x": [1, 0, 0],
   "neg-x": [-1, 0, 0],
   "pos-y": [0, 1, 0],
@@ -745,6 +732,9 @@ function SceneContent({
   );
 
   const markerRadius = Math.max(data.bounds.radius * 0.018, 0.004);
+  const sceneRadius = Math.max(data.bounds.radius, 0.25);
+  const fogNear = sceneRadius * 4;
+  const fogFar = sceneRadius * 12;
   const effectivePointSize = Math.max(data.bounds.radius * pointSize, 0.008);
   const displayHighlightColor = useMemo(
     () =>
@@ -795,7 +785,7 @@ function SceneContent({
   return (
     <>
       <color attach="background" args={["#09111f"]} />
-      <fog attach="fog" args={["#09111f", 6, 24]} />
+      <fog attach="fog" args={["#09111f", fogNear, fogFar]} />
       <group matrixAutoUpdate={false} matrix={transformMatrix}>
         <gridHelper
           args={[data.bounds.radius * 6, 12, "#164e63", "#0f172a"]}

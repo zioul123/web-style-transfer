@@ -1,5 +1,5 @@
 import type { WorkerRequest, WorkerTensorOperand } from "../../../types";
-import { createTensor } from "../../index";
+import { createTensor } from "../../tensor";
 
 export const isBinaryTensorOpPayload = (
   payload: WorkerRequest,

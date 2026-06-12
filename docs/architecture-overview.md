@@ -9,7 +9,7 @@ The app has three main layers:
 1. **Main-thread UI and orchestration**
    - React app shell in `src/App.tsx`.
    - Style-transfer controller, model-pack loading, cache status, and image/tensor conversion in `src/features/style-transfer/`.
-   - Benchmark route in `src/BenchmarkApp.tsx`.
+   - Image benchmark route in `src/BenchmarkApp.tsx`.
    - Point-cloud preview route in `src/PointCloudPreviewApp.tsx` and `src/features/pointcloud-preview/`.
 2. **Typed worker protocol**
    - Public type exports through `src/types.ts`.
@@ -102,8 +102,11 @@ The public import surface is `src/types.ts`, which re-exports the split protocol
 
 The protocol is organized as:
 
-- `core.ts`: tensor shapes, worker tensor payloads, operands, and tensor response payloads.
-- `tensor-ops.ts`: op-level request variants used by parity tests and debugging.
+- `core.ts`: tensor shapes, feature-matrix and point-cloud metadata payloads,
+  operands, and tensor response payloads.
+- `tensor-ops.ts`: op-level request variants used by parity tests and
+  debugging, including readback-heavy point-cloud feature, convolution, and
+  surface-pool routes.
 - `pipelines.ts`: first-pool/full-style-transfer pipeline requests, optimizer flags, and run stats.
 - `messages.ts`: full worker request/response unions.
 
@@ -170,6 +173,9 @@ Worker ops are grouped by operator family under `src/ml/worker/ops/`:
 - `relu/`: ReLU forward/backward.
 - `pooling/`: max-pool forward/backward.
 - `normalization/`: ImageNet normalization forward/backward.
+- `pointcloud/`: point-feature exp/normalization, point-cloud convolution, and
+  surface-pool helpers for point-cloud parity routes and GPU-resident pipeline
+  experiments.
 - `gram/`: Gram matrix forward/backward.
 - `loss/`: MSE, content loss, style loss, and weighted scalar sum helpers.
 
