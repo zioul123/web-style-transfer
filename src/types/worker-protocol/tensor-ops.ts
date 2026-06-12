@@ -1,4 +1,20 @@
-import type { TensorShape, WorkerTensor, WorkerTensorOperand } from "./core";
+import type {
+  FeatureMatrixShape,
+  TensorShape,
+  WorkerFeatureMatrix,
+  WorkerPointCloudKnn,
+  WorkerSurfacePoolMap,
+  WorkerTensor,
+  WorkerTensorOperand,
+} from "./core";
+
+export type WorkerPointCloudConvForwardKernel =
+  | "scalar"
+  | "interpolate-project";
+
+export type WorkerPointCloudConvBackwardFeaturesKernel =
+  | "scalar"
+  | "reverse-adjacency";
 
 export type WorkerTensorBinaryOpRequest = {
   type: "tensor-op";
@@ -119,6 +135,81 @@ export type WorkerTensorNormalizeForwardOpRequest = {
   std: number[];
 };
 
+export type WorkerPointwiseExpForwardOpRequest = {
+  type: "tensor-op";
+  id: string;
+  op: "exp-forward";
+  input: WorkerFeatureMatrix;
+};
+
+export type WorkerPointwiseExpBackwardOpRequest = {
+  type: "tensor-op";
+  id: string;
+  op: "exp-backward";
+  input: WorkerFeatureMatrix;
+  gradOut: WorkerFeatureMatrix;
+};
+
+export type WorkerPointFeatureNormalizeForwardOpRequest = {
+  type: "tensor-op";
+  id: string;
+  op: "point-feature-normalize-forward";
+  input: WorkerFeatureMatrix;
+  mean: number[];
+  std: number[];
+};
+
+export type WorkerPointFeatureNormalizeBackwardOpRequest = {
+  type: "tensor-op";
+  id: string;
+  op: "point-feature-normalize-backward";
+  gradOut: WorkerFeatureMatrix;
+  std: number[];
+};
+
+export type WorkerPointCloudConvForwardOpRequest = {
+  type: "tensor-op";
+  id: string;
+  op: "pc-conv-forward";
+  input: WorkerFeatureMatrix;
+  knn: WorkerPointCloudKnn;
+  weight: WorkerTensor;
+  bias: number[];
+  kernelIndexMap?: number[];
+  pcConvForwardKernel?: WorkerPointCloudConvForwardKernel;
+  pcConvMaxIntermediateBytes?: number;
+};
+
+export type WorkerPointCloudConvBackwardFeaturesOpRequest = {
+  type: "tensor-op";
+  id: string;
+  op: "pc-conv-backward-features";
+  inputShape: FeatureMatrixShape;
+  gradOut: WorkerFeatureMatrix;
+  knn: WorkerPointCloudKnn;
+  weight: WorkerTensor;
+  kernelIndexMap?: number[];
+  pcConvBackwardFeaturesKernel?: WorkerPointCloudConvBackwardFeaturesKernel;
+  pcConvMaxIntermediateBytes?: number;
+};
+
+export type WorkerSurfacePoolForwardOpRequest = {
+  type: "tensor-op";
+  id: string;
+  op: "surface-pool-forward";
+  input: WorkerFeatureMatrix;
+  pool: WorkerSurfacePoolMap;
+};
+
+export type WorkerSurfacePoolBackwardOpRequest = {
+  type: "tensor-op";
+  id: string;
+  op: "surface-pool-backward";
+  input: WorkerFeatureMatrix;
+  gradOut: WorkerFeatureMatrix;
+  pool: WorkerSurfacePoolMap;
+};
+
 export type WorkerTensorOpRequest =
   | WorkerTensorBinaryOpRequest
   | WorkerTensorClampOpRequest
@@ -132,5 +223,13 @@ export type WorkerTensorOpRequest =
   | WorkerTensorContentLossBackwardOpRequest
   | WorkerTensorStyleLossBackwardOpRequest
   | WorkerTensorNormalizeForwardOpRequest
+  | WorkerPointwiseExpForwardOpRequest
+  | WorkerPointwiseExpBackwardOpRequest
+  | WorkerPointFeatureNormalizeForwardOpRequest
+  | WorkerPointFeatureNormalizeBackwardOpRequest
+  | WorkerPointCloudConvForwardOpRequest
+  | WorkerPointCloudConvBackwardFeaturesOpRequest
+  | WorkerSurfacePoolForwardOpRequest
+  | WorkerSurfacePoolBackwardOpRequest
   | WorkerTensorReshapeGramOpRequest
   | WorkerTensorLossOpRequest;

@@ -51,32 +51,38 @@ export const runNormalizeForwardBuffer = async (
     new Uint32Array([channels, shape[2], shape[3]]),
   );
   const count = shape[1] * shape[2] * shape[3];
-  return ownedBuffer(
-    useVec4 && count % 4 === 0
-      ? runUnaryShaderToBufferWithDispatch(
-          gpuDevice,
-          makeNormalizeVec4Shader(count / 4),
-          input.buffer,
-          count,
-          count / 4,
-          [
-            { binding: 1, resource: { buffer: meanBuffer } },
-            { binding: 2, resource: { buffer: stdBuffer } },
-            { binding: 3, resource: { buffer: uniformBuffer } },
-          ],
-        )
-      : runUnaryShaderToBuffer(
-          gpuDevice,
-          makeNormalizeShader(count),
-          input.buffer,
-          count,
-          [
-            { binding: 1, resource: { buffer: meanBuffer } },
-            { binding: 2, resource: { buffer: stdBuffer } },
-            { binding: 3, resource: { buffer: uniformBuffer } },
-          ],
-        ),
-  );
+  try {
+    return ownedBuffer(
+      useVec4 && count % 4 === 0
+        ? runUnaryShaderToBufferWithDispatch(
+            gpuDevice,
+            makeNormalizeVec4Shader(count / 4),
+            input.buffer,
+            count,
+            count / 4,
+            [
+              { binding: 1, resource: { buffer: meanBuffer } },
+              { binding: 2, resource: { buffer: stdBuffer } },
+              { binding: 3, resource: { buffer: uniformBuffer } },
+            ],
+          )
+        : runUnaryShaderToBuffer(
+            gpuDevice,
+            makeNormalizeShader(count),
+            input.buffer,
+            count,
+            [
+              { binding: 1, resource: { buffer: meanBuffer } },
+              { binding: 2, resource: { buffer: stdBuffer } },
+              { binding: 3, resource: { buffer: uniformBuffer } },
+            ],
+          ),
+    );
+  } finally {
+    meanBuffer.destroy();
+    stdBuffer.destroy();
+    uniformBuffer.destroy();
+  }
 };
 
 export const runNormalizeForward = async (
@@ -93,15 +99,18 @@ export const runNormalizeForward = async (
   std: readonly number[],
 ): Promise<Float32Array> => {
   const inBuffer = uploadToOwnedBuffer(getGpuDevice(), input);
-  const outBuffer = await runNormalizeForwardBuffer(inBuffer, shape, mean, std);
-  const out = await readGpuBufferToArray(
-    getGpuDevice(),
-    outBuffer.buffer,
-    input.length,
-  );
-  releaseOwnedBuffer(inBuffer);
-  releaseOwnedBuffer(outBuffer);
-  return out;
+  let outBuffer: GpuBufferRef | null = null;
+  try {
+    outBuffer = await runNormalizeForwardBuffer(inBuffer, shape, mean, std);
+    return await readGpuBufferToArray(
+      getGpuDevice(),
+      outBuffer.buffer,
+      input.length,
+    );
+  } finally {
+    releaseOwnedBuffer(inBuffer);
+    if (outBuffer !== null) releaseOwnedBuffer(outBuffer);
+  }
 };
 
 export const runNormalizeBackward = async (
@@ -134,15 +143,20 @@ export const runNormalizeBackward = async (
     0,
     new Uint32Array([channels, shape[2], shape[3], 0]),
   );
-  return runUnaryShader(
-    makeNormalizeBackwardShader(gradOut.length),
-    gradOut,
-    gradOut.length,
-    [
-      { binding: 1, resource: { buffer: stdBuffer } },
-      { binding: 2, resource: { buffer: uniformBuffer } },
-    ],
-  );
+  try {
+    return await runUnaryShader(
+      makeNormalizeBackwardShader(gradOut.length),
+      gradOut,
+      gradOut.length,
+      [
+        { binding: 1, resource: { buffer: stdBuffer } },
+        { binding: 2, resource: { buffer: uniformBuffer } },
+      ],
+    );
+  } finally {
+    stdBuffer.destroy();
+    uniformBuffer.destroy();
+  }
 };
 
 export const runNormalizeBackwardBuffer = async (
@@ -171,28 +185,33 @@ export const runNormalizeBackwardBuffer = async (
     new Uint32Array([channels, shape[2], shape[3], 0]),
   );
   const count = shape[1] * shape[2] * shape[3];
-  return ownedBuffer(
-    useVec4 && count % 4 === 0
-      ? runUnaryShaderToBufferWithDispatch(
-          gpuDevice,
-          makeNormalizeBackwardVec4Shader(count / 4),
-          gradOut.buffer,
-          count,
-          count / 4,
-          [
-            { binding: 1, resource: { buffer: stdBuffer } },
-            { binding: 2, resource: { buffer: uniformBuffer } },
-          ],
-        )
-      : runUnaryShaderToBuffer(
-          gpuDevice,
-          makeNormalizeBackwardShader(count),
-          gradOut.buffer,
-          count,
-          [
-            { binding: 1, resource: { buffer: stdBuffer } },
-            { binding: 2, resource: { buffer: uniformBuffer } },
-          ],
-        ),
-  );
+  try {
+    return ownedBuffer(
+      useVec4 && count % 4 === 0
+        ? runUnaryShaderToBufferWithDispatch(
+            gpuDevice,
+            makeNormalizeBackwardVec4Shader(count / 4),
+            gradOut.buffer,
+            count,
+            count / 4,
+            [
+              { binding: 1, resource: { buffer: stdBuffer } },
+              { binding: 2, resource: { buffer: uniformBuffer } },
+            ],
+          )
+        : runUnaryShaderToBuffer(
+            gpuDevice,
+            makeNormalizeBackwardShader(count),
+            gradOut.buffer,
+            count,
+            [
+              { binding: 1, resource: { buffer: stdBuffer } },
+              { binding: 2, resource: { buffer: uniformBuffer } },
+            ],
+          ),
+    );
+  } finally {
+    stdBuffer.destroy();
+    uniformBuffer.destroy();
+  }
 };

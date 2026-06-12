@@ -15,7 +15,7 @@ The browser app is runnable and includes:
 - End-to-end style-transfer execution through VGG19 feature layers up to `conv5_1` / torch `features[28]`.
 - Optimizer support for SGD, Adam, and LBFGS-style input updates.
 - Manifest-backed VGG19 model packs, IndexedDB model-pack caching, and optional external model-pack hosting.
-- A `/benchmark` route for kernel-setting speed benchmarks, first-pool benchmarks, and model-pack acceptance checks.
+- A `/benchmark` route for image pipeline kernel-setting speed benchmarks, first-pool benchmarks, and model-pack acceptance checks.
 
 The implementation is still intentionally correctness-first in several kernels. The most important remaining work is performance tuning, browser/device QA, and cleaning up fixture/model-pack generation workflows.
 

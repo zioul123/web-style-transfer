@@ -1,4 +1,4 @@
-import type { TensorShape, WorkerTensor } from "./core";
+import type { TensorShape, WorkerFloatArray, WorkerTensor } from "./core";
 
 export type WorkerKernelFamily =
   | "convForward"
@@ -53,7 +53,7 @@ export type WorkerRunStyleTransferRequest = {
   std: [number, number, number];
   styleLayerIndices: number[];
   contentLayerIndex: number;
-  weights: Record<string, number[] | [number, number, number, number]>;
+  weights: Record<string, WorkerFloatArray | [number, number, number, number]>;
   contentWeight: number;
   styleWeight: number;
   learningRate: number;

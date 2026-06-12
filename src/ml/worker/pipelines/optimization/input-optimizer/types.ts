@@ -1,9 +1,4 @@
-import type { WorkerRequest } from "../../../../../types";
-
-export type InputOptimizerMode = Extract<
-  WorkerRequest,
-  { type: "run-style-transfer" }
->["optimizer"];
+export type InputOptimizerMode = "sgd" | "adam" | "lbfgs";
 
 export type InputOptimizerConfig = {
   optimizer: InputOptimizerMode;
@@ -42,6 +37,17 @@ export type InputOptimizerVectorOps<TVector> = {
     scalarBuffer: TVector,
     scalarScale: number,
   ) => Promise<TVector>;
+  updateClampAndScaleByScalarBuffer: (
+    input: TVector,
+    direction: TVector,
+    scalarBuffer: TVector,
+    updateScalarScale: number,
+    stepScalarScale: number,
+  ) => Promise<readonly [TVector, TVector]>;
+  lbfgsInitialStepSizeBuffer: (
+    grad: TVector,
+    learningRate: number,
+  ) => Promise<TVector>;
   dot: (a: TVector, b: TVector) => Promise<number>;
   dotPairWithRight: (
     leftA: TVector,
@@ -54,6 +60,12 @@ export type InputOptimizerVectorOps<TVector> = {
     direction: TVector,
     learningRate: number,
   ) => Promise<TVector>;
+  updateClampAndScale: (
+    input: TVector,
+    direction: TVector,
+    learningRate: number,
+    stepScale: number,
+  ) => Promise<readonly [TVector, TVector]>;
   adamUpdateClamp: (
     input: TVector,
     grad: TVector,

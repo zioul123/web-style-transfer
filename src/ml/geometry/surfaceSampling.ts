@@ -418,7 +418,10 @@ export const sampleTexturedSurfacePointCloud = (
   options?: SampleSurfaceOptions & SampleTextureOptions,
 ): TexturedSurfacePointCloud => {
   const mesh = ensureMeshGeometryAnalysis(meshInput);
-  const sampleCount = Math.floor(mesh.faceCount * samplesPerFace);
+  if (!Number.isFinite(samplesPerFace) || samplesPerFace <= 0) {
+    throw new Error("samplesPerFace must be a positive finite number.");
+  }
+  const sampleCount = Math.max(1, Math.floor(mesh.faceCount * samplesPerFace));
   const samples = sampleSurfaceEven(mesh, sampleCount, {
     ...options,
     radius: minSampleDistance,

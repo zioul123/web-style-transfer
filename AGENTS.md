@@ -14,6 +14,15 @@ Web Style Transfer is a correctness-first React/TypeScript/WebGPU application.
 - Numerical behavior is anchored to deterministic PyTorch fixtures.
 - Do not bypass checksum, shape, protocol, validation, or error handling.
 
+## Private Research Boundary
+
+- End-to-end point-cloud style-transfer composition files are intentionally
+  absent from this branch until further notice.
+- Do not recreate mesh style-transfer routes, worker pipeline orchestration,
+  reference graphs, fixtures, or benchmarks from surrounding library helpers.
+- Standalone point-cloud viewer, geometry, metadata, and operator work remains
+  in scope.
+
 ## Context Routing
 
 - Start repository exploration with `docs/code-map.md`.

@@ -231,6 +231,29 @@ test("textured surface point cloud returns sampled positions, barycentric UVs, a
   expect(pointCloud.colors[0]).toBeLessThanOrEqual(1);
 });
 
+test("textured surface point cloud rejects non-positive point budgets", () => {
+  const mesh = analyzeMeshGeometry({
+    vertices: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+    faces: new Uint32Array([0, 1, 2]),
+    uvs: new Float32Array([0, 0, 1, 0, 0, 1]),
+  });
+
+  expect(() =>
+    sampleTexturedSurfacePointCloud(mesh, tinyTexture, 0, 0),
+  ).toThrow(/samplesPerFace must be a positive finite number/i);
+  expect(() =>
+    sampleTexturedSurfacePointCloud(mesh, tinyTexture, 0, -1),
+  ).toThrow(/samplesPerFace must be a positive finite number/i);
+  expect(() =>
+    sampleTexturedSurfacePointCloud(
+      mesh,
+      tinyTexture,
+      0,
+      Number.POSITIVE_INFINITY,
+    ),
+  ).toThrow(/samplesPerFace must be a positive finite number/i);
+});
+
 test("GLTF extraction uses GLTFLoader geometry and flips V coordinates for texture sampling", async () => {
   installProgressEventPolyfill();
 

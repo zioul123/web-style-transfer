@@ -31,6 +31,8 @@ The browser runtime intentionally implements only the operations required by thi
 - Elementwise add/sub/mul/div and scalar broadcasting for parity tests and utility kernels.
 - Clamp and MSE reductions.
 - VGG-compatible convolution, fused convolution+ReLU, ReLU, max-pool, and normalization.
+- Point-cloud feature-matrix helpers for exp, feature normalization,
+  VGG-compatible point-cloud convolution, and surface pooling.
 - CHW flattening and Gram matrix computation.
 - Content/style loss computation.
 - Manual backward kernels for content loss, style/Gram path, ReLU, max-pool, convolution input gradients, and normalization.
@@ -56,7 +58,7 @@ The browser runtime intentionally implements only the operations required by thi
 | Phase 4: Manual backward                  | Complete for the fixed input-gradient graph | Backward kernels and PyTorch parity fixtures exist for the required loss/layer path.                                                                  |
 | Phase 5: Optimizer loop                   | Implemented                                 | First-pool and full VGG-style optimization endpoints run in the worker with GPU-resident buffers and optimizer options.                               |
 | Phase 6: Product-minimum UI               | Implemented, needs QA                       | The app has image upload/defaults, controls, model-pack selection/cache status, progress telemetry, previews, and download-oriented output rendering. |
-| Phase 7: Benchmarking and tuning          | In progress                                 | `/benchmark` exposes kernel-lab speed comparisons, pack-acceptance, and first-pool workflows; optimization flags are still experimental.              |
+| Phase 7: Benchmarking and tuning          | In progress                                 | `/benchmark` exposes image kernel-lab, pack-acceptance, and first-pool workflows; optimization flags are still experimental.                          |
 
 ## Current worker endpoints
 
@@ -82,6 +84,10 @@ Tensor-op messages cover primitive parity/debug routes including:
 - `reshape-chw-flatten`, `gram-matrix`, `gram-backward`
 - `content-loss`, `content-loss-backward`
 - `style-loss`, `style-loss-backward`
+- `exp-forward`, `exp-backward`
+- `point-feature-normalize-forward`, `point-feature-normalize-backward`
+- `pc-conv-forward`, `pc-conv-backward-features`
+- `surface-pool-forward`, `surface-pool-backward`
 
 ## Model-pack strategy
 
