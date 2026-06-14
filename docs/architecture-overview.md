@@ -93,8 +93,19 @@ The route currently provides:
 
 `PointCloudPreviewScene.tsx` owns the R3F canvas, point/mesh materials,
 fragment-shader textures, hit overlays, camera commands, and FPS sampling.
-`PointCloudPreviewApp.tsx` owns the data-source UI, stats, control panels, and
-route-local persistence.
+`PointCloudPreviewApp.tsx` composes focused route-local controllers and
+presentation components:
+
+- `usePointCloudPreviewController.ts` owns view settings, hit selection, FPS,
+  and camera-command state;
+- `usePointCloudAssetsController.ts` owns bundled and uploaded asset loading,
+  the lazy `File` queue, and stale-request protection;
+- `useSavedViewpointsController.ts` owns saved-camera persistence and
+  mutations;
+- `usePointCloudScreenshotsController.ts` owns current-canvas downloads and
+  synchronized batch capture/restoration;
+- the `PointCloudPreview*Panel.tsx`, `PointCloudPreviewViewport.tsx`, and modal
+  components own the route presentation.
 
 ## Worker protocol
 
