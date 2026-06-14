@@ -19,6 +19,7 @@ import {
   PointCloudPreviewScene,
 } from "./PointCloudPreviewScene";
 import { PointCloudHitInspector } from "./PointCloudHitInspector";
+import { createZipBlob } from "./createZipBlob";
 import { parsePointCloudMeshText } from "./loadPointCloudMesh";
 import type {
   MeshColorMode,
@@ -72,6 +73,17 @@ type SavedViewpoint = {
   readonly swapYZ: boolean;
 };
 
+type BatchScreenshotProgress = {
+  readonly completed: number;
+  readonly total: number;
+  readonly label: string;
+};
+
+type PendingCommandSignal = {
+  readonly commandId: number;
+  readonly resolve: () => void;
+};
+
 const boundsLabel = (values: readonly [number, number, number]): string =>
   values.map((value) => value.toFixed(3)).join(", ");
 
@@ -107,6 +119,20 @@ const screenshotTimestampLabel = (date: Date): string => {
     pad(date.getSeconds()),
   ].join("");
 };
+
+const canvasPngBytes = async (canvas: HTMLCanvasElement): Promise<Uint8Array> =>
+  new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob === null) {
+        reject(new Error("The preview canvas could not be encoded as PNG."));
+        return;
+      }
+      void blob.arrayBuffer().then(
+        (buffer) => resolve(new Uint8Array(buffer)),
+        (error: unknown) => reject(error),
+      );
+    }, "image/png");
+  });
 
 const snapAxisButtons: readonly {
   readonly axis: PointCloudPreviewViewAxis;
@@ -432,6 +458,8 @@ export function PointCloudPreviewApp() {
   const previewHostRef = useRef<HTMLDivElement | null>(null);
   const nextUploadedFileIdRef = useRef<number>(1);
   const activeLoadRequestIdRef = useRef<number>(0);
+  const cameraAppliedWaitersRef = useRef<PendingCommandSignal[]>([]);
+  const frameRenderedWaitersRef = useRef<PendingCommandSignal[]>([]);
   const [assetState, setAssetState] = useState<LoadedAssetState>({
     status: "loading",
     sourceLabel: bundledMediumSourceLabel,
@@ -459,6 +487,18 @@ export function PointCloudPreviewApp() {
     nextViewpointIdFor(readSavedViewpoints()),
   );
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
+  const [showBatchScreenshotModal, setShowBatchScreenshotModal] =
+    useState<boolean>(false);
+  const [selectedBatchViewpointIds, setSelectedBatchViewpointIds] = useState<
+    readonly number[]
+  >([]);
+  const [batchScreenshotProgress, setBatchScreenshotProgress] =
+    useState<BatchScreenshotProgress | null>(null);
+  const [batchScreenshotError, setBatchScreenshotError] = useState<
+    string | null
+  >(null);
+  const [isBatchScreenshotRunning, setIsBatchScreenshotRunning] =
+    useState<boolean>(false);
   const [uploadedFiles, setUploadedFiles] = useState<
     readonly UploadedPointCloudFile[]
   >([]);
@@ -802,6 +842,233 @@ export function PointCloudPreviewApp() {
     );
   };
 
+  const waitForCommandSignal = (
+    waitersRef: {
+      current: PendingCommandSignal[];
+    },
+    commandId: number,
+    signalLabel: string,
+  ): Promise<void> =>
+    new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        waitersRef.current = waitersRef.current.filter(
+          (waiter) => waiter.commandId !== commandId,
+        );
+        reject(
+          new Error(
+            `Timed out waiting for the preview ${signalLabel} for camera command ${commandId}.`,
+          ),
+        );
+      }, 10_000);
+      waitersRef.current.push({
+        commandId,
+        resolve: () => {
+          window.clearTimeout(timeoutId);
+          resolve();
+        },
+      });
+    });
+
+  const resolveCommandSignals = useCallback(
+    (
+      waitersRef: {
+        current: PendingCommandSignal[];
+      },
+      commandId: number,
+    ): void => {
+      const matchingWaiters = waitersRef.current.filter(
+        (waiter) => waiter.commandId === commandId,
+      );
+      waitersRef.current = waitersRef.current.filter(
+        (waiter) => waiter.commandId !== commandId,
+      );
+      matchingWaiters.forEach((waiter) => waiter.resolve());
+    },
+    [],
+  );
+
+  const handleCameraCommandApplied = useCallback(
+    (commandId: number): void => {
+      resolveCommandSignals(cameraAppliedWaitersRef, commandId);
+    },
+    [resolveCommandSignals],
+  );
+
+  const handlePreviewFrameRendered = useCallback(
+    (commandId: number): void => {
+      resolveCommandSignals(frameRenderedWaitersRef, commandId);
+    },
+    [resolveCommandSignals],
+  );
+
+  const restorePreviewAfterBatch = async ({
+    previousAssetState,
+    previousActiveUploadedFileId,
+    previousCameraState,
+    previousSwapYZ,
+  }: {
+    readonly previousAssetState: LoadedAssetState;
+    readonly previousActiveUploadedFileId: number | null;
+    readonly previousCameraState: PreviewCameraState;
+    readonly previousSwapYZ: boolean;
+  }): Promise<void> => {
+    setAssetState(previousAssetState);
+    setActiveUploadedFileId(previousActiveUploadedFileId);
+    resetPreviewInteraction();
+    updateViewSettings({ swapYZ: previousSwapYZ });
+    const commandId = issueCameraCommand({
+      type: "restore",
+      camera: previousCameraState,
+    });
+    const cameraApplied = waitForCommandSignal(
+      cameraAppliedWaitersRef,
+      commandId,
+      "camera restore",
+    );
+    await cameraApplied;
+    await waitForCommandSignal(
+      frameRenderedWaitersRef,
+      commandId,
+      "restored frame",
+    );
+  };
+
+  const handleBatchScreenshot = async (): Promise<void> => {
+    if (
+      assetState.status !== "ready" ||
+      currentCameraState === null ||
+      uploadedFiles.length < 2
+    ) {
+      return;
+    }
+    const selectedViewpoints = savedViewpoints.filter((viewpoint) =>
+      selectedBatchViewpointIds.includes(viewpoint.id),
+    );
+    if (selectedViewpoints.length === 0) {
+      return;
+    }
+
+    const previousAssetState = assetState;
+    const previousActiveUploadedFileId = activeUploadedFileId;
+    const previousCameraState = currentCameraState;
+    const previousSwapYZ = viewSettings.swapYZ;
+    const timestamp = screenshotTimestampLabel(new Date());
+    const total = uploadedFiles.length * selectedViewpoints.length;
+    const zipEntries: { readonly name: string; readonly data: Uint8Array }[] =
+      [];
+
+    setIsBatchScreenshotRunning(true);
+    setBatchScreenshotError(null);
+    setBatchScreenshotProgress({
+      completed: 0,
+      total,
+      label: "Preparing batch screenshots",
+    });
+
+    try {
+      for (const uploadedFile of uploadedFiles) {
+        setUploadedFileStatus(uploadedFile.id, "loading", null);
+        let meshData: PointCloudMeshData;
+        try {
+          meshData = parsePointCloudMeshText(await uploadedFile.file.text());
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "Unable to parse JSON.";
+          setUploadedFileStatus(uploadedFile.id, "error", message);
+          throw new Error(`${uploadedFile.label}: ${message}`, {
+            cause: error,
+          });
+        }
+
+        setUploadedFileStatus(uploadedFile.id, "ready", null);
+        setActiveUploadedFileId(uploadedFile.id);
+        setAssetState({
+          status: "ready",
+          sourceLabel: uploadedFile.label,
+          errorMessage: null,
+          data: meshData,
+        });
+        resetPreviewInteraction();
+
+        for (const viewpoint of selectedViewpoints) {
+          const completed = zipEntries.length;
+          setBatchScreenshotProgress({
+            completed,
+            total,
+            label: `${uploadedFile.label} at ${viewpoint.label}`,
+          });
+          updateViewSettings({ swapYZ: viewpoint.swapYZ });
+          const commandId = issueCameraCommand({
+            type: "restore",
+            camera: viewpoint.camera,
+          });
+          const cameraApplied = waitForCommandSignal(
+            cameraAppliedWaitersRef,
+            commandId,
+            "camera update",
+          );
+          await cameraApplied;
+          await waitForCommandSignal(
+            frameRenderedWaitersRef,
+            commandId,
+            "rendered frame",
+          );
+
+          const canvas = previewHostRef.current?.querySelector("canvas");
+          if (!(canvas instanceof HTMLCanvasElement)) {
+            throw new Error("The preview canvas is not available.");
+          }
+          const viewpointStem = screenshotFilenameStemForSourceLabel(
+            viewpoint.label,
+          );
+          zipEntries.push({
+            name: `${screenshotFilenameStemForSourceLabel(uploadedFile.label)}-upload-${uploadedFile.id}-view-${viewpoint.id}-${viewpointStem}-${timestamp}.png`,
+            data: await canvasPngBytes(canvas),
+          });
+        }
+      }
+
+      await restorePreviewAfterBatch({
+        previousAssetState,
+        previousActiveUploadedFileId,
+        previousCameraState,
+        previousSwapYZ,
+      });
+      setBatchScreenshotProgress({
+        completed: total,
+        total,
+        label: "Creating ZIP archive",
+      });
+      const archiveUrl = URL.createObjectURL(createZipBlob(zipEntries));
+      const downloadLink = document.createElement("a");
+      downloadLink.href = archiveUrl;
+      downloadLink.download = `pointcloud-batch-screenshots-${timestamp}.zip`;
+      downloadLink.click();
+      window.setTimeout(() => URL.revokeObjectURL(archiveUrl), 0);
+      setShowBatchScreenshotModal(false);
+      setBatchScreenshotProgress(null);
+    } catch (error) {
+      try {
+        await restorePreviewAfterBatch({
+          previousAssetState,
+          previousActiveUploadedFileId,
+          previousCameraState,
+          previousSwapYZ,
+        });
+      } catch {
+        // Keep the original batch error, which is more actionable to the user.
+      }
+      setBatchScreenshotError(
+        error instanceof Error
+          ? error.message
+          : "Unable to create batch screenshots.",
+      );
+      setBatchScreenshotProgress(null);
+    } finally {
+      setIsBatchScreenshotRunning(false);
+    }
+  };
+
   const handleScreenshot = (): void => {
     const canvas = previewHostRef.current?.querySelector("canvas");
     if (!(canvas instanceof HTMLCanvasElement)) {
@@ -1116,6 +1383,21 @@ export function PointCloudPreviewApp() {
                   >
                     Screenshot
                   </button>
+                  {uploadedFiles.length > 1 ? (
+                    <button
+                      data-testid="batch-screenshot-button"
+                      className="rounded-xl border border-sky-300/20 bg-sky-400/10 px-4 py-2 text-sm font-semibold text-sky-100 transition hover:bg-sky-400/20"
+                      type="button"
+                      onClick={() => {
+                        setSelectedBatchViewpointIds([]);
+                        setBatchScreenshotError(null);
+                        setBatchScreenshotProgress(null);
+                        setShowBatchScreenshotModal(true);
+                      }}
+                    >
+                      Batch screenshot
+                    </button>
+                  ) : null}
                 </div>
               </div>
               <div ref={previewHostRef} className="relative min-h-0 flex-1">
@@ -1135,6 +1417,8 @@ export function PointCloudPreviewApp() {
                     cameraCommand={cameraCommand}
                     onHoverSampleChange={setSelectedHit}
                     onCameraStateChange={handleCameraStateChange}
+                    onCameraCommandApplied={handleCameraCommandApplied}
+                    onFrameRendered={handlePreviewFrameRendered}
                     onFramesPerSecondChange={setFramesPerSecond}
                   />
                 ) : (
@@ -1276,6 +1560,7 @@ export function PointCloudPreviewApp() {
                   {snapAxisButtons.map((button) => (
                     <button
                       key={button.axis}
+                      data-testid={`snap-axis-${button.axis}`}
                       className="rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-3 py-3 text-sm font-semibold text-slate-100 transition hover:bg-white/10"
                       type="button"
                       onClick={() =>
@@ -1289,6 +1574,15 @@ export function PointCloudPreviewApp() {
                     </button>
                   ))}
                 </div>
+                <output
+                  data-testid="camera-state"
+                  className="sr-only"
+                  aria-live="off"
+                >
+                  {currentCameraState === null
+                    ? "unavailable"
+                    : JSON.stringify(currentCameraState)}
+                </output>
 
                 <div className="mt-4 rounded-[0.95rem] border border-white/10 bg-slate-900/75 p-4">
                   <div className="flex items-center justify-between gap-3">
@@ -1393,6 +1687,162 @@ export function PointCloudPreviewApp() {
         </div>
       </main>
 
+      {showBatchScreenshotModal ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 px-4"
+          onClick={() => {
+            if (!isBatchScreenshotRunning) {
+              setShowBatchScreenshotModal(false);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="batch-screenshot-title"
+            data-testid="batch-screenshot-modal"
+            className="w-full max-w-xl rounded-[1.1rem] border border-white/10 bg-slate-950 p-6 shadow-2xl shadow-black/40"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
+                  Batch export
+                </p>
+                <h2
+                  id="batch-screenshot-title"
+                  className="mt-2 text-2xl font-semibold text-white"
+                >
+                  Select saved viewpoints
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-slate-300">
+                  Capture {uploadedFiles.length} uploaded meshes at each
+                  selected viewpoint and download one ZIP archive.
+                </p>
+              </div>
+              <button
+                className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                type="button"
+                disabled={isBatchScreenshotRunning}
+                onClick={() => setShowBatchScreenshotModal(false)}
+              >
+                Close
+              </button>
+            </div>
+
+            {savedViewpoints.length > 0 ? (
+              <>
+                <div className="mt-5 flex items-center justify-between gap-3">
+                  <span className="text-sm font-semibold text-slate-200">
+                    {selectedBatchViewpointIds.length} of{" "}
+                    {savedViewpoints.length} selected
+                  </span>
+                  <button
+                    data-testid="batch-screenshot-select-all"
+                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    type="button"
+                    disabled={isBatchScreenshotRunning}
+                    onClick={() =>
+                      setSelectedBatchViewpointIds(
+                        selectedBatchViewpointIds.length ===
+                          savedViewpoints.length
+                          ? []
+                          : savedViewpoints.map((viewpoint) => viewpoint.id),
+                      )
+                    }
+                  >
+                    {selectedBatchViewpointIds.length === savedViewpoints.length
+                      ? "Clear all"
+                      : "Select all"}
+                  </button>
+                </div>
+                <div className="mt-3 max-h-72 space-y-2 overflow-y-auto">
+                  {savedViewpoints.map((viewpoint) => (
+                    <label
+                      key={viewpoint.id}
+                      className="flex cursor-pointer items-center gap-3 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-3 text-sm text-slate-100"
+                    >
+                      <input
+                        data-testid={`batch-viewpoint-${viewpoint.id}`}
+                        className="accent-amber-300"
+                        type="checkbox"
+                        disabled={isBatchScreenshotRunning}
+                        checked={selectedBatchViewpointIds.includes(
+                          viewpoint.id,
+                        )}
+                        onChange={(event) =>
+                          setSelectedBatchViewpointIds((currentIds) =>
+                            event.target.checked
+                              ? [...currentIds, viewpoint.id]
+                              : currentIds.filter((id) => id !== viewpoint.id),
+                          )
+                        }
+                      />
+                      <span className="min-w-0 flex-1 truncate font-semibold">
+                        {viewpoint.label}
+                      </span>
+                      {viewpoint.swapYZ ? (
+                        <span className="text-xs font-semibold uppercase tracking-[0.15em] text-amber-200">
+                          Y/Z
+                        </span>
+                      ) : null}
+                    </label>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p
+                data-testid="batch-screenshot-empty"
+                className="mt-5 rounded-[0.95rem] border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100"
+              >
+                Save at least one viewpoint before starting a batch export.
+              </p>
+            )}
+
+            {batchScreenshotProgress !== null ? (
+              <div
+                data-testid="batch-screenshot-progress"
+                className="mt-4 rounded-[0.95rem] border border-sky-300/20 bg-sky-400/10 px-4 py-3 text-sm text-sky-100"
+              >
+                <div className="flex justify-between gap-3 font-semibold">
+                  <span>{batchScreenshotProgress.label}</span>
+                  <span>
+                    {batchScreenshotProgress.completed}/
+                    {batchScreenshotProgress.total}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+            {batchScreenshotError !== null ? (
+              <p
+                data-testid="batch-screenshot-error"
+                className="mt-4 rounded-[0.95rem] border border-rose-300/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100"
+              >
+                {batchScreenshotError}
+              </p>
+            ) : null}
+
+            <button
+              data-testid="batch-screenshot-download"
+              className="mt-5 w-full rounded-xl bg-amber-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              disabled={
+                isBatchScreenshotRunning ||
+                savedViewpoints.length === 0 ||
+                selectedBatchViewpointIds.length === 0
+              }
+              onClick={() => {
+                void handleBatchScreenshot();
+              }}
+            >
+              {isBatchScreenshotRunning
+                ? "Capturing screenshots..."
+                : `Download ${uploadedFiles.length * selectedBatchViewpointIds.length} screenshots as ZIP`}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <InfoModal open={showInfoModal} onClose={() => setShowInfoModal(false)}>
         <p>
           This route renders a mesh with precomputed 3-nearest-neighbor surface
@@ -1408,8 +1858,9 @@ export function PointCloudPreviewApp() {
         </p>
         <p>
           Saved viewpoints persist in local storage for this browser across all
-          datasets on this route, and the screenshot button downloads the
-          current canvas view as a PNG.
+          datasets on this route. Screenshot downloads the current canvas as a
+          PNG, while batch screenshot cycles queued uploads through selected
+          viewpoints and downloads one ZIP.
         </p>
       </InfoModal>
     </>

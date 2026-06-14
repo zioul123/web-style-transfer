@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 import { gotoStableApp } from "./helpers/appPage";
 
 const validUploadJson = JSON.stringify({
@@ -124,6 +125,43 @@ const denseCellUploadJson = JSON.stringify({
   ],
 });
 
+const readStoredZipEntries = (archive: Buffer): ReadonlyMap<string, Buffer> => {
+  const endSignature = 0x06054b50;
+  let endOffset = archive.length - 22;
+  while (endOffset >= 0 && archive.readUInt32LE(endOffset) !== endSignature) {
+    endOffset -= 1;
+  }
+  expect(endOffset).toBeGreaterThanOrEqual(0);
+
+  const entryCount = archive.readUInt16LE(endOffset + 10);
+  let centralOffset = archive.readUInt32LE(endOffset + 16);
+  const entries = new Map<string, Buffer>();
+  for (let index = 0; index < entryCount; index += 1) {
+    expect(archive.readUInt32LE(centralOffset)).toBe(0x02014b50);
+    const compressionMethod = archive.readUInt16LE(centralOffset + 10);
+    const compressedSize = archive.readUInt32LE(centralOffset + 20);
+    const nameLength = archive.readUInt16LE(centralOffset + 28);
+    const extraLength = archive.readUInt16LE(centralOffset + 30);
+    const commentLength = archive.readUInt16LE(centralOffset + 32);
+    const localOffset = archive.readUInt32LE(centralOffset + 42);
+    const name = archive
+      .subarray(centralOffset + 46, centralOffset + 46 + nameLength)
+      .toString("utf8");
+
+    expect(compressionMethod).toBe(0);
+    expect(archive.readUInt32LE(localOffset)).toBe(0x04034b50);
+    const localNameLength = archive.readUInt16LE(localOffset + 26);
+    const localExtraLength = archive.readUInt16LE(localOffset + 28);
+    const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
+    entries.set(
+      name,
+      archive.subarray(dataOffset, dataOffset + compressedSize),
+    );
+    centralOffset += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+};
+
 test("point-cloud preview boots from the standalone route with the bundled demo", async ({
   page,
 }) => {
@@ -156,6 +194,7 @@ test("point-cloud preview boots from the standalone route with the bundled demo"
     page.getByRole("button", { name: /Reload preview/i }),
   ).toBeVisible();
   await expect(page.getByTestId("screenshot-button")).toBeVisible();
+  await expect(page.getByTestId("batch-screenshot-button")).toHaveCount(0);
   await expect(page.getByTestId("save-viewpoint-button")).toBeEnabled();
   await expect(page.getByTestId("swap-yz-button")).toBeVisible();
 });
@@ -398,6 +437,180 @@ test("point-cloud preview can download a screenshot", async ({ page }) => {
   expect(download.suggestedFilename()).toMatch(
     /^tiny-upload-screenshot-\d{8}-\d{6}\.png$/,
   );
+});
+
+test("point-cloud preview disables batch screenshots without saved viewpoints", async ({
+  page,
+}) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await page.locator('input[type="file"]').setInputFiles([
+    {
+      name: "tiny-a.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(validUploadJson, "utf8"),
+    },
+    {
+      name: "tiny-b.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(alternateUploadJson, "utf8"),
+    },
+  ]);
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+
+  await page.getByTestId("batch-screenshot-button").click();
+  await expect(page.getByTestId("batch-screenshot-modal")).toBeVisible();
+  await expect(page.getByTestId("batch-screenshot-empty")).toBeVisible();
+  await expect(page.getByTestId("batch-screenshot-download")).toBeDisabled();
+});
+
+test("point-cloud preview downloads every mesh and selected viewpoint in one ZIP", async ({
+  page,
+}) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await page.getByTestId("save-viewpoint-button").click();
+  await page.getByTestId("viewpoint-name-1").fill("Front view");
+  await page.getByTestId("swap-yz-button").click();
+  await page.getByTestId("save-viewpoint-button").click();
+  await page.getByTestId("viewpoint-name-2").fill("Swapped view");
+  await page.getByTestId("swap-yz-button").click();
+
+  await page.locator('input[type="file"]').setInputFiles([
+    {
+      name: "duplicate.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(validUploadJson, "utf8"),
+    },
+    {
+      name: "duplicate.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(alternateUploadJson, "utf8"),
+    },
+  ]);
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "duplicate.json",
+  );
+  const cameraStateBeforeSnap = await page
+    .getByTestId("camera-state")
+    .textContent();
+  await page.getByTestId("snap-axis-pos-x").click();
+  await expect
+    .poll(() => page.getByTestId("camera-state").textContent())
+    .not.toBe(cameraStateBeforeSnap);
+  const cameraStateBeforeBatch = await page
+    .getByTestId("camera-state")
+    .textContent();
+  expect(cameraStateBeforeBatch).not.toBe("unavailable");
+
+  await page.getByTestId("batch-screenshot-button").click();
+  await expect(page.getByTestId("batch-screenshot-download")).toBeDisabled();
+  await page.getByTestId("batch-screenshot-select-all").click();
+  await expect(page.getByTestId("batch-screenshot-download")).toHaveText(
+    "Download 4 screenshots as ZIP",
+  );
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByTestId("batch-screenshot-download").click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(
+    /^pointcloud-batch-screenshots-\d{8}-\d{6}\.zip$/,
+  );
+
+  const downloadPath = await download.path();
+  expect(downloadPath).not.toBeNull();
+  const archive = await readFile(downloadPath!);
+  const zipEntries = readStoredZipEntries(archive);
+  expect(zipEntries.size).toBe(4);
+  const entryNames = [...zipEntries.keys()];
+  expect(entryNames).toEqual(
+    expect.arrayContaining([
+      expect.stringMatching(
+        /^duplicate-upload-1-view-1-front-view-\d{8}-\d{6}\.png$/,
+      ),
+      expect.stringMatching(
+        /^duplicate-upload-1-view-2-swapped-view-\d{8}-\d{6}\.png$/,
+      ),
+      expect.stringMatching(
+        /^duplicate-upload-2-view-1-front-view-\d{8}-\d{6}\.png$/,
+      ),
+      expect.stringMatching(
+        /^duplicate-upload-2-view-2-swapped-view-\d{8}-\d{6}\.png$/,
+      ),
+    ]),
+  );
+  for (const png of zipEntries.values()) {
+    expect(png.subarray(0, 8)).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+  }
+
+  await expect(page.getByTestId("batch-screenshot-modal")).toHaveCount(0);
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "duplicate.json",
+  );
+  await expect(page.getByTestId("swap-yz-button")).toHaveText(/Flip Y and Z/i);
+  await expect(page.getByTestId("camera-state")).toHaveText(
+    cameraStateBeforeBatch!,
+  );
+});
+
+test("point-cloud batch screenshot reports malformed queued meshes and restores the preview", async ({
+  page,
+}) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await page.getByTestId("swap-yz-button").click();
+  await page.getByTestId("save-viewpoint-button").click();
+  await page.getByTestId("viewpoint-name-1").fill("Swapped view");
+
+  await page.locator('input[type="file"]').setInputFiles([
+    {
+      name: "valid.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(validUploadJson, "utf8"),
+    },
+    {
+      name: "broken.json",
+      mimeType: "application/json",
+      buffer: Buffer.from('{"m_verts":"broken"}', "utf8"),
+    },
+  ]);
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "valid.json",
+  );
+  await expect(page.getByTestId("swap-yz-button")).toHaveText(/Y\/Z swapped/i);
+  const cameraStateBeforeSnap = await page
+    .getByTestId("camera-state")
+    .textContent();
+  await page.getByTestId("snap-axis-pos-x").click();
+  await expect
+    .poll(() => page.getByTestId("camera-state").textContent())
+    .not.toBe(cameraStateBeforeSnap);
+  const cameraStateBeforeBatch = await page
+    .getByTestId("camera-state")
+    .textContent();
+  expect(cameraStateBeforeBatch).not.toBe("unavailable");
+
+  await page.getByTestId("batch-screenshot-button").click();
+  await page.getByTestId("batch-viewpoint-1").check();
+  await page.getByTestId("batch-screenshot-download").click();
+
+  await expect(page.getByTestId("batch-screenshot-error")).toContainText(
+    /broken\.json.*must contain m_verts, m_faces, pc_xyz, and pc_rgb/i,
+  );
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "valid.json",
+  );
+  await expect(page.getByTestId("pointcloud-upload-status-2")).toHaveText(
+    "error",
+  );
+  await expect(page.getByTestId("swap-yz-button")).toHaveText(/Y\/Z swapped/i);
+  await expect(page.getByTestId("camera-state")).toHaveText(
+    cameraStateBeforeBatch!,
+  );
+  await expect(page.getByTestId("batch-screenshot-download")).toBeEnabled();
 });
 
 test("point-cloud preview right-side cards can collapse and expand", async ({
