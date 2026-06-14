@@ -464,6 +464,45 @@ test("point-cloud preview disables batch screenshots without saved viewpoints", 
   await expect(page.getByTestId("batch-screenshot-download")).toBeDisabled();
 });
 
+test("point-cloud preview stacks panels and keeps batch actions clickable on narrow screens", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await page.locator('input[type="file"]').setInputFiles([
+    {
+      name: "tiny-a.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(validUploadJson, "utf8"),
+    },
+    {
+      name: "tiny-b.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(alternateUploadJson, "utf8"),
+    },
+  ]);
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+
+  const dataPanelBox = await page
+    .getByTestId("pointcloud-left-panel")
+    .boundingBox();
+  const previewBox = await page
+    .getByTestId("pointcloud-preview-canvas")
+    .boundingBox();
+  const controlsBox = await page
+    .getByTestId("pointcloud-right-panel")
+    .boundingBox();
+  expect(dataPanelBox).not.toBeNull();
+  expect(previewBox).not.toBeNull();
+  expect(controlsBox).not.toBeNull();
+  expect(previewBox!.y).toBeGreaterThan(dataPanelBox!.y + dataPanelBox!.height);
+  expect(controlsBox!.y).toBeGreaterThan(previewBox!.y + previewBox!.height);
+
+  await page.getByTestId("batch-screenshot-button").click();
+  await expect(page.getByTestId("batch-screenshot-modal")).toBeVisible();
+});
+
 test("point-cloud preview downloads every mesh and selected viewpoint in one ZIP", async ({
   page,
 }) => {

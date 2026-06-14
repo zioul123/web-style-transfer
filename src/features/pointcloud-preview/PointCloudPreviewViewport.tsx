@@ -51,12 +51,12 @@ export function PointCloudPreviewViewport({
   const data = assetState.data;
 
   return (
-    <section className="flex min-w-0 min-h-0 flex-1 flex-col rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-4 shadow-xl shadow-black/20">
-      <div className="mb-3 flex items-center justify-between gap-3 px-1">
+    <section className="flex h-[42rem] min-h-0 min-w-0 w-full shrink-0 flex-col rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-4 shadow-xl shadow-black/20 2xl:h-auto 2xl:flex-1">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1">
         <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
           Interactive preview
         </p>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div
             data-testid="pointcloud-fps"
             className="rounded-xl border border-emerald-300/25 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100"

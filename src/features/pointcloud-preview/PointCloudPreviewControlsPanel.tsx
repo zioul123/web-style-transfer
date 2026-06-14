@@ -62,7 +62,7 @@ export function PointCloudPreviewControlsPanel({
   return (
     <div
       data-testid="pointcloud-right-panel"
-      className="flex h-full w-[25rem] shrink-0 flex-col gap-4 overflow-y-auto pr-1"
+      className="flex w-full flex-col gap-4 2xl:h-full 2xl:w-[25rem] 2xl:shrink-0 2xl:overflow-y-auto 2xl:pr-1"
     >
       <CollapsiblePanelCard title="View options" testId="view-options-card">
         <div className="space-y-3 text-sm text-slate-200">

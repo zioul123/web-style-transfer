@@ -76,12 +76,15 @@ export function PointCloudPreviewApp() {
 
   return (
     <>
-      <main className="h-screen w-screen overflow-hidden bg-[linear-gradient(180deg,_#071019_0%,_#0b1120_100%)] text-slate-100">
-        <div className="flex h-full w-full flex-col px-4 py-4">
+      <main className="min-h-screen w-full overflow-x-hidden bg-[linear-gradient(180deg,_#071019_0%,_#0b1120_100%)] text-slate-100 2xl:h-screen 2xl:overflow-hidden">
+        <div className="flex min-h-screen w-full flex-col px-4 py-4 2xl:h-full 2xl:min-h-0">
           <PointCloudPreviewHeader onShowInfo={() => setShowInfoModal(true)} />
 
-          <div className="flex min-h-0 flex-1 items-stretch gap-4">
-            <div className="flex h-full w-[25rem] shrink-0 flex-col gap-4 overflow-y-auto pr-1">
+          <div className="flex min-h-0 flex-1 flex-col items-stretch gap-4 2xl:flex-row">
+            <div
+              data-testid="pointcloud-left-panel"
+              className="flex w-full flex-col gap-4 2xl:h-full 2xl:w-[25rem] 2xl:shrink-0 2xl:overflow-y-auto 2xl:pr-1"
+            >
               <RenderingAlgorithmPanel
                 meshColorMode={previewController.viewSettings.meshColorMode}
                 description={meshColorModeDescription}

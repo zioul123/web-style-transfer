@@ -191,12 +191,12 @@ export function PointCloudPreviewHeader({
   readonly onShowInfo: () => void;
 }) {
   return (
-    <header className="mb-4 flex shrink-0 items-center justify-between rounded-[1.1rem] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-xl shadow-black/20">
-      <div className="flex items-center gap-6">
+    <header className="mb-4 flex shrink-0 flex-col gap-4 rounded-[1.1rem] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-xl shadow-black/20 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
         <h1 className="text-2xl font-semibold tracking-tight text-white">
           Point-Cloud Mesh Preview
         </h1>
-        <nav className="flex items-center gap-3 text-sm font-medium">
+        <nav className="flex flex-wrap items-center gap-3 text-sm font-medium">
           <a
             className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-slate-100 transition hover:bg-white/10"
             href={assetUrl("")}
