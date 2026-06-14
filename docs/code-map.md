@@ -46,6 +46,10 @@ that matches the task, then follow imports and tests only as needed.
   and cache integration.
 - `src/features/pointcloud-preview/loadPointCloudMesh.ts`: JSON validation,
   typed-array conversion, bounds, and precomputed mesh vertex colours.
+- `src/features/pointcloud-preview/usePointCloudAssetsController.ts`,
+  `useSavedViewpointsController.ts`, and
+  `usePointCloudScreenshotsController.ts`: route-local uploaded-file loading,
+  persisted camera presets, and screenshot export orchestration.
 - `src/ml/geometry/`: CPU-only typed mesh analysis, 3D KD-tree query helpers,
   surface and texture sampling, mesh point batches, geodesic tracing, GLTF
   extraction, and point-cloud preprocessing.

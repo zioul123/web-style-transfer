@@ -38,6 +38,8 @@ type PointCloudPreviewSceneProps = {
   readonly cameraCommand: PointCloudPreviewCameraCommand;
   readonly onHoverSampleChange: (sample: PointCloudHitSample | null) => void;
   readonly onCameraStateChange: (state: PreviewCameraState) => void;
+  readonly onCameraCommandApplied?: (commandId: number) => void;
+  readonly onFrameRendered?: (commandId: number) => void;
   readonly onFramesPerSecondChange: (fps: number) => void;
 };
 
@@ -45,6 +47,7 @@ type OrbitCameraControlsProps = {
   readonly data: PointCloudMeshData;
   readonly command: PointCloudPreviewCameraCommand;
   readonly onCameraStateChange: (state: PreviewCameraState) => void;
+  readonly onCameraCommandApplied?: (commandId: number) => void;
 };
 
 type SceneContentProps = Omit<
@@ -420,6 +423,7 @@ function OrbitCameraControls({
   data,
   command,
   onCameraStateChange,
+  onCameraCommandApplied,
 }: OrbitCameraControlsProps) {
   const { camera, gl } = useThree();
   const controlsRef = useRef<OrbitControls | null>(null);
@@ -481,7 +485,8 @@ function OrbitCameraControls({
     lastCameraStateRef.current = nextState;
     onCameraStateChange(nextState);
     lastCommandIdRef.current = command.id;
-  }, [camera, command, data, onCameraStateChange]);
+    onCameraCommandApplied?.(command.id);
+  }, [camera, command, data, onCameraCommandApplied, onCameraStateChange]);
 
   useFrame((_, delta) => {
     const controls = controlsRef.current;
@@ -511,6 +516,19 @@ function OrbitCameraControls({
     onCameraStateChange(nextState);
   });
 
+  return null;
+}
+
+function FrameRenderedNotifier({
+  commandId,
+  onFrameRendered,
+}: {
+  readonly commandId: number;
+  readonly onFrameRendered?: (commandId: number) => void;
+}) {
+  useFrame(() => {
+    onFrameRendered?.(commandId);
+  });
   return null;
 }
 
@@ -867,6 +885,8 @@ export function PointCloudPreviewScene({
   cameraCommand,
   onHoverSampleChange,
   onCameraStateChange,
+  onCameraCommandApplied,
+  onFrameRendered,
   onFramesPerSecondChange,
 }: PointCloudPreviewSceneProps) {
   const transformMatrix = useMemo(() => {
@@ -925,6 +945,11 @@ export function PointCloudPreviewScene({
           data={data}
           command={cameraCommand}
           onCameraStateChange={onCameraStateChange}
+          onCameraCommandApplied={onCameraCommandApplied}
+        />
+        <FrameRenderedNotifier
+          commandId={cameraCommand.id}
+          onFrameRendered={onFrameRendered}
         />
         <FpsSampler onFramesPerSecondChange={onFramesPerSecondChange} />
         <SceneContent

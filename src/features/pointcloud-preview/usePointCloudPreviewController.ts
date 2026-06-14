@@ -63,10 +63,8 @@ export type PointCloudPreviewController = {
   readonly cameraStateRef: MutableRefObject<PreviewCameraState | null>;
   readonly handleCameraStateChange: (state: PreviewCameraState) => void;
   readonly issueCameraCommand: (
-    nextCommand:
-      | NextPointCloudPreviewCameraCommand
-      | ((currentId: number) => NextPointCloudPreviewCameraCommand),
-  ) => void;
+    nextCommand: NextPointCloudPreviewCameraCommand,
+  ) => number;
   readonly resetPreviewInteraction: (
     options?: ResetPreviewInteractionOptions,
   ) => void;
@@ -76,6 +74,7 @@ export const usePointCloudPreviewController = ({
   initialViewSettings,
 }: UsePointCloudPreviewControllerOptions = {}): PointCloudPreviewController => {
   const cameraStateRef = useRef<PreviewCameraState | null>(null);
+  const cameraCommandIdRef = useRef<number>(0);
   const [viewSettings, setViewSettings] =
     useState<PointCloudPreviewViewSettings>(
       () => initialViewSettings ?? defaultPointCloudPreviewViewSettings,
@@ -112,21 +111,14 @@ export const usePointCloudPreviewController = ({
   );
 
   const issueCameraCommand = useCallback(
-    (
-      nextCommand:
-        | NextPointCloudPreviewCameraCommand
-        | ((currentId: number) => NextPointCloudPreviewCameraCommand),
-    ): void => {
-      setCameraCommand((currentCommand) => {
-        const resolvedCommand =
-          typeof nextCommand === "function"
-            ? nextCommand(currentCommand.id)
-            : nextCommand;
-        return {
-          ...resolvedCommand,
-          id: currentCommand.id + 1,
-        };
+    (nextCommand: NextPointCloudPreviewCameraCommand): number => {
+      const nextId = cameraCommandIdRef.current + 1;
+      cameraCommandIdRef.current = nextId;
+      setCameraCommand({
+        ...nextCommand,
+        id: nextId,
       });
+      return nextId;
     },
     [],
   );
