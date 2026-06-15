@@ -21,6 +21,7 @@ export const defaultPointCloudPreviewViewSettings: PointCloudPreviewViewSettings
     showMesh: true,
     showPoints: true,
     showWireframe: false,
+    showGroundPlane: true,
     meshColorMode: "fragment-knn",
     pointSize: defaultPointCloudPreviewPointSize,
     backgroundColor: "default",

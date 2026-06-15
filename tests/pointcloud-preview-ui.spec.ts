@@ -420,6 +420,34 @@ test("point-cloud preview switches between the available background colours", as
     .toEqual([255, 255, 255, 255]);
 });
 
+test("point-cloud preview toggles the ground plane axis", async ({ page }) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  const groundPlaneCheckbox = page.getByTestId("ground-plane-axis-checkbox");
+  const canvas = page
+    .getByTestId("pointcloud-preview-canvas")
+    .locator("canvas");
+
+  await expect(groundPlaneCheckbox).toBeChecked();
+  const visibleGroundPlane = await canvas.screenshot();
+
+  await groundPlaneCheckbox.uncheck();
+  await expect(groundPlaneCheckbox).not.toBeChecked();
+  await expect
+    .poll(async () =>
+      Buffer.compare(visibleGroundPlane, await canvas.screenshot()),
+    )
+    .not.toBe(0);
+
+  await groundPlaneCheckbox.check();
+  await expect(groundPlaneCheckbox).toBeChecked();
+  await expect
+    .poll(async () =>
+      Buffer.compare(visibleGroundPlane, await canvas.screenshot()),
+    )
+    .toBe(0);
+});
+
 test("point-cloud preview disables dependent controls and saves viewpoints", async ({
   page,
 }) => {

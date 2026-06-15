@@ -90,6 +90,7 @@ export type PointCloudPreviewViewSettings = {
   readonly showMesh: boolean;
   readonly showPoints: boolean;
   readonly showWireframe: boolean;
+  readonly showGroundPlane: boolean;
   readonly meshColorMode: MeshColorMode;
   readonly pointSize: number;
   readonly backgroundColor: PointCloudPreviewBackgroundColor;

@@ -211,6 +211,20 @@ export function PointCloudPreviewControlsPanel({
               }
             />
           </div>
+          <label className="flex items-center gap-3 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-3">
+            <input
+              data-testid="ground-plane-axis-checkbox"
+              className="accent-amber-300"
+              type="checkbox"
+              checked={viewSettings.showGroundPlane}
+              onChange={(event) =>
+                updateViewSettings({
+                  showGroundPlane: event.target.checked,
+                })
+              }
+            />
+            Ground plane axis
+          </label>
         </div>
       </CollapsiblePanelCard>
 

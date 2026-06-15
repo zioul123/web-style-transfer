@@ -29,6 +29,7 @@ type PointCloudPreviewSceneProps = {
   readonly showMesh: boolean;
   readonly showPoints: boolean;
   readonly showWireframe: boolean;
+  readonly showGroundPlane: boolean;
   readonly meshColorMode: MeshColorMode;
   readonly showNeighborDebug: boolean;
   readonly pointSize: number;
@@ -560,6 +561,7 @@ function SceneContent({
   showMesh,
   showPoints,
   showWireframe,
+  showGroundPlane,
   meshColorMode,
   showNeighborDebug,
   pointSize,
@@ -810,14 +812,16 @@ function SceneContent({
       <color attach="background" args={[sceneBackgroundColor]} />
       <fog attach="fog" args={[sceneBackgroundColor, fogNear, fogFar]} />
       <group matrixAutoUpdate={false} matrix={transformMatrix}>
-        <gridHelper
-          args={[data.bounds.radius * 6, 12, "#164e63", "#0f172a"]}
-          position={[
-            data.bounds.center[0],
-            data.bounds.min[1],
-            data.bounds.center[2],
-          ]}
-        />
+        {showGroundPlane ? (
+          <gridHelper
+            args={[data.bounds.radius * 6, 12, "#164e63", "#0f172a"]}
+            position={[
+              data.bounds.center[0],
+              data.bounds.min[1],
+              data.bounds.center[2],
+            ]}
+          />
+        ) : null}
         {showMesh ? (
           <mesh
             geometry={meshGeometry}
@@ -880,6 +884,7 @@ export function PointCloudPreviewScene({
   showMesh,
   showPoints,
   showWireframe,
+  showGroundPlane,
   meshColorMode,
   showNeighborDebug,
   pointSize,
@@ -963,6 +968,7 @@ export function PointCloudPreviewScene({
           showMesh={showMesh}
           showPoints={showPoints}
           showWireframe={showWireframe}
+          showGroundPlane={showGroundPlane}
           meshColorMode={meshColorMode}
           showNeighborDebug={showNeighborDebug}
           pointSize={pointSize}
