@@ -76,7 +76,8 @@ upload replacement JSON exports, and provides:
 - baked-vertex versus spatial-hash fragment-KNN mesh colouring;
 - point visibility, wireframe, point-size, gamma, and brightness controls;
 - axis snapping, Y/Z swapping, camera reframing, and saved viewpoints stored in
-  browser local storage across datasets on this route;
+  browser local storage across datasets on this route, with copyable camera
+  position and focal-point details;
 - PNG screenshot export of the current canvas view.
 - Batch screenshot ZIP export across every queued upload and selected saved
   viewpoint when multiple meshes are loaded.
