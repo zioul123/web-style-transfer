@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { gotoStableApp } from "./helpers/appPage";
 
@@ -124,6 +124,22 @@ const denseCellUploadJson = JSON.stringify({
     [0, 2, 3],
   ],
 });
+
+const readPreviewBackgroundPixel = async (
+  previewCanvas: Locator,
+): Promise<readonly number[]> =>
+  previewCanvas.locator("canvas").evaluate((canvas) => {
+    const context =
+      (canvas as HTMLCanvasElement).getContext("webgl2") ??
+      (canvas as HTMLCanvasElement).getContext("webgl");
+    if (context === null) {
+      throw new Error("Point-cloud preview WebGL context is unavailable.");
+    }
+
+    const pixel = new Uint8Array(4);
+    context.readPixels(1, 1, 1, 1, context.RGBA, context.UNSIGNED_BYTE, pixel);
+    return Array.from(pixel);
+  });
 
 const readStoredZipEntries = (archive: Buffer): ReadonlyMap<string, Buffer> => {
   const endSignature = 0x06054b50;
@@ -373,6 +389,35 @@ test("point-cloud preview falls back to baked colours when one spatial-hash cell
   await expect(page.getByTestId("mesh-color-mode-status")).toContainText(
     /dense cell/i,
   );
+});
+
+test("point-cloud preview switches between the available background colours", async ({
+  page,
+}) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  const backgroundSelect = page.getByTestId("background-color-select");
+  const previewCanvas = page.getByTestId("pointcloud-preview-canvas");
+
+  await expect(backgroundSelect).toHaveValue("default");
+  await expect(backgroundSelect.locator("option")).toHaveText([
+    "Default",
+    "Black",
+    "White",
+  ]);
+  await expect
+    .poll(() => readPreviewBackgroundPixel(previewCanvas))
+    .toEqual([9, 17, 31, 255]);
+
+  await backgroundSelect.selectOption("black");
+  await expect
+    .poll(() => readPreviewBackgroundPixel(previewCanvas))
+    .toEqual([0, 0, 0, 255]);
+
+  await backgroundSelect.selectOption("white");
+  await expect
+    .poll(() => readPreviewBackgroundPixel(previewCanvas))
+    .toEqual([255, 255, 255, 255]);
 });
 
 test("point-cloud preview disables dependent controls and saves viewpoints", async ({

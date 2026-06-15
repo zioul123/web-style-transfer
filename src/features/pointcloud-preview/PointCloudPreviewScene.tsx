@@ -16,6 +16,7 @@ import type {
   MeshColorMode,
   PointCloudHitSample,
   PointCloudMeshData,
+  PointCloudPreviewBackgroundColor,
   PointCloudPreviewCameraCommand,
   PointCloudPreviewViewAxis,
   PreviewCameraState,
@@ -31,6 +32,7 @@ type PointCloudPreviewSceneProps = {
   readonly meshColorMode: MeshColorMode;
   readonly showNeighborDebug: boolean;
   readonly pointSize: number;
+  readonly backgroundColor: PointCloudPreviewBackgroundColor;
   readonly pointGammaCorrection: boolean;
   readonly brightness: number;
   readonly swapYZ: boolean;
@@ -63,6 +65,11 @@ const minimumSquaredDistance = 1e-16;
 const fragmentShaderNeighborCellRadius = 1;
 const textureMaxWidth = 2048;
 const cameraStateEpsilon = 1e-5;
+const backgroundColors: Record<PointCloudPreviewBackgroundColor, string> = {
+  default: "#09111f",
+  black: "#000000",
+  white: "#ffffff",
+};
 
 const fragmentKnnVertexShader = `
   varying vec3 vSamplePosition;
@@ -556,6 +563,7 @@ function SceneContent({
   meshColorMode,
   showNeighborDebug,
   pointSize,
+  backgroundColor,
   pointGammaCorrection,
   brightness,
   highlightSample,
@@ -750,6 +758,7 @@ function SceneContent({
   const fogNear = sceneRadius * 4;
   const fogFar = sceneRadius * 12;
   const effectivePointSize = Math.max(data.bounds.radius * pointSize, 0.008);
+  const sceneBackgroundColor = backgroundColors[backgroundColor];
   const displayHighlightColor = useMemo(
     () =>
       highlightSample === null
@@ -798,8 +807,8 @@ function SceneContent({
 
   return (
     <>
-      <color attach="background" args={["#09111f"]} />
-      <fog attach="fog" args={["#09111f", fogNear, fogFar]} />
+      <color attach="background" args={[sceneBackgroundColor]} />
+      <fog attach="fog" args={[sceneBackgroundColor, fogNear, fogFar]} />
       <group matrixAutoUpdate={false} matrix={transformMatrix}>
         <gridHelper
           args={[data.bounds.radius * 6, 12, "#164e63", "#0f172a"]}
@@ -874,6 +883,7 @@ export function PointCloudPreviewScene({
   meshColorMode,
   showNeighborDebug,
   pointSize,
+  backgroundColor,
   pointGammaCorrection,
   brightness,
   swapYZ,
@@ -956,6 +966,7 @@ export function PointCloudPreviewScene({
           meshColorMode={meshColorMode}
           showNeighborDebug={showNeighborDebug}
           pointSize={pointSize}
+          backgroundColor={backgroundColor}
           pointGammaCorrection={pointGammaCorrection}
           brightness={brightness}
           swapYZ={swapYZ}

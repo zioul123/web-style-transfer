@@ -23,6 +23,7 @@ export const defaultPointCloudPreviewViewSettings: PointCloudPreviewViewSettings
     showWireframe: false,
     meshColorMode: "fragment-knn",
     pointSize: defaultPointCloudPreviewPointSize,
+    backgroundColor: "default",
     disableGammaDecoding: false,
     brightness: 1,
     swapYZ: false,

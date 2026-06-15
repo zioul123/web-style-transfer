@@ -5,6 +5,7 @@ import {
 } from "./PreviewViewControls";
 import type { SavedViewpoint } from "./pointCloudPreviewModels";
 import type {
+  PointCloudPreviewBackgroundColor,
   PointCloudPreviewViewAxis,
   PointCloudPreviewViewSettings,
   PreviewCameraState,
@@ -218,6 +219,24 @@ export function PointCloudPreviewControlsPanel({
         testId="shading-options-card"
       >
         <div className="space-y-4 text-sm text-slate-200">
+          <label className="block rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4">
+            <span className="mb-2 block text-slate-300">Background colour</span>
+            <select
+              data-testid="background-color-select"
+              className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-slate-100"
+              value={viewSettings.backgroundColor}
+              onChange={(event) =>
+                updateViewSettings({
+                  backgroundColor: event.target
+                    .value as PointCloudPreviewBackgroundColor,
+                })
+              }
+            >
+              <option value="default">Default</option>
+              <option value="black">Black</option>
+              <option value="white">White</option>
+            </select>
+          </label>
           <label className="flex items-center gap-3 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-3">
             <input
               className="accent-amber-300"
