@@ -141,6 +141,50 @@ const readPreviewBackgroundPixel = async (
     return Array.from(pixel);
   });
 
+const readCameraState = async (
+  cameraState: Locator,
+): Promise<{
+  readonly position: readonly [number, number, number];
+  readonly target: readonly [number, number, number];
+} | null> => {
+  const text = await cameraState.textContent();
+  if (text === null || text === "unavailable") {
+    return null;
+  }
+  return JSON.parse(text) as {
+    readonly position: readonly [number, number, number];
+    readonly target: readonly [number, number, number];
+  };
+};
+
+const snapCameraToPositiveX = async (
+  cameraState: Locator,
+  snapButton: Locator,
+): Promise<string> => {
+  await expect.poll(() => readCameraState(cameraState)).not.toBeNull();
+  await snapButton.click();
+  await expect
+    .poll(
+      async () => {
+        const state = await readCameraState(cameraState);
+        if (state === null) {
+          return false;
+        }
+        const offset = state.position.map(
+          (value, index) => value - state.target[index],
+        );
+        return (
+          offset[0] > 0 &&
+          Math.abs(offset[1]) <= 1e-5 &&
+          Math.abs(offset[2]) <= 1e-5
+        );
+      },
+      { timeout: 10_000 },
+    )
+    .toBe(true);
+  return (await cameraState.textContent())!;
+};
+
 const readStoredZipEntries = (archive: Buffer): ReadonlyMap<string, Buffer> => {
   const endSignature = 0x06054b50;
   let endOffset = archive.length - 22;
@@ -651,17 +695,10 @@ test("point-cloud preview downloads every mesh and selected viewpoint in one ZIP
   await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
     "duplicate.json",
   );
-  const cameraStateBeforeSnap = await page
-    .getByTestId("camera-state")
-    .textContent();
-  await page.getByTestId("snap-axis-pos-x").click();
-  await expect
-    .poll(() => page.getByTestId("camera-state").textContent())
-    .not.toBe(cameraStateBeforeSnap);
-  const cameraStateBeforeBatch = await page
-    .getByTestId("camera-state")
-    .textContent();
-  expect(cameraStateBeforeBatch).not.toBe("unavailable");
+  const cameraStateBeforeBatch = await snapCameraToPositiveX(
+    page.getByTestId("camera-state"),
+    page.getByTestId("snap-axis-pos-x"),
+  );
 
   await page.getByTestId("batch-screenshot-button").click();
   await expect(page.getByTestId("batch-screenshot-download")).toBeDisabled();
@@ -740,17 +777,10 @@ test("point-cloud batch screenshot reports malformed queued meshes and restores 
     "valid.json",
   );
   await expect(page.getByTestId("swap-yz-button")).toHaveText(/Y\/Z swapped/i);
-  const cameraStateBeforeSnap = await page
-    .getByTestId("camera-state")
-    .textContent();
-  await page.getByTestId("snap-axis-pos-x").click();
-  await expect
-    .poll(() => page.getByTestId("camera-state").textContent())
-    .not.toBe(cameraStateBeforeSnap);
-  const cameraStateBeforeBatch = await page
-    .getByTestId("camera-state")
-    .textContent();
-  expect(cameraStateBeforeBatch).not.toBe("unavailable");
+  const cameraStateBeforeBatch = await snapCameraToPositiveX(
+    page.getByTestId("camera-state"),
+    page.getByTestId("snap-axis-pos-x"),
+  );
 
   await page.getByTestId("batch-screenshot-button").click();
   await page.getByTestId("batch-viewpoint-1").check();
