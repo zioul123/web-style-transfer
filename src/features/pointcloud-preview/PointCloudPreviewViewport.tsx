@@ -90,9 +90,11 @@ export function PointCloudPreviewViewport({
             showMesh={viewSettings.showMesh}
             showPoints={viewSettings.showPoints}
             showWireframe={viewSettings.showWireframe}
+            showGroundPlane={viewSettings.showGroundPlane}
             meshColorMode={effectiveMeshColorMode}
             showNeighborDebug
             pointSize={viewSettings.pointSize}
+            backgroundColor={viewSettings.backgroundColor}
             pointGammaCorrection={!viewSettings.disableGammaDecoding}
             brightness={viewSettings.brightness}
             swapYZ={viewSettings.swapYZ}

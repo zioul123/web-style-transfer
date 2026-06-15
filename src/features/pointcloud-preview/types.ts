@@ -60,6 +60,8 @@ export type PreviewCameraState = {
 
 export type MeshColorMode = "baked" | "fragment-knn";
 
+export type PointCloudPreviewBackgroundColor = "default" | "black" | "white";
+
 export type PointCloudPreviewViewAxis =
   | "pos-x"
   | "neg-x"
@@ -88,8 +90,10 @@ export type PointCloudPreviewViewSettings = {
   readonly showMesh: boolean;
   readonly showPoints: boolean;
   readonly showWireframe: boolean;
+  readonly showGroundPlane: boolean;
   readonly meshColorMode: MeshColorMode;
   readonly pointSize: number;
+  readonly backgroundColor: PointCloudPreviewBackgroundColor;
   readonly disableGammaDecoding: boolean;
   readonly brightness: number;
   readonly swapYZ: boolean;

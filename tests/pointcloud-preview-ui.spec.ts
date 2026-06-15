@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { gotoStableApp } from "./helpers/appPage";
 
@@ -124,6 +124,66 @@ const denseCellUploadJson = JSON.stringify({
     [0, 2, 3],
   ],
 });
+
+const readPreviewBackgroundPixel = async (
+  previewCanvas: Locator,
+): Promise<readonly number[]> =>
+  previewCanvas.locator("canvas").evaluate((canvas) => {
+    const context =
+      (canvas as HTMLCanvasElement).getContext("webgl2") ??
+      (canvas as HTMLCanvasElement).getContext("webgl");
+    if (context === null) {
+      throw new Error("Point-cloud preview WebGL context is unavailable.");
+    }
+
+    const pixel = new Uint8Array(4);
+    context.readPixels(1, 1, 1, 1, context.RGBA, context.UNSIGNED_BYTE, pixel);
+    return Array.from(pixel);
+  });
+
+const readCameraState = async (
+  cameraState: Locator,
+): Promise<{
+  readonly position: readonly [number, number, number];
+  readonly target: readonly [number, number, number];
+} | null> => {
+  const text = await cameraState.textContent();
+  if (text === null || text === "unavailable") {
+    return null;
+  }
+  return JSON.parse(text) as {
+    readonly position: readonly [number, number, number];
+    readonly target: readonly [number, number, number];
+  };
+};
+
+const snapCameraToPositiveX = async (
+  cameraState: Locator,
+  snapButton: Locator,
+): Promise<string> => {
+  await expect.poll(() => readCameraState(cameraState)).not.toBeNull();
+  await snapButton.click();
+  await expect
+    .poll(
+      async () => {
+        const state = await readCameraState(cameraState);
+        if (state === null) {
+          return false;
+        }
+        const offset = state.position.map(
+          (value, index) => value - state.target[index],
+        );
+        return (
+          offset[0] > 0 &&
+          Math.abs(offset[1]) <= 1e-5 &&
+          Math.abs(offset[2]) <= 1e-5
+        );
+      },
+      { timeout: 10_000 },
+    )
+    .toBe(true);
+  return (await cameraState.textContent())!;
+};
 
 const readStoredZipEntries = (archive: Buffer): ReadonlyMap<string, Buffer> => {
   const endSignature = 0x06054b50;
@@ -375,6 +435,67 @@ test("point-cloud preview falls back to baked colours when one spatial-hash cell
   );
 });
 
+test("point-cloud preview switches between the available background colours", async ({
+  page,
+}) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  const backgroundSelect = page.getByTestId("background-color-select");
+  const previewCanvas = page.getByTestId("pointcloud-preview-canvas");
+
+  await expect(backgroundSelect).toHaveValue("default");
+  await expect(backgroundSelect.locator("option")).toHaveText([
+    "Default",
+    "Black",
+    "White",
+  ]);
+  await expect
+    .poll(() => readPreviewBackgroundPixel(previewCanvas))
+    .toEqual([9, 17, 31, 255]);
+
+  await backgroundSelect.selectOption("black");
+  await expect
+    .poll(() => readPreviewBackgroundPixel(previewCanvas))
+    .toEqual([0, 0, 0, 255]);
+
+  await backgroundSelect.selectOption("white");
+  await expect
+    .poll(() => readPreviewBackgroundPixel(previewCanvas))
+    .toEqual([255, 255, 255, 255]);
+});
+
+test("point-cloud preview toggles the ground plane axis", async ({ page }) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await page.getByTestId("background-color-select").selectOption("white");
+  await page.getByTestId("toggle-mesh-button").click();
+  await page.getByTestId("toggle-points-button").click();
+
+  const groundPlaneCheckbox = page.getByTestId("ground-plane-axis-checkbox");
+  const canvas = page
+    .getByTestId("pointcloud-preview-canvas")
+    .locator("canvas");
+
+  await expect(groundPlaneCheckbox).toBeChecked();
+  const visibleGroundPlane = await canvas.screenshot();
+
+  await groundPlaneCheckbox.uncheck();
+  await expect(groundPlaneCheckbox).not.toBeChecked();
+  await expect
+    .poll(async () =>
+      Buffer.compare(visibleGroundPlane, await canvas.screenshot()),
+    )
+    .not.toBe(0);
+
+  await groundPlaneCheckbox.check();
+  await expect(groundPlaneCheckbox).toBeChecked();
+  await expect
+    .poll(async () =>
+      Buffer.compare(visibleGroundPlane, await canvas.screenshot()),
+    )
+    .toBe(0);
+});
+
 test("point-cloud preview disables dependent controls and saves viewpoints", async ({
   page,
 }) => {
@@ -574,17 +695,10 @@ test("point-cloud preview downloads every mesh and selected viewpoint in one ZIP
   await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
     "duplicate.json",
   );
-  const cameraStateBeforeSnap = await page
-    .getByTestId("camera-state")
-    .textContent();
-  await page.getByTestId("snap-axis-pos-x").click();
-  await expect
-    .poll(() => page.getByTestId("camera-state").textContent())
-    .not.toBe(cameraStateBeforeSnap);
-  const cameraStateBeforeBatch = await page
-    .getByTestId("camera-state")
-    .textContent();
-  expect(cameraStateBeforeBatch).not.toBe("unavailable");
+  const cameraStateBeforeBatch = await snapCameraToPositiveX(
+    page.getByTestId("camera-state"),
+    page.getByTestId("snap-axis-pos-x"),
+  );
 
   await page.getByTestId("batch-screenshot-button").click();
   await expect(page.getByTestId("batch-screenshot-download")).toBeDisabled();
@@ -663,17 +777,10 @@ test("point-cloud batch screenshot reports malformed queued meshes and restores 
     "valid.json",
   );
   await expect(page.getByTestId("swap-yz-button")).toHaveText(/Y\/Z swapped/i);
-  const cameraStateBeforeSnap = await page
-    .getByTestId("camera-state")
-    .textContent();
-  await page.getByTestId("snap-axis-pos-x").click();
-  await expect
-    .poll(() => page.getByTestId("camera-state").textContent())
-    .not.toBe(cameraStateBeforeSnap);
-  const cameraStateBeforeBatch = await page
-    .getByTestId("camera-state")
-    .textContent();
-  expect(cameraStateBeforeBatch).not.toBe("unavailable");
+  const cameraStateBeforeBatch = await snapCameraToPositiveX(
+    page.getByTestId("camera-state"),
+    page.getByTestId("snap-axis-pos-x"),
+  );
 
   await page.getByTestId("batch-screenshot-button").click();
   await page.getByTestId("batch-viewpoint-1").check();
