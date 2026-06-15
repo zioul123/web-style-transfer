@@ -38,6 +38,8 @@ type PointCloudPreviewSceneProps = {
   readonly cameraCommand: PointCloudPreviewCameraCommand;
   readonly onHoverSampleChange: (sample: PointCloudHitSample | null) => void;
   readonly onCameraStateChange: (state: PreviewCameraState) => void;
+  readonly onCameraCommandApplied?: (commandId: number) => void;
+  readonly onFrameRendered?: (commandId: number) => void;
   readonly onFramesPerSecondChange: (fps: number) => void;
 };
 
@@ -45,6 +47,7 @@ type OrbitCameraControlsProps = {
   readonly data: PointCloudMeshData;
   readonly command: PointCloudPreviewCameraCommand;
   readonly onCameraStateChange: (state: PreviewCameraState) => void;
+  readonly onCameraCommandApplied?: (commandId: number) => void;
 };
 
 type SceneContentProps = Omit<
@@ -420,6 +423,7 @@ function OrbitCameraControls({
   data,
   command,
   onCameraStateChange,
+  onCameraCommandApplied,
 }: OrbitCameraControlsProps) {
   const { camera, gl } = useThree();
   const controlsRef = useRef<OrbitControls | null>(null);
@@ -438,56 +442,53 @@ function OrbitCameraControls({
     };
   }, [camera, gl.domElement]);
 
-  useEffect(() => {
-    const controls = controlsRef.current;
-    if (controls === null || lastCommandIdRef.current === command.id) {
-      return;
-    }
-
-    const nextState =
-      command.type === "frame"
-        ? buildDefaultCameraState(data)
-        : command.type === "restore"
-          ? command.camera
-          : (() => {
-              const currentTarget = [
-                controls.target.x,
-                controls.target.y,
-                controls.target.z,
-              ] as const;
-              const delta = new THREE.Vector3()
-                .copy(camera.position)
-                .sub(controls.target);
-              const distance = Math.max(
-                delta.length(),
-                Math.max(data.bounds.radius, 0.25) * 2.75,
-              );
-              const axis = axisVectorByView[command.axis];
-              return {
-                position: [
-                  currentTarget[0] + axis[0] * distance,
-                  currentTarget[1] + axis[1] * distance,
-                  currentTarget[2] + axis[2] * distance,
-                ] as const,
-                target: currentTarget,
-              };
-            })();
-
-    camera.position.set(...nextState.position);
-    controls.target.set(...nextState.target);
-    camera.lookAt(...nextState.target);
-    camera.updateProjectionMatrix();
-    controls.update();
-    lastCameraStateRef.current = nextState;
-    onCameraStateChange(nextState);
-    lastCommandIdRef.current = command.id;
-  }, [camera, command, data, onCameraStateChange]);
-
   useFrame((_, delta) => {
     const controls = controlsRef.current;
     if (controls === null) {
       return;
     }
+
+    if (lastCommandIdRef.current !== command.id) {
+      const nextState =
+        command.type === "frame"
+          ? buildDefaultCameraState(data)
+          : command.type === "restore"
+            ? command.camera
+            : (() => {
+                const currentTarget = [
+                  controls.target.x,
+                  controls.target.y,
+                  controls.target.z,
+                ] as const;
+                const deltaFromTarget = new THREE.Vector3()
+                  .copy(camera.position)
+                  .sub(controls.target);
+                const distance = Math.max(
+                  deltaFromTarget.length(),
+                  Math.max(data.bounds.radius, 0.25) * 2.75,
+                );
+                const axis = axisVectorByView[command.axis];
+                return {
+                  position: [
+                    currentTarget[0] + axis[0] * distance,
+                    currentTarget[1] + axis[1] * distance,
+                    currentTarget[2] + axis[2] * distance,
+                  ] as const,
+                  target: currentTarget,
+                };
+              })();
+
+      camera.position.set(...nextState.position);
+      controls.target.set(...nextState.target);
+      camera.lookAt(...nextState.target);
+      camera.updateProjectionMatrix();
+      controls.update();
+      lastCameraStateRef.current = nextState;
+      onCameraStateChange(nextState);
+      lastCommandIdRef.current = command.id;
+      onCameraCommandApplied?.(command.id);
+    }
+
     controls.update();
     emissionAccumulatorRef.current += delta;
     if (emissionAccumulatorRef.current < 0.1) {
@@ -511,6 +512,19 @@ function OrbitCameraControls({
     onCameraStateChange(nextState);
   });
 
+  return null;
+}
+
+function FrameRenderedNotifier({
+  commandId,
+  onFrameRendered,
+}: {
+  readonly commandId: number;
+  readonly onFrameRendered?: (commandId: number) => void;
+}) {
+  useFrame(() => {
+    onFrameRendered?.(commandId);
+  });
   return null;
 }
 
@@ -867,6 +881,8 @@ export function PointCloudPreviewScene({
   cameraCommand,
   onHoverSampleChange,
   onCameraStateChange,
+  onCameraCommandApplied,
+  onFrameRendered,
   onFramesPerSecondChange,
 }: PointCloudPreviewSceneProps) {
   const transformMatrix = useMemo(() => {
@@ -925,6 +941,11 @@ export function PointCloudPreviewScene({
           data={data}
           command={cameraCommand}
           onCameraStateChange={onCameraStateChange}
+          onCameraCommandApplied={onCameraCommandApplied}
+        />
+        <FrameRenderedNotifier
+          commandId={cameraCommand.id}
+          onFrameRendered={onFrameRendered}
         />
         <FpsSampler onFramesPerSecondChange={onFramesPerSecondChange} />
         <SceneContent
