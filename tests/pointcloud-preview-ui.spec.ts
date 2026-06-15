@@ -419,6 +419,49 @@ test("point-cloud preview disables dependent controls and saves viewpoints", asy
   await expect(page.getByTestId("viewpoint-go-1")).toHaveCount(0);
 });
 
+test("point-cloud preview shows and copies saved viewpoint camera details", async ({
+  context,
+  page,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin: "http://127.0.0.1:4173",
+  });
+  await gotoStableApp(page, "/pointcloud-preview");
+  await expect(page.getByTestId("save-viewpoint-button")).toBeEnabled();
+
+  const cameraState = JSON.parse(
+    (await page.getByTestId("camera-state").textContent()) ?? "null",
+  ) as {
+    position: [number, number, number];
+    target: [number, number, number];
+  };
+  const formatTuple = (tuple: [number, number, number]): string =>
+    `(${tuple.map((value) => value.toFixed(1)).join(", ")})`;
+  const expectedCameraText =
+    `position = ${formatTuple(cameraState.position)}\n` +
+    `focal_point = ${formatTuple(cameraState.target)}`;
+
+  await page.getByTestId("save-viewpoint-button").click();
+  const infoButton = page.getByTestId("viewpoint-info-1");
+  await expect(infoButton).toHaveAttribute("aria-expanded", "false");
+
+  await infoButton.click();
+  await expect(infoButton).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("viewpoint-camera-details-1")).toHaveText(
+    expectedCameraText,
+  );
+
+  await page.getByTestId("viewpoint-copy-1").click();
+  await expect(page.getByTestId("viewpoint-copy-1")).toContainText("Copied");
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toBe(expectedCameraText);
+
+  await page.getByText("Saved viewpoints", { exact: true }).click();
+  await expect(page.getByTestId("viewpoint-info-popover-1")).toHaveCount(0);
+  await expect(infoButton).toHaveAttribute("aria-expanded", "false");
+});
+
 test("point-cloud preview can download a screenshot", async ({ page }) => {
   await gotoStableApp(page, "/pointcloud-preview");
 

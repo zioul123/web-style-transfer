@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import {
   PointCloudPreviewPointSizeControl,
   PreviewVisibilityToggleButton,
@@ -12,13 +13,116 @@ import type { NextPointCloudPreviewCameraCommand } from "./usePointCloudPreviewC
 import {
   ArrowRightIcon,
   CollapsiblePanelCard,
+  CopyIcon,
   IconButton,
+  InfoIcon,
   SaveIcon,
   TrashIcon,
 } from "./PointCloudPreviewUi";
 
 const brightnessLabel = (brightness: number): string =>
   `${brightness.toFixed(2)}x`;
+
+const cameraTupleText = (tuple: readonly [number, number, number]): string =>
+  `(${tuple.map((value) => value.toFixed(1)).join(", ")})`;
+
+const savedViewpointCameraText = (viewpoint: SavedViewpoint): string =>
+  `position = ${cameraTupleText(viewpoint.camera.position)}\n` +
+  `focal_point = ${cameraTupleText(viewpoint.camera.target)}`;
+
+function SavedViewpointInfoPopover({
+  viewpoint,
+}: {
+  readonly viewpoint: SavedViewpoint;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">(
+    "idle",
+  );
+  const containerRef = useRef<HTMLDivElement>(null);
+  const popoverId = `viewpoint-info-popover-${viewpoint.id}`;
+  const cameraText = savedViewpointCameraText(viewpoint);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const handleOutsidePointerDown = (event: PointerEvent): void => {
+      if (
+        event.target instanceof Node &&
+        !containerRef.current?.contains(event.target)
+      ) {
+        setIsOpen(false);
+        setCopyStatus("idle");
+      }
+    };
+
+    document.addEventListener("pointerdown", handleOutsidePointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", handleOutsidePointerDown);
+    };
+  }, [isOpen]);
+
+  const copyCameraText = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(cameraText);
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("failed");
+    }
+  };
+
+  return (
+    <div ref={containerRef} className="relative shrink-0">
+      <IconButton
+        data-testid={`viewpoint-info-${viewpoint.id}`}
+        className="h-9 w-9 rounded-full border border-sky-300/20 bg-sky-400/10 text-sky-100 hover:bg-sky-400/20"
+        aria-label={`Show camera details for ${viewpoint.label}`}
+        aria-expanded={isOpen}
+        aria-controls={popoverId}
+        onClick={() => {
+          setIsOpen((open) => !open);
+          setCopyStatus("idle");
+        }}
+      >
+        <InfoIcon />
+        <span className="sr-only">Show camera details</span>
+      </IconButton>
+      {isOpen ? (
+        <div
+          id={popoverId}
+          data-testid={`viewpoint-info-popover-${viewpoint.id}`}
+          className="absolute right-0 top-11 z-20 w-72 max-w-[calc(100vw-3rem)] rounded-[0.95rem] border border-sky-300/20 bg-slate-950 p-4 shadow-2xl shadow-black/40"
+          role="dialog"
+          aria-label={`Camera details for ${viewpoint.label}`}
+        >
+          <pre
+            data-testid={`viewpoint-camera-details-${viewpoint.id}`}
+            className="whitespace-pre-wrap font-mono text-xs leading-5 text-slate-200"
+          >
+            {cameraText}
+          </pre>
+          <button
+            data-testid={`viewpoint-copy-${viewpoint.id}`}
+            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-slate-100 transition hover:bg-white/10"
+            type="button"
+            onClick={() => void copyCameraText()}
+          >
+            <CopyIcon />
+            <span>
+              {copyStatus === "copied"
+                ? "Copied"
+                : copyStatus === "failed"
+                  ? "Copy failed"
+                  : "Copy to clipboard"}
+            </span>
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 const snapAxisButtons: readonly {
   readonly axis: PointCloudPreviewViewAxis;
@@ -231,6 +335,7 @@ export function PointCloudPreviewControlsPanel({
                           onRenameViewpoint(viewpoint.id, event.target.value)
                         }
                       />
+                      <SavedViewpointInfoPopover viewpoint={viewpoint} />
                       {viewpoint.swapYZ ? (
                         <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.15em] text-amber-200">
                           Y/Z

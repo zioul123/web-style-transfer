@@ -126,6 +126,54 @@ export function TrashIcon() {
   );
 }
 
+export function InfoIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.2" />
+      <path
+        d="M8 7V11"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+      <circle cx="8" cy="4.75" r="0.75" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function CopyIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <rect
+        x="5.5"
+        y="5.5"
+        width="7"
+        height="7"
+        rx="1"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+      <path
+        d="M10.5 5.5V4.5C10.5 3.94772 10.0523 3.5 9.5 3.5H4.5C3.94772 3.5 3.5 3.94772 3.5 4.5V9.5C3.5 10.0523 3.94772 10.5 4.5 10.5H5.5"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+    </svg>
+  );
+}
+
 export function ArrowRightIcon() {
   return (
     <svg
