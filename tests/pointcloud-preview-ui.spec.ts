@@ -423,6 +423,10 @@ test("point-cloud preview switches between the available background colours", as
 test("point-cloud preview toggles the ground plane axis", async ({ page }) => {
   await gotoStableApp(page, "/pointcloud-preview");
 
+  await page.getByTestId("background-color-select").selectOption("white");
+  await page.getByTestId("toggle-mesh-button").click();
+  await page.getByTestId("toggle-points-button").click();
+
   const groundPlaneCheckbox = page.getByTestId("ground-plane-axis-checkbox");
   const canvas = page
     .getByTestId("pointcloud-preview-canvas")
