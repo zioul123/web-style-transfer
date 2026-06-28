@@ -11,6 +11,7 @@ that matches the task, then follow imports and tests only as needed.
 | `src/features/style-transfer/components/` | Main UI panels and preview/control components                                     |
 | `src/features/style-transfer/hooks/`      | Main-thread style-transfer orchestration                                          |
 | `src/features/style-transfer/benchmark/`  | Model-pack benchmark and acceptance helpers                                       |
+| `backend/style_transfer_backend/`         | Optional local FastAPI/PyTorch image style-transfer backend                       |
 | `src/shared/`                             | Cross-feature browser asset URL helpers                                           |
 | `src/types/worker-protocol/`              | Worker request, response, tensor, op, and pipeline types                          |
 | `src/ml/constants/`                       | Shared VGG19 layer/tap constants                                                  |
@@ -34,6 +35,8 @@ that matches the task, then follow imports and tests only as needed.
 | `src/PointCloudPreviewApp.tsx`                                    | Standalone `/pointcloud-preview` route shell                                 |
 | `src/styleTransfer.worker.ts`                                     | Worker bootstrap                                                             |
 | `src/features/style-transfer/hooks/useStyleTransferController.ts` | Main-thread state, image conversion, model loading, and worker orchestration |
+| `backend/style_transfer_backend/api.py`                           | FastAPI app factory and style-transfer HTTP endpoints                        |
+| `backend/style_transfer_backend/engine.py`                        | PyTorch VGG19 execution and backend optimizer sessions                       |
 | `src/ml/worker/main-thread-protocol/messageRouter.ts`             | Top-level worker request dispatch                                            |
 | `src/ml/worker/main-thread-protocol/tensorOpRouter.ts`            | Operation-level parity/debug dispatch                                        |
 | `src/ml/worker/pipelines/optimization/styleTransferPipeline.ts`   | Full pipeline wrapper and session clearing                                   |
@@ -44,6 +47,10 @@ that matches the task, then follow imports and tests only as needed.
 
 - `src/features/style-transfer/modelPacks.ts`: pack names, URL loading, parsing,
   and cache integration.
+- `src/features/style-transfer/backendSettingsStorage.ts`: persisted backend
+  preference and URL settings.
+- `src/features/style-transfer/styleTransferBackendClient.ts`: FastAPI health,
+  run, session-clear, response parsing, and request conversion helpers.
 - `src/features/pointcloud-preview/loadPointCloudMesh.ts`: JSON validation,
   typed-array conversion, bounds, and precomputed mesh vertex colours.
 - `src/features/pointcloud-preview/usePointCloudAssetsController.ts`,
@@ -90,6 +97,8 @@ that matches the task, then follow imports and tests only as needed.
 | `tests/helpers/fixtures.ts`            | Fixture loading helpers                                      |
 | `tests/helpers/fullPassArtifacts.ts`   | Full-pass fixture/model-pack selection                       |
 | `tests/helpers/appPage.ts`             | Stable app navigation helpers                                |
+| `tests/backend-selection.spec.ts`      | Backend auto/fallback UI and settings coverage               |
+| `backend/tests/`                       | FastAPI route tests with fake backend engines                |
 | `benchmarks/*.spec.ts`                 | Optional kernel, first-pool, and pack performance checks     |
 | `public/vgg19-first-pool/`             | Committed first-pool fixtures                                |
 | `public/phase4-backprop/`              | Committed backward fixture                                   |

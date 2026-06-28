@@ -24,6 +24,7 @@ import {
   resolutionOptions,
   type VggPackOption,
 } from "../uiOptions";
+import { isBackendPreference } from "../backendSettingsStorage";
 
 type AdvancedOptionsPanelProps = {
   readonly controls: StyleTransferControls;
@@ -115,6 +116,33 @@ export function AdvancedOptionsPanel({
             </option>
           ))}
         </select>
+      </label>
+      <label className="flex flex-col gap-1">
+        Backend
+        <select
+          aria-label="Backend"
+          className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+          value={controls.backendPreference}
+          onChange={(event) => {
+            const nextPreference = event.target.value;
+            if (isBackendPreference(nextPreference)) {
+              controls.setBackendPreference(nextPreference);
+            }
+          }}
+        >
+          <option value="auto">Auto FastAPI fallback</option>
+          <option value="webgpu">WebGPU worker</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1">
+        Backend URL
+        <input
+          aria-label="Backend URL"
+          className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+          type="url"
+          value={controls.backendUrl}
+          onChange={(event) => controls.setBackendUrl(event.target.value)}
+        />
       </label>
       <label className="flex flex-col gap-1">
         Chunk steps

@@ -11,6 +11,7 @@ The browser app is runnable and includes:
 - A React UI for content/style image selection, resolution presets, optimizer controls, model-pack selection, progress telemetry, and final image preview.
 - A standalone `/pointcloud-preview` route for rendering mesh-aligned point clouds from JSON exports, including fragment-KNN mesh shading, hit inspection, screenshots, and reusable saved viewpoints.
 - A Web Worker that owns WebGPU initialization, GPU buffers, shader dispatch, and pipeline execution.
+- An optional local FastAPI/PyTorch backend for image style-transfer chunks, with automatic fallback to the WebGPU worker when unavailable.
 - WebGPU kernels for forward ops, loss ops, manual input-gradient backpropagation, and optimizer updates.
 - End-to-end style-transfer execution through VGG19 feature layers up to `conv5_1` / torch `features[28]`.
 - Optimizer support for SGD, Adam, and LBFGS-style input updates.
@@ -26,6 +27,7 @@ The implementation is still intentionally correctness-first in several kernels. 
 | `src/App.tsx`                                                          | Main app shell and presentation layer.                                                                     |
 | `src/PointCloudPreviewApp.tsx`                                         | Standalone point-cloud mesh preview route shell.                                                           |
 | `src/features/style-transfer/`                                         | Main-thread style-transfer controller, model-pack loading, caching, and benchmark helpers.                 |
+| `backend/style_transfer_backend/`                                      | Optional local FastAPI/PyTorch backend for image style-transfer chunks.                                    |
 | `src/features/pointcloud-preview/`                                     | Point-cloud mesh JSON loading, validation, interpolation, and R3F scene rendering.                         |
 | `src/styleTransfer.worker.ts`                                          | Worker entrypoint.                                                                                         |
 | `src/ml/worker/main-thread-protocol/`                                  | Worker message routing and response helpers.                                                               |
@@ -69,6 +71,33 @@ npm run preview
 
 Run the benchmark UI by visiting `/benchmark` under the dev or preview server.
 Run the point-cloud mesh preview UI by visiting `/pointcloud-preview` under the dev or preview server.
+
+## Optional FastAPI backend
+
+The app defaults to backend mode `auto`: it probes `http://127.0.0.1:8000`
+and runs image style-transfer chunks through FastAPI when the backend is
+healthy. If the probe or a chunk fails, the controller falls back to the
+existing WebGPU worker. The WebGPU worker still uses the selected browser model
+pack; FastAPI owns its own torchvision VGG19 weights and may download them on
+the first real backend run.
+
+Install Python dependencies and start the backend from the repository root:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m backend.style_transfer_backend
+```
+
+The backend exposes `GET /health`, `POST /style-transfer/run`, and
+`POST /style-transfer/session/clear`. The browser client only sends image
+tensors to loopback backend URLs (`localhost`, `127.*`, or `[::1]`). To point
+the web app at a different local backend URL, use the advanced Backend URL
+control or start Vite with:
+
+```bash
+VITE_STYLE_TRANSFER_BACKEND_URL=http://127.0.0.1:8000 npm run dev
+```
 
 The point-cloud preview route boots from the committed medium demo, lets you
 upload replacement JSON exports, and provides:
@@ -130,6 +159,12 @@ python python-reference/export_vgg19_phase3_full_pass.py
 python python-reference/export_phase4_backprop_fixtures.py
 python python-reference/export_lbfgs_fixtures.py
 python python-reference/evaluate_vgg19_quantization.py
+```
+
+Run the FastAPI API tests without loading VGG19:
+
+```bash
+python -m unittest discover backend/tests
 ```
 
 Large generated fixtures and full model packs should not be committed unless the repository already tracks them or the task explicitly requires it.

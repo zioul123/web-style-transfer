@@ -9,6 +9,17 @@ type StatsPanelProps = {
 };
 
 export function StatsPanel({ controls, status }: StatsPanelProps) {
+  const backendLabel =
+    status.lastRunBackend === "fastapi"
+      ? "fastapi/pytorch"
+      : status.lastRunBackend === "webgpu"
+        ? "webgpu"
+        : "pending";
+  const runConfig =
+    status.lastRunBackend === "fastapi"
+      ? "fastapi/pytorch"
+      : controls.kernelConfigSummary;
+
   return (
     <details className="rounded-lg border border-white/10 bg-slate-950/55 p-4">
       <summary className="cursor-pointer font-semibold">View stats</summary>
@@ -19,7 +30,8 @@ export function StatsPanel({ controls, status }: StatsPanelProps) {
       ) : (
         <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
           <p>Chunk steps: {status.runStats.steps}</p>
-          <p>Kernel config: {controls.kernelConfigSummary}</p>
+          <p>Backend: {backendLabel}</p>
+          <p>Run config: {runConfig}</p>
           <p>Total: {status.runStats.elapsedMs.toFixed(1)} ms</p>
           <p>Avg step: {status.runStats.avgStepMs.toFixed(1)} ms</p>
           <p>Forward: {status.runStats.forwardMs.toFixed(1)} ms</p>

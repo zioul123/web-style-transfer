@@ -4,6 +4,11 @@ import type {
   WorkerKernelOptimizationFlags,
   WorkerRunStats,
 } from "../../../types/worker-protocol/pipelines";
+import type { StyleTransferBackendPreference } from "../backendSettingsStorage";
+import type {
+  FastApiHealthStatus,
+  StyleTransferRuntimeBackend,
+} from "../styleTransferBackendClient";
 import type { ModelCachePackStatus } from "../modelCache";
 import type { VggPackName } from "../modelPacks";
 
@@ -92,6 +97,12 @@ export interface StyleTransferControls {
   setConvBackwardInputKernel: Dispatch<SetStateAction<KernelConvBackwardInput>>;
   weightStorage: KernelWeightStorage;
   setWeightStorage: Dispatch<SetStateAction<KernelWeightStorage>>;
+  backendPreference: StyleTransferBackendPreference;
+  setBackendPreference: Dispatch<
+    SetStateAction<StyleTransferBackendPreference>
+  >;
+  backendUrl: string;
+  setBackendUrl: Dispatch<SetStateAction<string>>;
   kernelConfigSummary: string;
   kernelFlags: WorkerKernelOptimizationFlags | undefined;
   resetOptimizerState: () => void;
@@ -107,6 +118,10 @@ export interface StyleTransferStatus {
   isRunning: boolean;
   lastLoss: number | null;
   runStats: WorkerRunStats | null;
+  activeBackend: StyleTransferRuntimeBackend;
+  lastRunBackend: StyleTransferRuntimeBackend | null;
+  backendStatus: string;
+  fastApiHealth: FastApiHealthStatus;
   modelCacheState: "downloading" | "cached" | "ready";
   modelCacheBytes: number;
   modelCachePackStatuses: ModelCachePackStatus[];

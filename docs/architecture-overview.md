@@ -1,10 +1,10 @@
 # Web Style Transfer Architecture Overview
 
-This document describes the current module boundaries and runtime data flow for the WebGPU style-transfer app.
+This document describes the current module boundaries and runtime data flow for the WebGPU style-transfer app and its optional local FastAPI backend.
 
 ## System shape
 
-The app has three main layers:
+The app has three main browser layers plus one optional local backend:
 
 1. **Main-thread UI and orchestration**
    - React app shell in `src/App.tsx`.
@@ -18,8 +18,15 @@ The app has three main layers:
    - Worker entrypoint in `src/styleTransfer.worker.ts`.
    - Message routing in `src/ml/worker/main-thread-protocol/`.
    - Runtime helpers, kernels, and optimization pipelines under `src/ml/worker/`.
+4. **Local FastAPI/PyTorch backend**
+   - API package in `backend/style_transfer_backend/`.
+   - Server-owned torchvision VGG19 weights and per-session optimizer state.
+   - JSON tensor endpoints for image style-transfer chunks.
 
-The project is intentionally message-driven. The main thread posts a typed request, the worker routes it by discriminant, compute runs on the worker-owned WebGPU device, and the worker posts back a typed response.
+The project remains message-driven in the browser. The main thread either posts
+the existing typed worker request to WebGPU or, in auto backend mode, sends a
+frontend-local JSON request to FastAPI when health checks pass. FastAPI does not
+consume browser model-pack weights; those remain WebGPU fallback inputs.
 
 ## Main-thread app
 
@@ -45,11 +52,27 @@ The controller hook owns most main-thread orchestration:
 - Converts DOM images to NCHW float tensors and output tensors back to PNG data URLs.
 - Chooses resolution presets, including automatic portrait/landscape matching.
 - Loads selected VGG19 model packs and tracks IndexedDB cache status.
-- Builds `run-style-transfer` requests.
+- Builds `run-style-transfer` requests for WebGPU and local FastAPI requests
+  without browser weight payloads.
 - Maintains chunked run state, optimizer session IDs, losses, iteration count, timing text, and preview output.
-- Clears worker-side sessions and model cache when relevant controls change.
+- Probes the optional FastAPI backend, chooses the active backend in auto mode,
+  and falls back to WebGPU when health or run requests fail.
+- Clears worker-side and backend-side sessions plus model cache when relevant
+  controls change.
 
 This is the main seam for future UI/component extraction.
+
+### Backend settings and client
+
+`backendSettingsStorage.ts` stores the backend preference and URL in
+localStorage. The default preference is `auto`, and the default URL comes from
+`VITE_STYLE_TRANSFER_BACKEND_URL` or `http://127.0.0.1:8000`.
+
+`styleTransferBackendClient.ts` owns FastAPI health probing, run requests,
+session clearing, response parsing, and conversion from the WebGPU worker
+payload to the smaller server-owned-weight request shape. It rejects
+non-loopback backend URLs and requires the health response to identify the
+FastAPI/PyTorch backend before image tensors are sent.
 
 ### `src/features/style-transfer/modelPacks.ts` and `modelCache.ts`
 
@@ -110,6 +133,11 @@ presentation components:
 ## Worker protocol
 
 The public import surface is `src/types.ts`, which re-exports the split protocol files in `src/types/worker-protocol/`.
+
+The FastAPI backend does not add variants to `WorkerRequest` or
+`WorkerResponse`. Its request/response types are frontend-local and mirror the
+successful `run-style-transfer-result` payload enough for shared UI state and
+stats rendering.
 
 The protocol is organized as:
 
@@ -224,6 +252,19 @@ The worker can keep optimizer state by `sessionId`. `clear-style-transfer-sessio
 
 The optimizer updates buffers representing image pixels, not VGG19 weights.
 
+## FastAPI backend
+
+`backend/style_transfer_backend/api.py` creates the FastAPI app and exposes:
+
+- `GET /health`
+- `POST /style-transfer/run`
+- `POST /style-transfer/session/clear`
+
+`engine.py` implements the PyTorch engine. It chooses `cuda`, then `mps`, then
+`cpu`, lazily loads torchvision VGG19 on the first real run, computes content
+and style targets on the server, and preserves optimizer state by `sessionId`.
+Health checks do not load VGG19 so app startup remains lightweight.
+
 ## VGG19 layer constants
 
 `src/ml/constants/vgg19.ts` centralizes the torch `vgg19.features` ReLU tap indices used by the app and tests. Pipeline layer schedules live in `src/ml/worker/pipelines/optimization/layerSchedules.ts` and `style-transfer/vgg19Plan.ts`.
@@ -243,12 +284,18 @@ The app resolves model URLs through `src/shared/assetUrls.ts`:
 
 1. React renders defaults and starts the controller hook.
 2. The controller creates the worker and initializes WebGPU.
-3. The controller loads selected model-pack manifests/shards, using IndexedDB when possible.
-4. Content/style images are converted to NCHW float arrays at the selected resolution.
-5. The controller sends `run-style-transfer` chunks to the worker.
-6. The worker executes the fixed graph and optimizer updates.
-7. The worker returns losses, timing stats, and updated output values.
-8. The controller renders the output PNG preview and schedules the next chunk if the run is still active.
+3. The controller probes the configured FastAPI backend when backend mode is
+   `auto`.
+4. The controller loads selected model-pack manifests/shards, using IndexedDB
+   when possible for WebGPU fallback.
+5. Content/style images are converted to NCHW float arrays at the selected
+   resolution.
+6. When FastAPI is healthy, the controller sends a JSON tensor chunk without
+   browser weights; otherwise it sends `run-style-transfer` to the worker.
+7. The selected backend executes the fixed graph and optimizer updates.
+8. The backend returns losses, timing stats, and updated output values.
+9. The controller renders the output PNG preview and schedules the next chunk if
+   the run is still active.
 
 ## Point-cloud preview flow
 

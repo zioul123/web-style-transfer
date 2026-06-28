@@ -11,6 +11,8 @@ export function StatusPanel({ status }: StatusPanelProps) {
     <section className="grid gap-3 rounded-lg border border-white/10 bg-slate-950/55 p-4 text-sm md:grid-cols-2">
       <p>{status.workerStatus}</p>
       <p>{status.gpuStatus}</p>
+      <p>Active backend: {status.activeBackend}</p>
+      <p>{status.backendStatus}</p>
       <p>
         Model cache: {status.modelCacheState} ({cacheSizeMb} MB)
       </p>
@@ -18,6 +20,9 @@ export function StatusPanel({ status }: StatusPanelProps) {
         {status.modelCacheState === "downloading"
           ? "Model downloading..."
           : "Model cached"}
+      </p>
+      <p className="text-slate-300 md:col-span-2">
+        FastAPI: {status.fastApiHealth.message}
       </p>
       <p className="text-slate-300 md:col-span-2">{status.gpuInfo}</p>
     </section>

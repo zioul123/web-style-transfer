@@ -33,6 +33,23 @@ import {
   writeKernelOptimizationSettings,
   type KernelOptimizationSettings,
 } from "../kernelOptimizationSettingsStorage";
+import {
+  BACKEND_SETTINGS_STORAGE_KEY,
+  DEFAULT_BACKEND_URL,
+  readBackendSettings,
+  writeBackendSettings,
+  type StyleTransferBackendPreference,
+} from "../backendSettingsStorage";
+import {
+  clearFastApiStyleTransferSession,
+  probeFastApiBackend,
+  runFastApiStyleTransfer,
+  toFastApiStyleTransferRequest,
+  type FastApiHealthStatus,
+  type FastApiStyleTransferRunRequest,
+  type StyleTransferBackendRunResult,
+  type StyleTransferRuntimeBackend,
+} from "../styleTransferBackendClient";
 
 const DEFAULT_CONTENT_IMAGE_URL = new URL(
   "../../../../assets/madeira_900x1600.jpeg",
@@ -100,6 +117,15 @@ const createMessageId = (): string =>
 
 const createOptimizationSessionId = (): string =>
   `style-transfer-session-${createMessageId()}`;
+
+const unavailableFastApiHealth = (message: string): FastApiHealthStatus => ({
+  ok: false,
+  backend: "fastapi",
+  engine: "pytorch",
+  device: "unknown",
+  modelReady: false,
+  message,
+});
 
 const toResolvedState = <T>(update: SetStateAction<T>, current: T): T =>
   typeof update === "function"
@@ -228,6 +254,7 @@ export const useStyleTransferController =
     );
     const [initialKernelOptimizationSettings] =
       useState<KernelOptimizationSettings>(readKernelOptimizationSettings);
+    const [initialBackendSettings] = useState(readBackendSettings);
     const [optimizer, setOptimizer] = useState<"sgd" | "adam" | "lbfgs">(
       "lbfgs",
     );
@@ -272,6 +299,23 @@ export const useStyleTransferController =
     const [weightStorage, setWeightStorage] = useState<KernelWeightStorage>(
       initialKernelOptimizationSettings.weightStorage,
     );
+    const [backendPreference, setBackendPreferenceState] =
+      useState<StyleTransferBackendPreference>(
+        initialBackendSettings.backendPreference,
+      );
+    const [backendUrl, setBackendUrlState] = useState<string>(
+      initialBackendSettings.backendUrl,
+    );
+    const [fastApiHealth, setFastApiHealth] = useState<FastApiHealthStatus>(
+      unavailableFastApiHealth("FastAPI health has not been checked yet."),
+    );
+    const [activeBackend, setActiveBackend] =
+      useState<StyleTransferRuntimeBackend>("webgpu");
+    const [lastRunBackend, setLastRunBackend] =
+      useState<StyleTransferRuntimeBackend | null>(null);
+    const [backendStatus, setBackendStatus] = useState<string>(
+      "Backend selection pending...",
+    );
     const [iterations, setIterations] = useState<number>(0);
     const [isRunning, setIsRunning] = useState<boolean>(false);
     const [lastLoss, setLastLoss] = useState<number | null>(null);
@@ -301,14 +345,21 @@ export const useStyleTransferController =
     >([]);
 
     const workerRef = useRef<Worker | null>(null);
+    const runInFlightRef = useRef<boolean>(false);
+    const runSequenceRef = useRef<number>(0);
     const contentImageResolution = RESOLUTION_PRESETS[contentResolution];
     const styleImageResolution = RESOLUTION_PRESETS[styleResolution];
     const hasWebGpuOnMainThread = useMemo<boolean>(
       () => "gpu" in navigator,
       [],
     );
+    const hasFastApiRunOption =
+      backendPreference === "auto" && fastApiHealth.ok;
     const canRun =
-      contentTensor !== null && styleTensor !== null && weights !== null;
+      contentTensor !== null &&
+      styleTensor !== null &&
+      inputTensor !== null &&
+      (weights !== null || hasFastApiRunOption);
     const kernelOptimizationSettings = useMemo<KernelOptimizationSettings>(
       () => ({
         useCachedPipelines,
@@ -342,6 +393,9 @@ export const useStyleTransferController =
     useEffect(() => {
       writeKernelOptimizationSettings(kernelOptimizationSettings);
     }, [kernelOptimizationSettings]);
+    useEffect(() => {
+      writeBackendSettings({ backendPreference, backendUrl });
+    }, [backendPreference, backendUrl]);
     const kernelConfigSummary = useMemo(() => {
       const enabled: string[] = [];
       if (useCachedPipelines) enabled.push("cached-pipelines");
@@ -381,38 +435,89 @@ export const useStyleTransferController =
       } satisfies WorkerRequest);
     }, []);
 
+    const clearBackendSession = useCallback(
+      (sessionId: string): void => {
+        clearWorkerSession(sessionId);
+        void clearFastApiStyleTransferSession(backendUrl, sessionId);
+      },
+      [backendUrl, clearWorkerSession],
+    );
+
     const rotateOptimizationSession = useCallback(
       (clearCurrent: boolean): void => {
-        if (clearCurrent) clearWorkerSession(optimizationSessionId);
+        if (clearCurrent) clearBackendSession(optimizationSessionId);
         setOptimizationSessionId(createOptimizationSessionId());
       },
-      [clearWorkerSession, optimizationSessionId],
+      [clearBackendSession, optimizationSessionId],
     );
 
     useEffect(() => {
       const onStorage = (event: StorageEvent): void => {
-        if (
-          event.key !== KERNEL_OPTIMIZATION_SETTINGS_STORAGE_KEY ||
-          event.newValue === null
-        ) {
+        if (event.newValue === null) {
           return;
         }
-        const nextSettings = readKernelOptimizationSettings();
-        setUseCachedPipelines(nextSettings.useCachedPipelines);
-        setUsePersistentWeightBuffers(nextSettings.usePersistentWeightBuffers);
-        setUseStepBufferPool(nextSettings.useStepBufferPool);
-        setUseVec4Pointwise(nextSettings.useVec4Pointwise);
-        setUsePoolBackwardScatter(nextSettings.usePoolBackwardScatter);
-        setGramKernel(nextSettings.gramKernel);
-        setStyleBackward(nextSettings.styleBackward);
-        setConvForwardKernel(nextSettings.convForwardKernel);
-        setConvBackwardInputKernel(nextSettings.convBackwardInputKernel);
-        setWeightStorage(nextSettings.weightStorage);
-        if (!isRunning) rotateOptimizationSession(true);
+        if (event.key === KERNEL_OPTIMIZATION_SETTINGS_STORAGE_KEY) {
+          const nextSettings = readKernelOptimizationSettings();
+          setUseCachedPipelines(nextSettings.useCachedPipelines);
+          setUsePersistentWeightBuffers(
+            nextSettings.usePersistentWeightBuffers,
+          );
+          setUseStepBufferPool(nextSettings.useStepBufferPool);
+          setUseVec4Pointwise(nextSettings.useVec4Pointwise);
+          setUsePoolBackwardScatter(nextSettings.usePoolBackwardScatter);
+          setGramKernel(nextSettings.gramKernel);
+          setStyleBackward(nextSettings.styleBackward);
+          setConvForwardKernel(nextSettings.convForwardKernel);
+          setConvBackwardInputKernel(nextSettings.convBackwardInputKernel);
+          setWeightStorage(nextSettings.weightStorage);
+          if (!isRunning) rotateOptimizationSession(true);
+        }
+        if (event.key === BACKEND_SETTINGS_STORAGE_KEY) {
+          const nextSettings = readBackendSettings();
+          setBackendPreferenceState(nextSettings.backendPreference);
+          setBackendUrlState(nextSettings.backendUrl);
+          if (!isRunning) rotateOptimizationSession(true);
+        }
       };
       window.addEventListener("storage", onStorage);
       return () => window.removeEventListener("storage", onStorage);
     }, [isRunning, rotateOptimizationSession]);
+
+    useEffect(() => {
+      let isCurrent = true;
+
+      void (async (): Promise<void> => {
+        await Promise.resolve();
+        if (!isCurrent) return;
+        if (backendPreference === "webgpu") {
+          setActiveBackend("webgpu");
+          setFastApiHealth(
+            unavailableFastApiHealth("FastAPI disabled by backend preference."),
+          );
+          setBackendStatus("Using WebGPU worker backend.");
+          return;
+        }
+
+        setBackendStatus(`Checking FastAPI backend at ${backendUrl}...`);
+        const health = await probeFastApiBackend(backendUrl);
+        if (!isCurrent) return;
+        setFastApiHealth(health);
+        if (health.ok) {
+          setActiveBackend("fastapi");
+          setBackendStatus(
+            `FastAPI ready on ${health.device}${health.modelReady ? " with VGG19 loaded" : "; VGG19 loads on first run"}.`,
+          );
+        } else {
+          setActiveBackend("webgpu");
+          setBackendStatus(
+            `FastAPI unavailable (${health.message}); using WebGPU worker.`,
+          );
+        }
+      })();
+      return () => {
+        isCurrent = false;
+      };
+    }, [backendPreference, backendUrl]);
 
     const resetOptimizerProgress = (): void => {
       setIterations(0);
@@ -458,6 +563,26 @@ export const useStyleTransferController =
       })();
     }, []);
 
+    const applyRunResult = useCallback(
+      (
+        payload: Extract<StyleTransferBackendRunResult, { ok: true }>,
+        backend: StyleTransferRuntimeBackend,
+      ): void => {
+        const nextValues = payload.finalValues;
+        setInputTensor(nextValues);
+        setOutputImage(
+          tensorValuesToDataUrl(nextValues, contentImageResolution),
+        );
+        setIterations((value) => value + payload.stats.steps);
+        if (payload.losses.length > 0) {
+          setLastLoss(payload.losses[payload.losses.length - 1]);
+        }
+        setRunStats(payload.stats);
+        setLastRunBackend(backend);
+      },
+      [contentImageResolution],
+    );
+
     useEffect(() => {
       const worker = new Worker(
         new URL("../../../styleTransfer.worker.ts", import.meta.url),
@@ -476,27 +601,23 @@ export const useStyleTransferController =
           setGpuStatus(
             payload.ok ? payload.message : `Fallback: ${payload.message}`,
           );
-        if (payload.type === "error") setWorkerStatus(payload.message);
+        if (payload.type === "error") {
+          runInFlightRef.current = false;
+          setWorkerStatus(payload.message);
+        }
         if (
           payload.type === "clear-style-transfer-session-result" &&
           !payload.ok
         )
           setWorkerStatus(payload.message);
         if (payload.type === "run-style-transfer-result") {
+          runInFlightRef.current = false;
           if (!payload.ok) {
             setWorkerStatus(payload.message);
             setIsRunning(false);
             return;
           }
-          const nextValues = payload.finalValues;
-          setInputTensor(nextValues);
-          setOutputImage(
-            tensorValuesToDataUrl(nextValues, contentImageResolution),
-          );
-          setIterations((value) => value + payload.stats.steps);
-          if (payload.losses.length > 0)
-            setLastLoss(payload.losses[payload.losses.length - 1]);
-          setRunStats(payload.stats);
+          applyRunResult(payload, "webgpu");
         }
       };
       worker.addEventListener("message", onMessage);
@@ -513,7 +634,7 @@ export const useStyleTransferController =
         worker.terminate();
         workerRef.current = null;
       };
-    }, [contentImageResolution]);
+    }, [applyRunResult]);
 
     useEffect(() => {
       void (async (): Promise<void> => {
@@ -548,20 +669,18 @@ export const useStyleTransferController =
     useEffect(() => {
       if (
         !isRunning ||
-        workerRef.current === null ||
-        weights === null ||
         contentTensor === null ||
         styleTensor === null ||
         inputTensor === null
       )
         return;
+      if (runInFlightRef.current) return;
       assertValidVgg19ReluTapIndices(
         VGG19_RELU_TAP_STYLE_LAYER_INDICES,
         VGG19_RELU_TAP_CONTENT_LAYER_INDEX,
       );
-      workerRef.current.postMessage({
-        type: "run-style-transfer",
-        id: createMessageId(),
+
+      const fastApiRequest: FastApiStyleTransferRunRequest = {
         sessionId: optimizationSessionId,
         optimizer,
         adamBeta1: optimizer === "adam" ? adamBeta1 : undefined,
@@ -582,19 +701,102 @@ export const useStyleTransferController =
         std: [0.229, 0.224, 0.225],
         styleLayerIndices: Array.from(VGG19_RELU_TAP_STYLE_LAYER_INDICES),
         contentLayerIndex: VGG19_RELU_TAP_CONTENT_LAYER_INDEX,
-        weights,
         contentWeight,
         styleWeight,
         learningRate,
         steps: stepsPerChunk,
         lossReadbackInterval: stepsPerChunk,
-        synchronizePhaseTimings,
-        kernelFlags,
-      } satisfies WorkerRequest);
+      };
+
+      const workerPayload =
+        weights === null
+          ? null
+          : ({
+              type: "run-style-transfer",
+              id: createMessageId(),
+              ...fastApiRequest,
+              weights,
+              synchronizePhaseTimings,
+              kernelFlags,
+            } satisfies Extract<WorkerRequest, { type: "run-style-transfer" }>);
+
+      const postWorkerRun = (statusMessage: string): void => {
+        if (workerRef.current === null || workerPayload === null) {
+          setBackendStatus(
+            "WebGPU fallback unavailable until browser VGG19 weights load.",
+          );
+          setWorkerStatus("Cannot run: no available style-transfer backend.");
+          setIsRunning(false);
+          runInFlightRef.current = false;
+          return;
+        }
+        setActiveBackend("webgpu");
+        setBackendStatus(statusMessage);
+        setWorkerStatus("Running style transfer on WebGPU worker...");
+        workerRef.current.postMessage(workerPayload);
+      };
+
+      runInFlightRef.current = true;
+      runSequenceRef.current += 1;
+      const runSequence = runSequenceRef.current;
+
+      void (async (): Promise<void> => {
+        if (backendPreference === "webgpu") {
+          postWorkerRun("Using WebGPU worker backend.");
+          return;
+        }
+
+        const health = await probeFastApiBackend(backendUrl);
+        if (runSequence !== runSequenceRef.current) return;
+        setFastApiHealth(health);
+        if (!health.ok) {
+          postWorkerRun(
+            `FastAPI unavailable (${health.message}); using WebGPU worker.`,
+          );
+          return;
+        }
+
+        setActiveBackend("fastapi");
+        setBackendStatus(
+          `Running style transfer on FastAPI (${health.device}).`,
+        );
+        setWorkerStatus("Running style transfer on FastAPI backend...");
+        const result = await runFastApiStyleTransfer(
+          backendUrl,
+          toFastApiStyleTransferRequest({
+            type: "run-style-transfer",
+            id: createMessageId(),
+            ...fastApiRequest,
+            weights: weights ?? {},
+          }),
+        );
+        if (runSequence !== runSequenceRef.current) return;
+        if (result.ok) {
+          applyRunResult(result, "fastapi");
+          setWorkerStatus("FastAPI backend completed a style-transfer chunk.");
+          setBackendStatus(`FastAPI ready on ${health.device}.`);
+          runInFlightRef.current = false;
+          return;
+        }
+
+        setBackendStatus(
+          `FastAPI run failed (${result.message}); using WebGPU worker and resetting backend session.`,
+        );
+        void clearFastApiStyleTransferSession(
+          backendUrl,
+          optimizationSessionId,
+        );
+        postWorkerRun(
+          `FastAPI run failed (${result.message}); using WebGPU worker.`,
+        );
+      })();
     }, [
       adamBeta1,
       adamBeta2,
       adamEpsilon,
+      applyRunResult,
+      backendPreference,
+      backendUrl,
       contentTensor,
       contentWeight,
       inputTensor,
@@ -771,6 +973,26 @@ export const useStyleTransferController =
       setSelectedPackState(nextPack);
     };
 
+    const setBackendPreference: Dispatch<
+      SetStateAction<StyleTransferBackendPreference>
+    > = (update) => {
+      const nextPreference = toResolvedState(update, backendPreference);
+      if (nextPreference === backendPreference) return;
+      if (!isRunning) rotateOptimizationSession(true);
+      resetOptimizerProgress();
+      setBackendPreferenceState(nextPreference);
+    };
+
+    const setBackendUrl: Dispatch<SetStateAction<string>> = (update) => {
+      const nextUrl = toResolvedState(update, backendUrl).trim();
+      const normalizedUrl =
+        nextUrl.length === 0 ? DEFAULT_BACKEND_URL : nextUrl;
+      if (normalizedUrl === backendUrl) return;
+      if (!isRunning) rotateOptimizationSession(true);
+      resetOptimizerProgress();
+      setBackendUrlState(normalizedUrl);
+    };
+
     const clearModelCache = async (): Promise<void> => {
       const nextStatus = await clearCachedVggModelPacks();
       setModelCacheBytes(nextStatus.bytes);
@@ -895,6 +1117,10 @@ export const useStyleTransferController =
             weightStorage,
             setWeightStorage,
           ),
+        backendPreference,
+        setBackendPreference,
+        backendUrl,
+        setBackendUrl,
         kernelConfigSummary,
         kernelFlags,
         resetOptimizerState,
@@ -909,6 +1135,10 @@ export const useStyleTransferController =
         isRunning,
         lastLoss,
         runStats,
+        activeBackend,
+        lastRunBackend,
+        backendStatus,
+        fastApiHealth,
         modelCacheState,
         modelCacheBytes,
         modelCachePackStatuses,
