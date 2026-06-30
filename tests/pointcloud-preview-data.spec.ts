@@ -4,6 +4,14 @@ import {
   buildPointCloudMeshData,
   parsePointCloudMeshText,
 } from "../src/features/pointcloud-preview/loadPointCloudMesh";
+import {
+  ablationDimensionDefinitionByKey,
+  buildAblationExperimentKey,
+  buildAblationMatrixCellKey,
+  parseAblationExperimentFilename,
+  parseAblationExperimentFilenames,
+  summarizeAblationDimensions,
+} from "../src/features/pointcloud-preview/ablation/experimentFilenames";
 import { sampleInterpolatedColor } from "../src/features/pointcloud-preview/math/interpolation";
 import {
   buildKdTree3d,
@@ -158,5 +166,163 @@ test("k-d tree nearest-3 query stays ordered on the tiny fixture", () => {
   );
   expect(neighbors[1].squaredDistance).toBeLessThanOrEqual(
     neighbors[2].squaredDistance,
+  );
+});
+
+test("point-cloud ablation parser reads name_expt filenames with output steps", () => {
+  const filename =
+    "1000000sw_0cw_0.001tv_L2_2c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_SPECTRAL_4knn_0.7rf_2gr_1.5std-attn_300steps_step320.json";
+
+  const result = parseAblationExperimentFilename(filename);
+
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error(result.failure.reason);
+  }
+  expect(result.file.config).toEqual({
+    styleWeight: 1000000,
+    contentWeight: 0,
+    tvWeight: 0.001,
+    tvMode: "L2",
+    contentSamplesPerFace: 2,
+    styleResolution: "192x256",
+    styleSamplesPerFace: null,
+    frameMode: "SIMPLE_AXIS",
+    colorMode: "RAW_COLORS",
+    distanceMeasure: "SPECTRAL",
+    knn: 4,
+    radiusFactor: 0.7,
+    geodesicRatio: 2,
+    attenuationLabel: "1.5std",
+    optimizationSteps: 300,
+    outputStep: 320,
+  });
+});
+
+test("point-cloud ablation parser reads mapped labels and style samples per face", () => {
+  const filename =
+    "7sw_3cw_0.5tv_L1_2.5c-spf_4.5s-spf_PCP_LOGIT_SPECTRAL_12knn_1.25rf_3gr_2.0std-attn_60steps_step987.json";
+
+  const result = parseAblationExperimentFilename(filename);
+
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error(result.failure.reason);
+  }
+  expect(result.file.config.frameMode).toBe("PCP");
+  expect(result.file.config.colorMode).toBe("LOGIT");
+  expect(result.file.config.distanceMeasure).toBe("SPECTRAL");
+  expect(result.file.config.tvMode).toBe("L1");
+  expect(result.file.config.contentSamplesPerFace).toBe(2.5);
+  expect(result.file.config.styleResolution).toBeNull();
+  expect(result.file.config.styleSamplesPerFace).toBe(4.5);
+  expect(result.file.config.outputStep).toBe(987);
+});
+
+test("point-cloud ablation parser accepts absent style source and smoothed frames", () => {
+  const filename =
+    "1sw_2cw_0tv_L2_8c-spf_SPL-S_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_3.0std-attn_120steps.json";
+
+  const result = parseAblationExperimentFilename(filename);
+
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error(result.failure.reason);
+  }
+  expect(result.file.config.frameMode).toBe("SPL-S");
+  expect(result.file.config.styleResolution).toBeNull();
+  expect(result.file.config.styleSamplesPerFace).toBeNull();
+  expect(result.file.config.outputStep).toBeNull();
+
+  const bstResult = parseAblationExperimentFilename(
+    "1sw_2cw_0tv_L1_8c-spf_BST-S_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_3.0std-attn_120steps_step60.json",
+  );
+  expect(bstResult.ok).toBe(true);
+  if (!bstResult.ok) {
+    throw new Error(bstResult.failure.reason);
+  }
+  expect(bstResult.file.config.frameMode).toBe("BST-S");
+  expect(bstResult.file.config.outputStep).toBe(60);
+});
+
+test("point-cloud ablation batch parser reports unparsed filenames", () => {
+  const result = parseAblationExperimentFilenames([
+    "1sw_2cw_0tv_L2_8c-spf_SIMPLE_AXIS_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_3.0std-attn_120steps.json",
+    "notes.txt",
+  ]);
+
+  expect(result.files).toHaveLength(1);
+  expect(result.failures).toEqual([
+    {
+      filename: "notes.txt",
+      reason:
+        "Filename does not match the expected point-cloud ablation experiment pattern.",
+    },
+  ]);
+});
+
+test("point-cloud ablation summaries sort values deterministically", () => {
+  const filenames = [
+    "1sw_2cw_10tv_L2_16c-spf_640x480s-img_SIMPLE_AXIS_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_3.0std-attn_120steps_step60.json",
+    "1sw_2cw_1tv_L1_2c-spf_192x256s-img_BST-S_RAW_COLORS_SPECTRAL_4knn_0.7rf_2gr_1.5std-attn_120steps_step320.json",
+    "1sw_2cw_0.1tv_L2_4c-spf_320x240s-img_PCP_LOGIT_SPECTRAL_4knn_0.7rf_2gr_2.0std-attn_120steps_step160.json",
+    "1sw_2cw_0.001tv_L1_8c-spf_4s-spf_SPL-S_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_1.0std-attn_120steps_step120.json",
+  ];
+  const parsed = parseAblationExperimentFilenames(filenames);
+  expect(parsed.failures).toEqual([]);
+
+  const summaries = summarizeAblationDimensions(parsed.files);
+  const byKey = new Map(
+    summaries.map((summary) => [summary.definition.key, summary]),
+  );
+
+  expect(
+    byKey.get("contentSamplesPerFace")?.values.map((value) => value.value),
+  ).toEqual([2, 4, 8, 16]);
+  expect(byKey.get("tvMode")?.values.map((value) => value.value)).toEqual([
+    "L1",
+    "L2",
+  ]);
+  expect(byKey.get("frameMode")?.values.map((value) => value.value)).toEqual([
+    "PCP",
+    "SPL-S",
+    "BST-S",
+    "SIMPLE_AXIS",
+  ]);
+  expect(
+    byKey.get("styleResolution")?.values.map((value) => value.value),
+  ).toEqual(["192x256", "320x240", "640x480"]);
+  expect(byKey.get("outputStep")?.values.map((value) => value.label)).toEqual([
+    "step60",
+    "step120",
+    "step160",
+    "step320",
+  ]);
+});
+
+test("point-cloud ablation keys are stable for matrix and experiment lookup", () => {
+  const parsed = parseAblationExperimentFilename(
+    "1sw_2cw_0tv_L2_8c-spf_SIMPLE_AXIS_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_3.0std-attn_120steps_step60.json",
+  );
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) {
+    throw new Error(parsed.failure.reason);
+  }
+
+  const xDefinition = ablationDimensionDefinitionByKey.get(
+    "contentSamplesPerFace",
+  );
+  const yDefinition = ablationDimensionDefinitionByKey.get("distanceMeasure");
+  expect(xDefinition).toBeDefined();
+  expect(yDefinition).toBeDefined();
+  if (xDefinition === undefined || yDefinition === undefined) {
+    throw new Error("Missing ablation dimension definitions.");
+  }
+
+  expect(
+    buildAblationMatrixCellKey(xDefinition, 8, yDefinition, "EUCLIDEAN"),
+  ).toBe("contentSamplesPerFace=number:8|distanceMeasure=string:EUCLIDEAN");
+  expect(buildAblationExperimentKey(parsed.file)).toContain(
+    "outputStep=number:60",
   );
 });
