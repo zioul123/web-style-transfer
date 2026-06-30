@@ -9,7 +9,7 @@ The codebase keeps a PyTorch reference implementation in `python-reference/` and
 The browser app is runnable and includes:
 
 - A React UI for content/style image selection, resolution presets, optimizer controls, model-pack selection, progress telemetry, and final image preview.
-- A standalone `/pointcloud-preview` route for rendering mesh-aligned point clouds from JSON exports, including fragment-KNN mesh shading, hit inspection, screenshots, and reusable saved viewpoints.
+- A standalone `/pointcloud-preview` route for rendering mesh-aligned point clouds from JSON exports, including fragment-KNN mesh shading, hit inspection, screenshots, reusable saved viewpoints, and an in-progress ablation browser for experiment folders.
 - A Web Worker that owns WebGPU initialization, GPU buffers, shader dispatch, and pipeline execution.
 - WebGPU kernels for forward ops, loss ops, manual input-gradient backpropagation, and optimizer updates.
 - End-to-end style-transfer execution through VGG19 feature layers up to `conv5_1` / torch `features[28]`.
@@ -26,7 +26,7 @@ The implementation is still intentionally correctness-first in several kernels. 
 | `src/App.tsx`                                                          | Main app shell and presentation layer.                                                                     |
 | `src/PointCloudPreviewApp.tsx`                                         | Standalone point-cloud mesh preview route shell.                                                           |
 | `src/features/style-transfer/`                                         | Main-thread style-transfer controller, model-pack loading, caching, and benchmark helpers.                 |
-| `src/features/pointcloud-preview/`                                     | Point-cloud mesh JSON loading, validation, interpolation, and R3F scene rendering.                         |
+| `src/features/pointcloud-preview/`                                     | Point-cloud mesh JSON loading, validation, interpolation, ablation browsing, and R3F scene rendering.      |
 | `src/styleTransfer.worker.ts`                                          | Worker entrypoint.                                                                                         |
 | `src/ml/worker/main-thread-protocol/`                                  | Worker message routing and response helpers.                                                               |
 | `src/ml/worker/runtime/`                                               | WebGPU device state, buffer helpers, reusable buffer pool, pipeline cache, and shader execution utilities. |
@@ -81,6 +81,10 @@ upload replacement JSON exports, and provides:
 - PNG screenshot export of the current canvas view.
 - Batch screenshot ZIP export across every queued upload and selected saved
   viewpoint when multiple meshes are loaded.
+- an Ablation tab that parses experiment filenames, filters configurations into
+  an availability matrix, and loads unique cells into the preview without
+  adding them to the manual upload queue. Grid PNG export is planned but not
+  implemented yet; see [docs/pointcloud-ablation-plan.md](docs/pointcloud-ablation-plan.md).
 
 ## Model packs
 

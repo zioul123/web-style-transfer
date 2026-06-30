@@ -79,6 +79,10 @@ The route currently provides:
 - loading of committed demo assets or a session-local queue of uploaded
   mesh-plus-point-cloud JSON exports, with inactive uploads kept as `File`
   references until selected;
+- an Ablation tab for experiment-folder inspection, including filename parsing,
+  X/Y axis selection, fixed configuration filters, matrix availability states,
+  and transient preview loading for unique cells without adding those files to
+  the manual upload queue;
 - JSON validation, typed-array conversion, bounds calculation, and precomputed
   baked vertex colours in `loadPointCloudMesh.ts`;
 - exact CPU-side 3-nearest-neighbour hit inspection via the shared
@@ -99,11 +103,15 @@ presentation components:
 - `usePointCloudPreviewController.ts` owns view settings, hit selection, FPS,
   and camera-command state;
 - `usePointCloudAssetsController.ts` owns bundled and uploaded asset loading,
-  the lazy `File` queue, and stale-request protection;
+  the lazy `File` queue, transient ablation preview loading, and stale-request
+  protection;
 - `useSavedViewpointsController.ts` owns saved-camera persistence and
   mutations;
 - `usePointCloudScreenshotsController.ts` owns current-canvas downloads and
   synchronized batch capture/restoration;
+- `ablation/experimentFilenames.ts`, `ablation/ablationMatrix.ts`, and
+  `ablation/PointCloudAblationTab.tsx` own filename parsing, dimension
+  summaries, matrix construction, and the ablation browser presentation;
 - the `PointCloudPreview*Panel.tsx`, `PointCloudPreviewViewport.tsx`, and modal
   components own the route presentation.
 
@@ -265,6 +273,9 @@ The app resolves model URLs through `src/shared/assetUrls.ts`:
 5. Mesh hover hits use the CPU k-d tree path for exact nearest-3 inspection,
    while route-local React state tracks controls, screenshots, and saved
    viewpoints in browser storage.
+6. The Ablation tab parses selected experiment filenames without reading JSON
+   contents, builds filters and an availability matrix from parsed dimensions,
+   and reads a file only when a unique cell is clicked for transient preview.
 
 ## Testing architecture
 
@@ -273,6 +284,7 @@ Playwright is used for integration, worker, and WebGPU parity coverage. The suit
 - App boot and worker/WebGPU initialization checks.
 - Point-cloud preview route boot, upload, fallback, screenshot, and viewpoint
   persistence checks.
+- Point-cloud ablation parser, tab, matrix, and transient preview checks.
 - Tensor primitive parity tests.
 - VGG first-pool forward and optimization checks.
 - Full phase-3 forward/loss parity checks when fixtures are present.
@@ -288,3 +300,6 @@ Performance-oriented benchmark specs, including pack-acceptance threshold helper
 - Keep model-pack UI options in sync with what is actually hosted for non-local deployments.
 - Continue promoting successful kernel-lab flags into default pipeline behavior only after broad device validation.
 - Add a consolidated model-pack export guide or script that covers all supported formats.
+- Finish the point-cloud ablation browser export phase: labelled PNG grid
+  capture for a selected saved viewpoint, followed by docs and UI polish. See
+  `docs/pointcloud-ablation-plan.md`.
