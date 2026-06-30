@@ -1,5 +1,6 @@
 import { expect, test, type Locator } from "@playwright/test";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { gotoStableApp } from "./helpers/appPage";
 
 const validUploadJson = JSON.stringify({
@@ -257,6 +258,154 @@ test("point-cloud preview boots from the standalone route with the bundled demo"
   await expect(page.getByTestId("batch-screenshot-button")).toHaveCount(0);
   await expect(page.getByTestId("save-viewpoint-button")).toBeEnabled();
   await expect(page.getByTestId("swap-yz-button")).toBeVisible();
+});
+
+test("point-cloud preview hosts a filename-only ablation tab shell", async ({
+  page,
+}, testInfo) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await expect(page.getByTestId("pointcloud-preview-tab")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByTestId("pointcloud-ablation-tab")).toHaveAttribute(
+    "aria-selected",
+    "false",
+  );
+  await expect(page.getByTestId("pointcloud-preview-canvas")).toBeVisible();
+  await expect(page.getByTestId("screenshot-button")).toBeVisible();
+
+  await page.getByTestId("pointcloud-ablation-tab").click();
+  await expect(page.getByTestId("pointcloud-ablation-tab")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByTestId("pointcloud-preview-canvas")).toHaveCount(0);
+  await expect(page.getByTestId("pointcloud-ablation-empty")).toBeVisible();
+  await expect(
+    page.getByTestId("pointcloud-ablation-selected-count"),
+  ).toHaveText("0");
+  await expect(page.getByTestId("pointcloud-ablation-parsed-count")).toHaveText(
+    "0",
+  );
+  await expect(
+    page.getByTestId("pointcloud-ablation-unparsed-count"),
+  ).toHaveText("0");
+
+  const ablationFolderInput = page.getByTestId(
+    "pointcloud-ablation-folder-input",
+  );
+  const ablationFileInput = page.getByTestId("pointcloud-ablation-file-input");
+  const invalidAblationDir = testInfo.outputPath("invalid-ablation");
+  await mkdir(invalidAblationDir, { recursive: true });
+  await writeFile(join(invalidAblationDir, "notes.json"), "not json");
+  await writeFile(join(invalidAblationDir, "README.json"), "not json");
+  await ablationFolderInput.setInputFiles(invalidAblationDir);
+  await expect(
+    page.getByTestId("pointcloud-ablation-selected-count"),
+  ).toHaveText("2");
+  await expect(page.getByTestId("pointcloud-ablation-parsed-count")).toHaveText(
+    "0",
+  );
+  await expect(
+    page.getByTestId("pointcloud-ablation-unparsed-count"),
+  ).toHaveText("2");
+  await expect(
+    page.getByTestId("pointcloud-ablation-no-summaries"),
+  ).toBeVisible();
+
+  const mixedAblationDir = testInfo.outputPath("mixed-ablation");
+  await mkdir(mixedAblationDir, { recursive: true });
+  await writeFile(
+    join(
+      mixedAblationDir,
+      "1sw_2cw_0tv_L2_8c-spf_SIMPLE_AXIS_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_3.0std-attn_120steps.json",
+    ),
+    "not json",
+  );
+  await writeFile(
+    join(
+      mixedAblationDir,
+      "5sw_2cw_0tv_L1_4c-spf_192x256s-img_PCP_LOGIT_SPECTRAL_8knn_1.2rf_1gr_1.0std-attn_60steps_step30.json",
+    ),
+    "not json",
+  );
+  await writeFile(join(mixedAblationDir, "scratch.json"), "not json");
+  await ablationFolderInput.setInputFiles(mixedAblationDir);
+  await expect(
+    page.getByTestId("pointcloud-ablation-selected-count"),
+  ).toHaveText("3");
+  await expect(page.getByTestId("pointcloud-ablation-parsed-count")).toHaveText(
+    "2",
+  );
+  await expect(
+    page.getByTestId("pointcloud-ablation-unparsed-count"),
+  ).toHaveText("1");
+  await expect(
+    page.getByTestId("pointcloud-ablation-summary-styleWeight"),
+  ).toContainText("1");
+  await expect(
+    page.getByTestId("pointcloud-ablation-summary-styleWeight"),
+  ).toContainText("5");
+  await expect(
+    page.getByTestId("pointcloud-ablation-summary-tvMode"),
+  ).toContainText("L1");
+  await expect(
+    page.getByTestId("pointcloud-ablation-summary-tvMode"),
+  ).toContainText("L2");
+  await expect(
+    page.getByTestId("pointcloud-ablation-summary-styleResolution"),
+  ).toContainText("192x256");
+  await expect(
+    page.getByTestId("pointcloud-ablation-summary-outputStep"),
+  ).toContainText("step30");
+
+  await ablationFileInput.setInputFiles([
+    {
+      name: "1sw_0cw_0.1tv_L1_2c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_1.5std-attn_300steps_step60.json",
+      mimeType: "application/json",
+      buffer: Buffer.from("not json", "utf8"),
+    },
+    {
+      name: "1sw_0cw_0.1tv_L1_4c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_SPECTRAL_4knn_0.7rf_2gr_1.5std-attn_300steps_step120.json",
+      mimeType: "application/json",
+      buffer: Buffer.from("not json", "utf8"),
+    },
+  ]);
+  await expect(
+    page.getByTestId("pointcloud-ablation-selected-count"),
+  ).toHaveText("2");
+  await expect(page.getByTestId("pointcloud-ablation-parsed-count")).toHaveText(
+    "2",
+  );
+  await expect(
+    page.getByTestId("pointcloud-ablation-unparsed-count"),
+  ).toHaveText("0");
+  await expect(
+    page.getByTestId("pointcloud-ablation-summary-contentSamplesPerFace"),
+  ).toContainText("2");
+  await expect(
+    page.getByTestId("pointcloud-ablation-summary-contentSamplesPerFace"),
+  ).toContainText("4");
+  await expect(
+    page.getByTestId("pointcloud-ablation-summary-outputStep"),
+  ).toContainText("step60");
+  await expect(
+    page.getByTestId("pointcloud-ablation-summary-outputStep"),
+  ).toContainText("step120");
+
+  await page.getByTestId("pointcloud-preview-tab").click();
+  await expect(page.getByTestId("pointcloud-preview-tab")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByTestId("pointcloud-preview-canvas")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Upload point-cloud mesh/i }),
+  ).toBeVisible();
+  await expect(page.getByTestId("screenshot-button")).toBeVisible();
+  await expect(page.getByTestId("save-viewpoint-button")).toBeEnabled();
 });
 
 test("point-cloud preview reports upload errors and recovers on a valid upload", async ({

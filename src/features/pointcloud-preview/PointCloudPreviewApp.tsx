@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { PointCloudAblationTab } from "./ablation/PointCloudAblationTab";
 import { BatchScreenshotModal } from "./BatchScreenshotModal";
 import { PointCloudPreviewControlsPanel } from "./PointCloudPreviewControlsPanel";
 import {
@@ -22,8 +23,20 @@ import { usePointCloudPreviewController } from "./usePointCloudPreviewController
 import { usePointCloudScreenshotsController } from "./usePointCloudScreenshotsController";
 import { useSavedViewpointsController } from "./useSavedViewpointsController";
 
+type PointCloudPreviewTab = "preview" | "ablation";
+
+const pointCloudPreviewTabs: readonly {
+  readonly id: PointCloudPreviewTab;
+  readonly label: string;
+  readonly testId: string;
+}[] = [
+  { id: "preview", label: "Preview", testId: "pointcloud-preview-tab" },
+  { id: "ablation", label: "Ablation", testId: "pointcloud-ablation-tab" },
+];
+
 export function PointCloudPreviewApp() {
   const previewHostRef = useRef<HTMLDivElement | null>(null);
+  const [activeTab, setActiveTab] = useState<PointCloudPreviewTab>("preview");
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
   const previewController = usePointCloudPreviewController();
   const assetsController = usePointCloudAssetsController({
@@ -80,89 +93,133 @@ export function PointCloudPreviewApp() {
         <div className="flex min-h-screen w-full flex-col px-4 py-4 2xl:h-full 2xl:min-h-0">
           <PointCloudPreviewHeader onShowInfo={() => setShowInfoModal(true)} />
 
-          <div className="flex min-h-0 flex-1 flex-col items-stretch gap-4 2xl:flex-row">
-            <div
-              data-testid="pointcloud-left-panel"
-              className="flex w-full flex-col gap-4 2xl:h-full 2xl:w-[25rem] 2xl:shrink-0 2xl:overflow-y-auto 2xl:pr-1"
-            >
-              <RenderingAlgorithmPanel
-                meshColorMode={previewController.viewSettings.meshColorMode}
-                description={meshColorModeDescription}
-                onMeshColorModeChange={(meshColorMode) =>
-                  previewController.updateViewSettings({ meshColorMode })
-                }
-              />
-              <DataSourcePanel
-                assetState={assetsController.assetState}
-                uploadedFiles={assetsController.uploadedFiles}
-                activeUploadedFileId={assetsController.activeUploadedFileId}
-                onFileUpload={assetsController.handleFileUpload}
-                onReload={() => {
-                  void assetsController.loadBundledExample(
-                    bundledMediumExampleUrl,
-                    bundledMediumSourceLabel,
-                    "Unable to reload the bundled medium example.",
-                  );
-                }}
-                onSelectFile={(uploadedFile) => {
-                  void assetsController.loadQueuedFile(uploadedFile);
-                }}
-                onRemoveFile={assetsController.removeQueuedFile}
-              />
-              <DatasetStatsPanel data={data} />
-            </div>
-
-            <PointCloudPreviewViewport
-              previewHostRef={previewHostRef}
-              assetState={assetsController.assetState}
-              viewSettings={previewController.viewSettings}
-              effectiveMeshColorMode={effectiveMeshColorMode}
-              selectedHit={previewController.selectedHit}
-              framesPerSecond={previewController.framesPerSecond}
-              cameraCommand={previewController.cameraCommand}
-              canBatchScreenshot={assetsController.uploadedFiles.length > 1}
-              onScreenshot={screenshotsController.captureScreenshot}
-              onOpenBatchScreenshot={
-                screenshotsController.openBatchScreenshotModal
-              }
-              onHoverSampleChange={previewController.setSelectedHit}
-              onCameraStateChange={previewController.handleCameraStateChange}
-              onCameraCommandApplied={
-                screenshotsController.handleCameraCommandApplied
-              }
-              onFrameRendered={screenshotsController.handlePreviewFrameRendered}
-              onFramesPerSecondChange={previewController.setFramesPerSecond}
-            />
-
-            <PointCloudPreviewControlsPanel
-              viewSettings={previewController.viewSettings}
-              updateViewSettings={previewController.updateViewSettings}
-              currentCameraState={previewController.cameraState}
-              issueCameraCommand={previewController.issueCameraCommand}
-              savedViewpoints={viewpointsController.savedViewpoints}
-              onSaveViewpoint={viewpointsController.saveViewpoint}
-              onRenameViewpoint={viewpointsController.renameViewpoint}
-              onUpdateViewpoint={viewpointsController.updateViewpoint}
-              onDeleteViewpoint={viewpointsController.deleteViewpoint}
-            />
+          <div
+            className="mb-4 flex shrink-0 flex-wrap gap-2"
+            role="tablist"
+            aria-label="Point-cloud preview mode"
+            data-testid="pointcloud-preview-tab-switch"
+          >
+            {pointCloudPreviewTabs.map((tab) => {
+              const isSelected = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  id={`pointcloud-${tab.id}-tab`}
+                  className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                    isSelected
+                      ? "bg-sky-300 text-sky-950"
+                      : "border border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"
+                  }`}
+                  type="button"
+                  role="tab"
+                  aria-selected={isSelected}
+                  aria-controls={`pointcloud-${tab.id}-panel`}
+                  data-testid={tab.testId}
+                  onClick={() => setActiveTab(tab.id)}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
           </div>
+
+          {activeTab === "preview" ? (
+            <div
+              id="pointcloud-preview-panel"
+              data-testid="pointcloud-preview-tab-panel"
+              role="tabpanel"
+              aria-labelledby="pointcloud-preview-tab"
+              className="flex min-h-0 flex-1 flex-col items-stretch gap-4 2xl:flex-row"
+            >
+              <div
+                data-testid="pointcloud-left-panel"
+                className="flex w-full flex-col gap-4 2xl:h-full 2xl:w-[25rem] 2xl:shrink-0 2xl:overflow-y-auto 2xl:pr-1"
+              >
+                <RenderingAlgorithmPanel
+                  meshColorMode={previewController.viewSettings.meshColorMode}
+                  description={meshColorModeDescription}
+                  onMeshColorModeChange={(meshColorMode) =>
+                    previewController.updateViewSettings({ meshColorMode })
+                  }
+                />
+                <DataSourcePanel
+                  assetState={assetsController.assetState}
+                  uploadedFiles={assetsController.uploadedFiles}
+                  activeUploadedFileId={assetsController.activeUploadedFileId}
+                  onFileUpload={assetsController.handleFileUpload}
+                  onReload={() => {
+                    void assetsController.loadBundledExample(
+                      bundledMediumExampleUrl,
+                      bundledMediumSourceLabel,
+                      "Unable to reload the bundled medium example.",
+                    );
+                  }}
+                  onSelectFile={(uploadedFile) => {
+                    void assetsController.loadQueuedFile(uploadedFile);
+                  }}
+                  onRemoveFile={assetsController.removeQueuedFile}
+                />
+                <DatasetStatsPanel data={data} />
+              </div>
+
+              <PointCloudPreviewViewport
+                previewHostRef={previewHostRef}
+                assetState={assetsController.assetState}
+                viewSettings={previewController.viewSettings}
+                effectiveMeshColorMode={effectiveMeshColorMode}
+                selectedHit={previewController.selectedHit}
+                framesPerSecond={previewController.framesPerSecond}
+                cameraCommand={previewController.cameraCommand}
+                canBatchScreenshot={assetsController.uploadedFiles.length > 1}
+                onScreenshot={screenshotsController.captureScreenshot}
+                onOpenBatchScreenshot={
+                  screenshotsController.openBatchScreenshotModal
+                }
+                onHoverSampleChange={previewController.setSelectedHit}
+                onCameraStateChange={previewController.handleCameraStateChange}
+                onCameraCommandApplied={
+                  screenshotsController.handleCameraCommandApplied
+                }
+                onFrameRendered={
+                  screenshotsController.handlePreviewFrameRendered
+                }
+                onFramesPerSecondChange={previewController.setFramesPerSecond}
+              />
+
+              <PointCloudPreviewControlsPanel
+                viewSettings={previewController.viewSettings}
+                updateViewSettings={previewController.updateViewSettings}
+                currentCameraState={previewController.cameraState}
+                issueCameraCommand={previewController.issueCameraCommand}
+                savedViewpoints={viewpointsController.savedViewpoints}
+                onSaveViewpoint={viewpointsController.saveViewpoint}
+                onRenameViewpoint={viewpointsController.renameViewpoint}
+                onUpdateViewpoint={viewpointsController.updateViewpoint}
+                onDeleteViewpoint={viewpointsController.deleteViewpoint}
+              />
+            </div>
+          ) : (
+            <PointCloudAblationTab />
+          )}
         </div>
       </main>
 
-      <BatchScreenshotModal
-        open={screenshotsController.showBatchScreenshotModal}
-        uploadedFileCount={assetsController.uploadedFiles.length}
-        savedViewpoints={viewpointsController.savedViewpoints}
-        selectedViewpointIds={screenshotsController.selectedBatchViewpointIds}
-        setSelectedViewpointIds={
-          screenshotsController.setSelectedBatchViewpointIds
-        }
-        progress={screenshotsController.batchScreenshotProgress}
-        error={screenshotsController.batchScreenshotError}
-        isRunning={screenshotsController.isBatchScreenshotRunning}
-        onClose={screenshotsController.closeBatchScreenshotModal}
-        onDownload={screenshotsController.captureBatchScreenshots}
-      />
+      {activeTab === "preview" ? (
+        <BatchScreenshotModal
+          open={screenshotsController.showBatchScreenshotModal}
+          uploadedFileCount={assetsController.uploadedFiles.length}
+          savedViewpoints={viewpointsController.savedViewpoints}
+          selectedViewpointIds={screenshotsController.selectedBatchViewpointIds}
+          setSelectedViewpointIds={
+            screenshotsController.setSelectedBatchViewpointIds
+          }
+          progress={screenshotsController.batchScreenshotProgress}
+          error={screenshotsController.batchScreenshotError}
+          isRunning={screenshotsController.isBatchScreenshotRunning}
+          onClose={screenshotsController.closeBatchScreenshotModal}
+          onDownload={screenshotsController.captureBatchScreenshots}
+        />
+      ) : null}
       <PointCloudPreviewInfoModal
         open={showInfoModal}
         onClose={() => setShowInfoModal(false)}
