@@ -785,7 +785,7 @@ test("point-cloud preview switches between the available background colours", as
   const backgroundSelect = page.getByTestId("background-color-select");
   const previewCanvas = page.getByTestId("pointcloud-preview-canvas");
 
-  await expect(backgroundSelect).toHaveValue("default");
+  await expect(backgroundSelect).toHaveValue("white");
   await expect(backgroundSelect.locator("option")).toHaveText([
     "Default",
     "Black",
@@ -793,23 +793,22 @@ test("point-cloud preview switches between the available background colours", as
   ]);
   await expect
     .poll(() => readPreviewBackgroundPixel(previewCanvas))
-    .toEqual([9, 17, 31, 255]);
+    .toEqual([255, 255, 255, 255]);
 
   await backgroundSelect.selectOption("black");
   await expect
     .poll(() => readPreviewBackgroundPixel(previewCanvas))
     .toEqual([0, 0, 0, 255]);
 
-  await backgroundSelect.selectOption("white");
+  await backgroundSelect.selectOption("default");
   await expect
     .poll(() => readPreviewBackgroundPixel(previewCanvas))
-    .toEqual([255, 255, 255, 255]);
+    .toEqual([9, 17, 31, 255]);
 });
 
 test("point-cloud preview toggles the ground plane axis", async ({ page }) => {
   await gotoStableApp(page, "/pointcloud-preview");
 
-  await page.getByTestId("background-color-select").selectOption("white");
   await page.getByTestId("toggle-mesh-button").click();
   await page.getByTestId("toggle-points-button").click();
 
@@ -818,6 +817,8 @@ test("point-cloud preview toggles the ground plane axis", async ({ page }) => {
     .getByTestId("pointcloud-preview-canvas")
     .locator("canvas");
 
+  await expect(groundPlaneCheckbox).not.toBeChecked();
+  await groundPlaneCheckbox.check();
   await expect(groundPlaneCheckbox).toBeChecked();
   const visibleGroundPlane = await canvas.screenshot();
 
@@ -843,6 +844,9 @@ test("point-cloud preview disables dependent controls and saves viewpoints", asy
 }) => {
   await gotoStableApp(page, "/pointcloud-preview");
 
+  await expect(page.getByTestId("point-size-slider")).toBeDisabled();
+  await page.getByTestId("toggle-points-button").click();
+  await expect(page.getByTestId("point-size-slider")).toBeEnabled();
   await page.getByTestId("toggle-points-button").click();
   await expect(page.getByTestId("point-size-slider")).toBeDisabled();
 

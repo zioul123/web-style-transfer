@@ -134,6 +134,11 @@ const canvasPngBytes = async (canvas: HTMLCanvasElement): Promise<Uint8Array> =>
     }, "image/png");
   });
 
+const clearPointCloudExportPerformanceEntries = (): void => {
+  performance.clearMeasures();
+  performance.clearMarks();
+};
+
 const drawFittedImage = (
   context: CanvasRenderingContext2D,
   image: CanvasImageSource,
@@ -529,6 +534,7 @@ export const usePointCloudScreenshotsController = ({
       if (context === null) {
         throw new Error("The grid export canvas is not available.");
       }
+      clearPointCloudExportPerformanceEntries();
 
       context.fillStyle = "#ffffff";
       context.fillRect(0, 0, width, height);
@@ -673,6 +679,7 @@ export const usePointCloudScreenshotsController = ({
               });
             }
 
+            clearPointCloudExportPerformanceEntries();
             setAssetState({
               status: "ready",
               sourceLabel: cell.sourceLabel,
@@ -712,6 +719,7 @@ export const usePointCloudScreenshotsController = ({
               cellWidth - 24,
               cellHeight - 24,
             );
+            clearPointCloudExportPerformanceEntries();
           }
         }
 
@@ -735,6 +743,7 @@ export const usePointCloudScreenshotsController = ({
         )}-${timestamp}.png`;
         downloadLink.click();
         window.setTimeout(() => URL.revokeObjectURL(pngUrl), 0);
+        clearPointCloudExportPerformanceEntries();
       } catch (error) {
         try {
           await restorePreviewAfterBatch({
@@ -747,6 +756,8 @@ export const usePointCloudScreenshotsController = ({
           // Preserve the original export error because it identifies the failed cell.
         }
         throw error;
+      } finally {
+        clearPointCloudExportPerformanceEntries();
       }
     },
     [
