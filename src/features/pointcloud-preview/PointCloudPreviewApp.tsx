@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { PointCloudAblationTab } from "./ablation/PointCloudAblationTab";
 import { BatchScreenshotModal } from "./BatchScreenshotModal";
 import { PointCloudPreviewControlsPanel } from "./PointCloudPreviewControlsPanel";
 import {
@@ -19,11 +20,26 @@ import {
   usePointCloudAssetsController,
 } from "./usePointCloudAssetsController";
 import { usePointCloudPreviewController } from "./usePointCloudPreviewController";
-import { usePointCloudScreenshotsController } from "./usePointCloudScreenshotsController";
+import {
+  usePointCloudScreenshotsController,
+  type PointCloudAblationGridExportRequest,
+} from "./usePointCloudScreenshotsController";
 import { useSavedViewpointsController } from "./useSavedViewpointsController";
+
+type PointCloudPreviewTab = "preview" | "ablation";
+
+const pointCloudPreviewTabs: readonly {
+  readonly id: PointCloudPreviewTab;
+  readonly label: string;
+  readonly testId: string;
+}[] = [
+  { id: "preview", label: "Preview", testId: "pointcloud-preview-tab" },
+  { id: "ablation", label: "Ablation", testId: "pointcloud-ablation-tab" },
+];
 
 export function PointCloudPreviewApp() {
   const previewHostRef = useRef<HTMLDivElement | null>(null);
+  const [activeTab, setActiveTab] = useState<PointCloudPreviewTab>("preview");
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
   const previewController = usePointCloudPreviewController();
   const assetsController = usePointCloudAssetsController({
@@ -74,13 +90,72 @@ export function PointCloudPreviewApp() {
           ? "Baked vertex colours active with gamma decoding enabled."
           : "Baked vertex colours active with gamma decoding disabled.";
 
+  const exportAblationGrid = useCallback(
+    async (request: PointCloudAblationGridExportRequest): Promise<void> => {
+      const previousTab = activeTab;
+      setActiveTab("preview");
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => resolve());
+        });
+      });
+      try {
+        await screenshotsController.captureAblationGridPng(request);
+      } finally {
+        setActiveTab(previousTab);
+      }
+    },
+    [activeTab, screenshotsController],
+  );
+
   return (
     <>
       <main className="min-h-screen w-full overflow-x-hidden bg-[linear-gradient(180deg,_#071019_0%,_#0b1120_100%)] text-slate-100 2xl:h-screen 2xl:overflow-hidden">
         <div className="flex min-h-screen w-full flex-col px-4 py-4 2xl:h-full 2xl:min-h-0">
           <PointCloudPreviewHeader onShowInfo={() => setShowInfoModal(true)} />
 
-          <div className="flex min-h-0 flex-1 flex-col items-stretch gap-4 2xl:flex-row">
+          <div
+            className="mb-4 flex shrink-0 flex-wrap gap-2"
+            role="tablist"
+            aria-label="Point-cloud preview mode"
+            data-testid="pointcloud-preview-tab-switch"
+          >
+            {pointCloudPreviewTabs.map((tab) => {
+              const isSelected = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  id={`pointcloud-${tab.id}-tab`}
+                  className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                    isSelected
+                      ? "bg-sky-300 text-sky-950"
+                      : "border border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"
+                  }`}
+                  type="button"
+                  role="tab"
+                  aria-selected={isSelected}
+                  aria-controls={`pointcloud-${tab.id}-panel`}
+                  data-testid={tab.testId}
+                  onClick={() => setActiveTab(tab.id)}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div
+            id="pointcloud-preview-panel"
+            data-testid="pointcloud-preview-tab-panel"
+            role="tabpanel"
+            aria-labelledby="pointcloud-preview-tab"
+            hidden={activeTab !== "preview"}
+            className={
+              activeTab === "preview"
+                ? "flex min-h-0 flex-1 flex-col items-stretch gap-4 2xl:flex-row"
+                : "hidden"
+            }
+          >
             <div
               data-testid="pointcloud-left-panel"
               className="flex w-full flex-col gap-4 2xl:h-full 2xl:w-[25rem] 2xl:shrink-0 2xl:overflow-y-auto 2xl:pr-1"
@@ -146,23 +221,51 @@ export function PointCloudPreviewApp() {
               onDeleteViewpoint={viewpointsController.deleteViewpoint}
             />
           </div>
+
+          <div
+            id="pointcloud-ablation-panel"
+            data-testid="pointcloud-ablation-tab-panel"
+            role="tabpanel"
+            aria-labelledby="pointcloud-ablation-tab"
+            hidden={activeTab !== "ablation"}
+            className={
+              activeTab === "ablation" ? "flex min-h-0 flex-1" : "hidden"
+            }
+          >
+            <PointCloudAblationTab
+              savedViewpoints={viewpointsController.savedViewpoints}
+              onPreviewExperimentFile={async (file, sourceLabel) => {
+                const didLoad = await assetsController.loadTransientFile(
+                  file,
+                  sourceLabel,
+                );
+                if (didLoad) {
+                  setActiveTab("preview");
+                }
+                return didLoad;
+              }}
+              onExportAblationGrid={exportAblationGrid}
+            />
+          </div>
         </div>
       </main>
 
-      <BatchScreenshotModal
-        open={screenshotsController.showBatchScreenshotModal}
-        uploadedFileCount={assetsController.uploadedFiles.length}
-        savedViewpoints={viewpointsController.savedViewpoints}
-        selectedViewpointIds={screenshotsController.selectedBatchViewpointIds}
-        setSelectedViewpointIds={
-          screenshotsController.setSelectedBatchViewpointIds
-        }
-        progress={screenshotsController.batchScreenshotProgress}
-        error={screenshotsController.batchScreenshotError}
-        isRunning={screenshotsController.isBatchScreenshotRunning}
-        onClose={screenshotsController.closeBatchScreenshotModal}
-        onDownload={screenshotsController.captureBatchScreenshots}
-      />
+      {activeTab === "preview" ? (
+        <BatchScreenshotModal
+          open={screenshotsController.showBatchScreenshotModal}
+          uploadedFileCount={assetsController.uploadedFiles.length}
+          savedViewpoints={viewpointsController.savedViewpoints}
+          selectedViewpointIds={screenshotsController.selectedBatchViewpointIds}
+          setSelectedViewpointIds={
+            screenshotsController.setSelectedBatchViewpointIds
+          }
+          progress={screenshotsController.batchScreenshotProgress}
+          error={screenshotsController.batchScreenshotError}
+          isRunning={screenshotsController.isBatchScreenshotRunning}
+          onClose={screenshotsController.closeBatchScreenshotModal}
+          onDownload={screenshotsController.captureBatchScreenshots}
+        />
+      ) : null}
       <PointCloudPreviewInfoModal
         open={showInfoModal}
         onClose={() => setShowInfoModal(false)}

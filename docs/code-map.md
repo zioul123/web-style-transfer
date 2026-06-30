@@ -7,7 +7,7 @@ that matches the task, then follow imports and tests only as needed.
 
 | Path                                      | Contents                                                                          |
 | ----------------------------------------- | --------------------------------------------------------------------------------- |
-| `src/features/pointcloud-preview/`        | Point-cloud mesh preview page, loaders, math, and R3F scene                       |
+| `src/features/pointcloud-preview/`        | Point-cloud mesh preview page, ablation browser, loaders, math, and R3F scene     |
 | `src/features/style-transfer/components/` | Main UI panels and preview/control components                                     |
 | `src/features/style-transfer/hooks/`      | Main-thread style-transfer orchestration                                          |
 | `src/features/style-transfer/benchmark/`  | Model-pack benchmark and acceptance helpers                                       |
@@ -46,10 +46,13 @@ that matches the task, then follow imports and tests only as needed.
   and cache integration.
 - `src/features/pointcloud-preview/loadPointCloudMesh.ts`: JSON validation,
   typed-array conversion, bounds, and precomputed mesh vertex colours.
+- `src/features/pointcloud-preview/ablation/`: filename parsing, matrix helpers,
+  and the route-local ablation browser UI for experiment-folder inspection.
 - `src/features/pointcloud-preview/usePointCloudAssetsController.ts`,
   `useSavedViewpointsController.ts`, and
   `usePointCloudScreenshotsController.ts`: route-local uploaded-file loading,
-  persisted camera presets, and screenshot export orchestration.
+  transient preview loading, persisted camera presets, and screenshot export
+  orchestration.
 - `src/ml/geometry/`: CPU-only typed mesh analysis, 3D KD-tree query helpers,
   surface and texture sampling, mesh point batches, geodesic tracing, GLTF
   extraction, and point-cloud preprocessing.
@@ -169,6 +172,8 @@ assertion layer.
 - `docs/architecture.md`: short architectural contract.
 - `docs/architecture-overview.md`: detailed current data flow and module roles.
 - `docs/webgpu-style-transfer-plan.md`: project phase status and follow-ups.
+- `docs/pointcloud-ablation-plan.md`: current staged plan and remaining
+  follow-ups for the point-cloud ablation browser.
 - `docs/change-policy.md`: scope, approval, docs, test, and risk policy.
 - `docs/review-rubric.md`: strict final-diff review checklist.
 - `.agents/skills/repo-change/references/context-routing.md`: conditional

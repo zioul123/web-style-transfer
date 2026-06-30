@@ -103,6 +103,7 @@ export function DataSourcePanel({
           type="file"
           multiple
           accept=".json,application/json"
+          data-testid="pointcloud-upload-input"
           onChange={(event) => {
             void onFileUpload(event);
           }}

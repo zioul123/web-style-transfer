@@ -19,12 +19,12 @@ export const defaultPointCloudPreviewPointSize = 0.035;
 export const defaultPointCloudPreviewViewSettings: PointCloudPreviewViewSettings =
   {
     showMesh: true,
-    showPoints: true,
+    showPoints: false,
     showWireframe: false,
-    showGroundPlane: true,
+    showGroundPlane: false,
     meshColorMode: "fragment-knn",
     pointSize: defaultPointCloudPreviewPointSize,
-    backgroundColor: "default",
+    backgroundColor: "white",
     disableGammaDecoding: false,
     brightness: 1,
     swapYZ: false,

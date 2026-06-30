@@ -26,6 +26,33 @@ type PendingCommandSignal = {
   readonly resolve: () => void;
 };
 
+export type PointCloudAblationGridExportCell =
+  | {
+      readonly status: "available";
+      readonly xLabel: string;
+      readonly yLabel: string;
+      readonly file: File;
+      readonly sourceLabel: string;
+    }
+  | {
+      readonly status: "missing";
+      readonly xLabel: string;
+      readonly yLabel: string;
+    };
+
+export type PointCloudAblationGridExportRow = {
+  readonly yLabel: string;
+  readonly cells: readonly PointCloudAblationGridExportCell[];
+};
+
+export type PointCloudAblationGridExportRequest = {
+  readonly xAxisLabel: string;
+  readonly yAxisLabel: string;
+  readonly xLabels: readonly string[];
+  readonly rows: readonly PointCloudAblationGridExportRow[];
+  readonly viewpoint: SavedViewpoint;
+};
+
 type UsePointCloudScreenshotsControllerOptions = {
   readonly previewHostRef: MutableRefObject<HTMLDivElement | null>;
   readonly assetState: LoadedAssetState;
@@ -63,6 +90,9 @@ export type PointCloudScreenshotsController = {
   readonly closeBatchScreenshotModal: () => void;
   readonly captureScreenshot: () => void;
   readonly captureBatchScreenshots: () => Promise<void>;
+  readonly captureAblationGridPng: (
+    request: PointCloudAblationGridExportRequest,
+  ) => Promise<void>;
   readonly handleCameraCommandApplied: (commandId: number) => void;
   readonly handlePreviewFrameRendered: (commandId: number) => void;
 };
@@ -103,6 +133,78 @@ const canvasPngBytes = async (canvas: HTMLCanvasElement): Promise<Uint8Array> =>
       );
     }, "image/png");
   });
+
+const clearPointCloudExportPerformanceEntries = (): void => {
+  performance.clearMeasures();
+  performance.clearMarks();
+};
+
+const drawFittedImage = (
+  context: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  sourceWidth: number,
+  sourceHeight: number,
+  targetX: number,
+  targetY: number,
+  targetWidth: number,
+  targetHeight: number,
+): void => {
+  const sourceAspect = sourceWidth / sourceHeight;
+  const targetAspect = targetWidth / targetHeight;
+  const drawWidth =
+    sourceAspect > targetAspect ? targetWidth : targetHeight * sourceAspect;
+  const drawHeight =
+    sourceAspect > targetAspect ? targetWidth / sourceAspect : targetHeight;
+  context.drawImage(
+    image,
+    targetX + (targetWidth - drawWidth) / 2,
+    targetY + (targetHeight - drawHeight) / 2,
+    drawWidth,
+    drawHeight,
+  );
+};
+
+const drawWrappedText = (
+  context: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  lineHeight: number,
+  maxLines: number,
+  align: CanvasTextAlign = "start",
+): void => {
+  const previousAlign = context.textAlign;
+  context.textAlign = align;
+  const words = text.split(/\s+/).filter((word) => word.length > 0);
+  const lines: string[] = [];
+  let currentLine = "";
+
+  words.forEach((word) => {
+    const nextLine = currentLine.length === 0 ? word : `${currentLine} ${word}`;
+    if (context.measureText(nextLine).width <= maxWidth) {
+      currentLine = nextLine;
+      return;
+    }
+
+    if (currentLine.length > 0) {
+      lines.push(currentLine);
+    }
+    currentLine = word;
+  });
+
+  if (currentLine.length > 0) {
+    lines.push(currentLine);
+  }
+
+  const visibleLines = lines.slice(0, maxLines);
+  visibleLines.forEach((line, index) => {
+    const suffix =
+      index === maxLines - 1 && lines.length > maxLines ? "..." : "";
+    context.fillText(`${line}${suffix}`, x, y + index * lineHeight, maxWidth);
+  });
+  context.textAlign = previousAlign;
+};
 
 export const usePointCloudScreenshotsController = ({
   previewHostRef,
@@ -397,6 +499,283 @@ export const usePointCloudScreenshotsController = ({
     waitForCommandSignal,
   ]);
 
+  const captureAblationGridPng = useCallback(
+    async (request: PointCloudAblationGridExportRequest): Promise<void> => {
+      if (assetState.status !== "ready" || currentCameraState === null) {
+        throw new Error("The preview must finish loading before grid export.");
+      }
+
+      if (request.xLabels.length === 0 || request.rows.length === 0) {
+        throw new Error("The ablation matrix is empty.");
+      }
+
+      const previousAssetState = assetState;
+      const previousActiveUploadedFileId = activeUploadedFileId;
+      const previousCameraState = currentCameraState;
+      const previousSwapYZ = swapYZ;
+      const timestamp = screenshotTimestampLabel(new Date());
+      const leftLabelWidth = 220;
+      const topLabelHeight = 88;
+      const cellWidth = 360;
+      const cellHeight = 270;
+      const gap = 4;
+      const width =
+        leftLabelWidth +
+        request.xLabels.length * cellWidth +
+        Math.max(0, request.xLabels.length - 1) * gap;
+      const height =
+        topLabelHeight +
+        request.rows.length * cellHeight +
+        Math.max(0, request.rows.length - 1) * gap;
+      const outputCanvas = document.createElement("canvas");
+      outputCanvas.width = width;
+      outputCanvas.height = height;
+      const context = outputCanvas.getContext("2d");
+      if (context === null) {
+        throw new Error("The grid export canvas is not available.");
+      }
+      clearPointCloudExportPerformanceEntries();
+
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, width, height);
+      context.fillStyle = "#f1f5f9";
+      context.fillRect(0, 0, leftLabelWidth - gap, topLabelHeight - gap);
+      context.strokeStyle = "#cbd5e1";
+      context.lineWidth = 1;
+      context.strokeRect(
+        0.5,
+        0.5,
+        leftLabelWidth - gap - 1,
+        topLabelHeight - gap - 1,
+      );
+      context.fillStyle = "#0f172a";
+      context.font = "700 16px system-ui, sans-serif";
+      drawWrappedText(
+        context,
+        `X: ${request.xAxisLabel}`,
+        (leftLabelWidth - gap) / 2,
+        27,
+        leftLabelWidth - 24,
+        19,
+        1,
+        "center",
+      );
+      context.font = "700 16px system-ui, sans-serif";
+      drawWrappedText(
+        context,
+        `Y: ${request.yAxisLabel}`,
+        (leftLabelWidth - gap) / 2,
+        51,
+        leftLabelWidth - 24,
+        19,
+        1,
+        "center",
+      );
+      context.font = "500 12px system-ui, sans-serif";
+      context.fillStyle = "#475569";
+      drawWrappedText(
+        context,
+        request.viewpoint.label,
+        (leftLabelWidth - gap) / 2,
+        73,
+        leftLabelWidth - 24,
+        15,
+        1,
+        "center",
+      );
+
+      request.xLabels.forEach((label, columnIndex) => {
+        const x = leftLabelWidth + columnIndex * (cellWidth + gap);
+        context.fillStyle = "#f8fafc";
+        context.fillRect(x, 0, cellWidth, topLabelHeight - gap);
+        context.strokeStyle = "#cbd5e1";
+        context.lineWidth = 1;
+        context.strokeRect(
+          x + 0.5,
+          0.5,
+          cellWidth - 1,
+          topLabelHeight - gap - 1,
+        );
+        context.fillStyle = "#0f172a";
+        context.font = "700 18px system-ui, sans-serif";
+        drawWrappedText(
+          context,
+          label,
+          x + cellWidth / 2,
+          49,
+          cellWidth - 28,
+          22,
+          2,
+          "center",
+        );
+      });
+
+      try {
+        for (const [rowIndex, row] of request.rows.entries()) {
+          const y = topLabelHeight + rowIndex * (cellHeight + gap);
+          context.fillStyle = "#f8fafc";
+          context.fillRect(0, y, leftLabelWidth - gap, cellHeight);
+          context.strokeStyle = "#cbd5e1";
+          context.lineWidth = 1;
+          context.strokeRect(
+            0.5,
+            y + 0.5,
+            leftLabelWidth - gap - 1,
+            cellHeight - 1,
+          );
+          context.fillStyle = "#0f172a";
+          context.font = "700 18px system-ui, sans-serif";
+          drawWrappedText(
+            context,
+            row.yLabel,
+            (leftLabelWidth - gap) / 2,
+            y + cellHeight / 2,
+            leftLabelWidth - 28,
+            22,
+            4,
+            "center",
+          );
+
+          for (const [columnIndex, cell] of row.cells.entries()) {
+            const x = leftLabelWidth + columnIndex * (cellWidth + gap);
+            context.fillStyle = "#ffffff";
+            context.fillRect(x, y, cellWidth, cellHeight);
+            context.strokeStyle = "#cbd5e1";
+            context.lineWidth = 1;
+            context.strokeRect(x + 0.5, y + 0.5, cellWidth - 1, cellHeight - 1);
+
+            if (cell.status === "missing") {
+              context.setLineDash([8, 6]);
+              context.strokeStyle = "#94a3b8";
+              context.strokeRect(
+                x + 24,
+                y + 24,
+                cellWidth - 48,
+                cellHeight - 48,
+              );
+              context.setLineDash([]);
+              context.fillStyle = "#64748b";
+              context.font = "600 22px system-ui, sans-serif";
+              context.textAlign = "center";
+              context.fillText(
+                "Missing",
+                x + cellWidth / 2,
+                y + cellHeight / 2,
+              );
+              context.textAlign = "start";
+              continue;
+            }
+
+            let meshData;
+            try {
+              meshData = parsePointCloudMeshText(await cell.file.text());
+            } catch (error) {
+              const message =
+                error instanceof Error
+                  ? error.message
+                  : "Unable to parse JSON.";
+              throw new Error(`${cell.sourceLabel}: ${message}`, {
+                cause: error,
+              });
+            }
+
+            clearPointCloudExportPerformanceEntries();
+            setAssetState({
+              status: "ready",
+              sourceLabel: cell.sourceLabel,
+              errorMessage: null,
+              data: meshData,
+            });
+            setActiveUploadedFileId(null);
+            resetPreviewInteraction();
+            updateViewSettings({ swapYZ: request.viewpoint.swapYZ });
+            const commandId = issueCameraCommand({
+              type: "restore",
+              camera: request.viewpoint.camera,
+            });
+            await waitForCommandSignal(
+              cameraAppliedWaitersRef,
+              commandId,
+              "camera update",
+            );
+            await waitForCommandSignal(
+              frameRenderedWaitersRef,
+              commandId,
+              "rendered frame",
+            );
+
+            const previewCanvas =
+              previewHostRef.current?.querySelector("canvas");
+            if (!(previewCanvas instanceof HTMLCanvasElement)) {
+              throw new Error("The preview canvas is not available.");
+            }
+            drawFittedImage(
+              context,
+              previewCanvas,
+              previewCanvas.width,
+              previewCanvas.height,
+              x + 12,
+              y + 12,
+              cellWidth - 24,
+              cellHeight - 24,
+            );
+            clearPointCloudExportPerformanceEntries();
+          }
+        }
+
+        await restorePreviewAfterBatch({
+          previousAssetState,
+          previousActiveUploadedFileId,
+          previousCameraState,
+          previousSwapYZ,
+        });
+
+        const pngBytes = await canvasPngBytes(outputCanvas);
+        const pngBuffer = new ArrayBuffer(pngBytes.byteLength);
+        new Uint8Array(pngBuffer).set(pngBytes);
+        const pngUrl = URL.createObjectURL(
+          new Blob([pngBuffer], { type: "image/png" }),
+        );
+        const downloadLink = document.createElement("a");
+        downloadLink.href = pngUrl;
+        downloadLink.download = `pointcloud-ablation-grid-${screenshotFilenameStemForSourceLabel(
+          request.viewpoint.label,
+        )}-${timestamp}.png`;
+        downloadLink.click();
+        window.setTimeout(() => URL.revokeObjectURL(pngUrl), 0);
+        clearPointCloudExportPerformanceEntries();
+      } catch (error) {
+        try {
+          await restorePreviewAfterBatch({
+            previousAssetState,
+            previousActiveUploadedFileId,
+            previousCameraState,
+            previousSwapYZ,
+          });
+        } catch {
+          // Preserve the original export error because it identifies the failed cell.
+        }
+        throw error;
+      } finally {
+        clearPointCloudExportPerformanceEntries();
+      }
+    },
+    [
+      activeUploadedFileId,
+      assetState,
+      currentCameraState,
+      issueCameraCommand,
+      previewHostRef,
+      resetPreviewInteraction,
+      restorePreviewAfterBatch,
+      setActiveUploadedFileId,
+      setAssetState,
+      swapYZ,
+      updateViewSettings,
+      waitForCommandSignal,
+    ],
+  );
+
   const captureScreenshot = useCallback((): void => {
     const canvas = previewHostRef.current?.querySelector("canvas");
     if (!(canvas instanceof HTMLCanvasElement)) {
@@ -420,6 +799,7 @@ export const usePointCloudScreenshotsController = ({
     closeBatchScreenshotModal,
     captureScreenshot,
     captureBatchScreenshots,
+    captureAblationGridPng,
     handleCameraCommandApplied,
     handlePreviewFrameRendered,
   };

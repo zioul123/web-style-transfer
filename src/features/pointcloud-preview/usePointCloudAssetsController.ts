@@ -53,6 +53,10 @@ export type PointCloudAssetsController = {
   readonly loadQueuedFile: (
     uploadedFile: UploadedPointCloudFile,
   ) => Promise<void>;
+  readonly loadTransientFile: (
+    file: File,
+    sourceLabel: string,
+  ) => Promise<boolean>;
   readonly loadBundledExample: (
     url: string,
     sourceLabel: string,
@@ -216,6 +220,69 @@ export const usePointCloudAssetsController = ({
       beginAssetLoadRequest,
       currentCameraStateRef,
       setUploadedFileStatus,
+    ],
+  );
+
+  const loadTransientFile = useCallback(
+    async (file: File, sourceLabel: string): Promise<boolean> => {
+      const requestId = beginAssetLoadRequest();
+      const cameraStateToRestore = currentCameraStateRef.current;
+      setActiveUploadedFileId(null);
+      setUploadedFiles((currentFiles) =>
+        currentFiles.map((uploadedFile) =>
+          uploadedFile.status === "loading"
+            ? {
+                ...uploadedFile,
+                status: "idle",
+                errorMessage: null,
+              }
+            : uploadedFile,
+        ),
+      );
+      setAssetState({
+        status: "loading",
+        sourceLabel,
+        errorMessage: null,
+        data: null,
+      });
+
+      try {
+        const data = parsePointCloudMeshText(await file.text());
+        if (activeLoadRequestIdRef.current !== requestId) {
+          return false;
+        }
+        applyReadyAsset(data, sourceLabel, {
+          preserveCurrentView: cameraStateToRestore !== null,
+          frameCamera: cameraStateToRestore === null,
+        });
+        if (cameraStateToRestore !== null) {
+          issueCameraCommand({
+            type: "restore",
+            camera: cameraStateToRestore,
+          });
+        }
+        return true;
+      } catch (error) {
+        if (activeLoadRequestIdRef.current !== requestId) {
+          return false;
+        }
+        setAssetState({
+          status: "error",
+          sourceLabel,
+          errorMessage:
+            error instanceof Error
+              ? error.message
+              : "Unable to parse selected experiment JSON.",
+          data: null,
+        });
+        return false;
+      }
+    },
+    [
+      applyReadyAsset,
+      beginAssetLoadRequest,
+      currentCameraStateRef,
+      issueCameraCommand,
     ],
   );
 
@@ -392,6 +459,7 @@ export const usePointCloudAssetsController = ({
     setActiveUploadedFileId,
     handleFileUpload,
     loadQueuedFile,
+    loadTransientFile,
     loadBundledExample,
     removeQueuedFile,
     setUploadedFileStatus,
