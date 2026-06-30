@@ -133,9 +133,12 @@ const ablationExperimentFilename = ({
 }: {
   readonly contentSamplesPerFace: number;
   readonly distanceMeasure: "EUCLIDEAN" | "SPECTRAL";
-  readonly outputStep: number;
-}): string =>
-  `1sw_0cw_0.1tv_L1_${contentSamplesPerFace}c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_${distanceMeasure}_4knn_0.7rf_2gr_1.5std-attn_300steps_step${outputStep}.json`;
+  readonly outputStep?: number | null;
+}): string => {
+  const outputStepSuffix =
+    outputStep === undefined || outputStep === null ? "" : `_step${outputStep}`;
+  return `1sw_0cw_0.1tv_L1_${contentSamplesPerFace}c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_${distanceMeasure}_4knn_0.7rf_2gr_1.5std-attn_300steps${outputStepSuffix}.json`;
+};
 
 const ablationCellTestId = (
   contentSamplesPerFace: number,
@@ -599,6 +602,119 @@ test("point-cloud ablation matrix filters cells and previews a unique experiment
   await expect(page.getByTestId("camera-state")).toHaveText(
     cameraStateBeforePreview,
   );
+});
+
+test("point-cloud ablation options persist and fall back when unavailable", async ({
+  page,
+}, testInfo) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+  await page.getByTestId("pointcloud-ablation-tab").click();
+
+  const stickyDir = testInfo.outputPath("ablation-sticky-options");
+  await mkdir(stickyDir, { recursive: true });
+  await writeFile(
+    join(
+      stickyDir,
+      ablationExperimentFilename({
+        contentSamplesPerFace: 2,
+        distanceMeasure: "EUCLIDEAN",
+        outputStep: 60,
+      }),
+    ),
+    validUploadJson,
+  );
+  await writeFile(
+    join(
+      stickyDir,
+      ablationExperimentFilename({
+        contentSamplesPerFace: 2,
+        distanceMeasure: "SPECTRAL",
+        outputStep: 120,
+      }),
+    ),
+    validUploadJson,
+  );
+  await writeFile(
+    join(
+      stickyDir,
+      ablationExperimentFilename({
+        contentSamplesPerFace: 4,
+        distanceMeasure: "SPECTRAL",
+        outputStep: 120,
+      }),
+    ),
+    validUploadJson,
+  );
+
+  await page
+    .getByTestId("pointcloud-ablation-folder-input")
+    .setInputFiles(stickyDir);
+  await expect(
+    page.getByTestId("pointcloud-ablation-x-axis-select"),
+  ).toHaveValue("contentSamplesPerFace");
+  await expect(
+    page.getByTestId("pointcloud-ablation-y-axis-select"),
+  ).toHaveValue("distanceMeasure");
+
+  await page
+    .getByTestId("pointcloud-ablation-y-axis-select")
+    .selectOption("outputStep");
+  await page
+    .getByTestId("pointcloud-ablation-fixed-distanceMeasure-select")
+    .selectOption("string:SPECTRAL");
+
+  await page.reload();
+  await page.getByTestId("pointcloud-ablation-tab").click();
+  await page
+    .getByTestId("pointcloud-ablation-folder-input")
+    .setInputFiles(stickyDir);
+  await expect(
+    page.getByTestId("pointcloud-ablation-x-axis-select"),
+  ).toHaveValue("contentSamplesPerFace");
+  await expect(
+    page.getByTestId("pointcloud-ablation-y-axis-select"),
+  ).toHaveValue("outputStep");
+  await expect(
+    page.getByTestId("pointcloud-ablation-fixed-distanceMeasure-select"),
+  ).toHaveValue("string:SPECTRAL");
+
+  const fallbackDir = testInfo.outputPath("ablation-sticky-fallback");
+  await mkdir(fallbackDir, { recursive: true });
+  await writeFile(
+    join(
+      fallbackDir,
+      ablationExperimentFilename({
+        contentSamplesPerFace: 2,
+        distanceMeasure: "EUCLIDEAN",
+        outputStep: null,
+      }),
+    ),
+    validUploadJson,
+  );
+  await writeFile(
+    join(
+      fallbackDir,
+      ablationExperimentFilename({
+        contentSamplesPerFace: 4,
+        distanceMeasure: "SPECTRAL",
+        outputStep: null,
+      }),
+    ),
+    validUploadJson,
+  );
+
+  await page
+    .getByTestId("pointcloud-ablation-folder-input")
+    .setInputFiles(fallbackDir);
+  await expect(
+    page.getByTestId("pointcloud-ablation-x-axis-select"),
+  ).toHaveValue("contentSamplesPerFace");
+  await expect(
+    page.getByTestId("pointcloud-ablation-y-axis-select"),
+  ).toHaveValue("distanceMeasure");
+  await expect(
+    page.getByTestId("pointcloud-ablation-fixed-distanceMeasure-select"),
+  ).toHaveCount(0);
 });
 
 test("point-cloud preview reports upload errors and recovers on a valid upload", async ({

@@ -7,7 +7,7 @@ and point-cloud JSON schema.
 
 ## Current State
 
-The branch currently includes phases 1 through 4:
+The branch currently includes phases 1 through 5:
 
 1. **Parser and data model:** `experimentFilenames.ts` parses experiment
    filenames produced by the Python `name_expt` format, including optional
@@ -28,6 +28,12 @@ The branch currently includes phases 1 through 4:
    files only during capture, reuses the route's synchronized camera/render
    wait path, renders missing cells as placeholders, restores the previous
    preview state, and blocks while ambiguous cells remain.
+5. **Docs, polish, and final review:** the ablation browser has focused UI
+   coverage for import, filtering, transient preview, PNG export, and sticky
+   selector behavior. Last-used X/Y axes, fixed filters, and export viewpoint
+   choices are stored in localStorage; remembered choices are reused when the
+   current imported folder still offers them, otherwise the browser falls back
+   through the normal available options.
 
 The current matrix defaults are:
 
@@ -37,11 +43,11 @@ The current matrix defaults are:
 - Fixed filters: first sorted value, except `outputStep` defaults to the
   highest numeric step.
 
-## Remaining Stopping Points
+## Remaining Follow-Ups
 
-5. **Docs, polish, and final review:** update user-facing and architecture docs
-   for the completed export behavior, smooth empty/error/progress states, run
-   repository checks, and complete independent review.
+- No route-level implementation phases remain in this branch. Future work should
+  be driven by concrete user feedback from ablation-folder usage, such as
+  additional export formats or denser matrix navigation controls.
 
 ## Guardrails
 

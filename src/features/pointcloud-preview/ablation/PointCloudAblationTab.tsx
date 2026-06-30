@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useId, useMemo, useState, type ChangeEvent } from "react";
 import type {
   PointCloudAblationGridExportRequest,
   PointCloudAblationGridExportRow,
@@ -12,6 +12,7 @@ import {
   type AblationMatrixCellFor,
 } from "./ablationMatrix";
 import {
+  ablationDimensionDefinitions,
   formatAblationDimensionValue,
   getAblationDimensionValueKey,
   parseAblationExperimentFilename,
@@ -53,8 +54,102 @@ const emptyParseResult: AblationImportResult = {
   failures: [],
 };
 
+const ABLATION_BROWSER_OPTIONS_STORAGE_KEY =
+  "web-style-transfer.pointcloud-ablation-options.v1";
+
+type StoredAblationBrowserOptions = {
+  readonly xAxis: AblationDimensionKey | null;
+  readonly yAxis: AblationDimensionKey | null;
+  readonly fixedValueKeys: Partial<Record<AblationDimensionKey, string>>;
+  readonly exportViewpointId: number | null;
+};
+
+const emptyStoredAblationBrowserOptions: StoredAblationBrowserOptions = {
+  xAxis: null,
+  yAxis: null,
+  fixedValueKeys: {},
+  exportViewpointId: null,
+};
+
+const ablationDimensionKeySet = new Set<AblationDimensionKey>(
+  ablationDimensionDefinitions.map((definition) => definition.key),
+);
+
 const pluralize = (count: number, singular: string, plural: string): string =>
   count === 1 ? singular : plural;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isAblationDimensionKey = (
+  value: unknown,
+): value is AblationDimensionKey =>
+  typeof value === "string" &&
+  ablationDimensionKeySet.has(value as AblationDimensionKey);
+
+const parseStoredAblationBrowserOptions = (
+  value: unknown,
+): StoredAblationBrowserOptions => {
+  if (!isRecord(value)) {
+    return emptyStoredAblationBrowserOptions;
+  }
+
+  const fixedValueKeys: Partial<Record<AblationDimensionKey, string>> = {};
+  const storedFixedValueKeys = value.fixedValueKeys;
+  if (isRecord(storedFixedValueKeys)) {
+    Object.entries(storedFixedValueKeys).forEach(([dimensionKey, valueKey]) => {
+      if (
+        isAblationDimensionKey(dimensionKey) &&
+        typeof valueKey === "string"
+      ) {
+        fixedValueKeys[dimensionKey] = valueKey;
+      }
+    });
+  }
+
+  return {
+    xAxis: isAblationDimensionKey(value.xAxis) ? value.xAxis : null,
+    yAxis: isAblationDimensionKey(value.yAxis) ? value.yAxis : null,
+    fixedValueKeys,
+    exportViewpointId:
+      typeof value.exportViewpointId === "number" &&
+      Number.isSafeInteger(value.exportViewpointId)
+        ? value.exportViewpointId
+        : null,
+  };
+};
+
+const readStoredAblationBrowserOptions = (): StoredAblationBrowserOptions => {
+  if (typeof window === "undefined") {
+    return emptyStoredAblationBrowserOptions;
+  }
+
+  const storedOptions = window.localStorage.getItem(
+    ABLATION_BROWSER_OPTIONS_STORAGE_KEY,
+  );
+  if (storedOptions === null) {
+    return emptyStoredAblationBrowserOptions;
+  }
+
+  try {
+    return parseStoredAblationBrowserOptions(JSON.parse(storedOptions));
+  } catch {
+    return emptyStoredAblationBrowserOptions;
+  }
+};
+
+const writeStoredAblationBrowserOptions = (
+  options: StoredAblationBrowserOptions,
+): void => {
+  try {
+    window.localStorage.setItem(
+      ABLATION_BROWSER_OPTIONS_STORAGE_KEY,
+      JSON.stringify(options),
+    );
+  } catch {
+    // localStorage may be unavailable in private or restricted browser contexts.
+  }
+};
 
 const matrixCellClassName = (
   status: "available" | "ambiguous" | "missing",
@@ -118,18 +213,19 @@ export function PointCloudAblationTab({
 }: PointCloudAblationTabProps) {
   const folderInputId = useId();
   const fileInputId = useId();
+  const [initialStoredOptions] = useState(readStoredAblationBrowserOptions);
   const [parseResult, setParseResult] =
     useState<AblationImportResult>(emptyParseResult);
   const [selectedXAxis, setSelectedXAxis] =
-    useState<AblationDimensionKey | null>(null);
+    useState<AblationDimensionKey | null>(initialStoredOptions.xAxis);
   const [selectedYAxis, setSelectedYAxis] =
-    useState<AblationDimensionKey | null>(null);
+    useState<AblationDimensionKey | null>(initialStoredOptions.yAxis);
   const [selectedFixedValueKeys, setSelectedFixedValueKeys] = useState<
     Partial<Record<AblationDimensionKey, string>>
-  >({});
+  >(initialStoredOptions.fixedValueKeys);
   const [selectedExportViewpointId, setSelectedExportViewpointId] = useState<
     number | null
-  >(null);
+  >(initialStoredOptions.exportViewpointId);
   const [previewLoadError, setPreviewLoadError] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState<boolean>(false);
@@ -232,6 +328,20 @@ export function PointCloudAblationTab({
     selectedExportViewpoint !== null &&
     ambiguousCellCount === 0 &&
     !isExporting;
+
+  useEffect(() => {
+    writeStoredAblationBrowserOptions({
+      xAxis: selectedXAxis,
+      yAxis: selectedYAxis,
+      fixedValueKeys: selectedFixedValueKeys,
+      exportViewpointId: selectedExportViewpointId,
+    });
+  }, [
+    selectedExportViewpointId,
+    selectedFixedValueKeys,
+    selectedXAxis,
+    selectedYAxis,
+  ]);
 
   const handleFileSelection = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.currentTarget.files ?? []);
