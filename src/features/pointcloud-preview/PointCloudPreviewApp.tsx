@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { PointCloudAblationTab } from "./ablation/PointCloudAblationTab";
 import { BatchScreenshotModal } from "./BatchScreenshotModal";
 import { PointCloudPreviewControlsPanel } from "./PointCloudPreviewControlsPanel";
@@ -20,7 +20,10 @@ import {
   usePointCloudAssetsController,
 } from "./usePointCloudAssetsController";
 import { usePointCloudPreviewController } from "./usePointCloudPreviewController";
-import { usePointCloudScreenshotsController } from "./usePointCloudScreenshotsController";
+import {
+  usePointCloudScreenshotsController,
+  type PointCloudAblationGridExportRequest,
+} from "./usePointCloudScreenshotsController";
 import { useSavedViewpointsController } from "./useSavedViewpointsController";
 
 type PointCloudPreviewTab = "preview" | "ablation";
@@ -87,6 +90,24 @@ export function PointCloudPreviewApp() {
           ? "Baked vertex colours active with gamma decoding enabled."
           : "Baked vertex colours active with gamma decoding disabled.";
 
+  const exportAblationGrid = useCallback(
+    async (request: PointCloudAblationGridExportRequest): Promise<void> => {
+      const previousTab = activeTab;
+      setActiveTab("preview");
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => resolve());
+        });
+      });
+      try {
+        await screenshotsController.captureAblationGridPng(request);
+      } finally {
+        setActiveTab(previousTab);
+      }
+    },
+    [activeTab, screenshotsController],
+  );
+
   return (
     <>
       <main className="min-h-screen w-full overflow-x-hidden bg-[linear-gradient(180deg,_#071019_0%,_#0b1120_100%)] text-slate-100 2xl:h-screen 2xl:overflow-hidden">
@@ -123,83 +144,96 @@ export function PointCloudPreviewApp() {
             })}
           </div>
 
-          {activeTab === "preview" ? (
+          <div
+            id="pointcloud-preview-panel"
+            data-testid="pointcloud-preview-tab-panel"
+            role="tabpanel"
+            aria-labelledby="pointcloud-preview-tab"
+            hidden={activeTab !== "preview"}
+            className={
+              activeTab === "preview"
+                ? "flex min-h-0 flex-1 flex-col items-stretch gap-4 2xl:flex-row"
+                : "hidden"
+            }
+          >
             <div
-              id="pointcloud-preview-panel"
-              data-testid="pointcloud-preview-tab-panel"
-              role="tabpanel"
-              aria-labelledby="pointcloud-preview-tab"
-              className="flex min-h-0 flex-1 flex-col items-stretch gap-4 2xl:flex-row"
+              data-testid="pointcloud-left-panel"
+              className="flex w-full flex-col gap-4 2xl:h-full 2xl:w-[25rem] 2xl:shrink-0 2xl:overflow-y-auto 2xl:pr-1"
             >
-              <div
-                data-testid="pointcloud-left-panel"
-                className="flex w-full flex-col gap-4 2xl:h-full 2xl:w-[25rem] 2xl:shrink-0 2xl:overflow-y-auto 2xl:pr-1"
-              >
-                <RenderingAlgorithmPanel
-                  meshColorMode={previewController.viewSettings.meshColorMode}
-                  description={meshColorModeDescription}
-                  onMeshColorModeChange={(meshColorMode) =>
-                    previewController.updateViewSettings({ meshColorMode })
-                  }
-                />
-                <DataSourcePanel
-                  assetState={assetsController.assetState}
-                  uploadedFiles={assetsController.uploadedFiles}
-                  activeUploadedFileId={assetsController.activeUploadedFileId}
-                  onFileUpload={assetsController.handleFileUpload}
-                  onReload={() => {
-                    void assetsController.loadBundledExample(
-                      bundledMediumExampleUrl,
-                      bundledMediumSourceLabel,
-                      "Unable to reload the bundled medium example.",
-                    );
-                  }}
-                  onSelectFile={(uploadedFile) => {
-                    void assetsController.loadQueuedFile(uploadedFile);
-                  }}
-                  onRemoveFile={assetsController.removeQueuedFile}
-                />
-                <DatasetStatsPanel data={data} />
-              </div>
-
-              <PointCloudPreviewViewport
-                previewHostRef={previewHostRef}
+              <RenderingAlgorithmPanel
+                meshColorMode={previewController.viewSettings.meshColorMode}
+                description={meshColorModeDescription}
+                onMeshColorModeChange={(meshColorMode) =>
+                  previewController.updateViewSettings({ meshColorMode })
+                }
+              />
+              <DataSourcePanel
                 assetState={assetsController.assetState}
-                viewSettings={previewController.viewSettings}
-                effectiveMeshColorMode={effectiveMeshColorMode}
-                selectedHit={previewController.selectedHit}
-                framesPerSecond={previewController.framesPerSecond}
-                cameraCommand={previewController.cameraCommand}
-                canBatchScreenshot={assetsController.uploadedFiles.length > 1}
-                onScreenshot={screenshotsController.captureScreenshot}
-                onOpenBatchScreenshot={
-                  screenshotsController.openBatchScreenshotModal
-                }
-                onHoverSampleChange={previewController.setSelectedHit}
-                onCameraStateChange={previewController.handleCameraStateChange}
-                onCameraCommandApplied={
-                  screenshotsController.handleCameraCommandApplied
-                }
-                onFrameRendered={
-                  screenshotsController.handlePreviewFrameRendered
-                }
-                onFramesPerSecondChange={previewController.setFramesPerSecond}
+                uploadedFiles={assetsController.uploadedFiles}
+                activeUploadedFileId={assetsController.activeUploadedFileId}
+                onFileUpload={assetsController.handleFileUpload}
+                onReload={() => {
+                  void assetsController.loadBundledExample(
+                    bundledMediumExampleUrl,
+                    bundledMediumSourceLabel,
+                    "Unable to reload the bundled medium example.",
+                  );
+                }}
+                onSelectFile={(uploadedFile) => {
+                  void assetsController.loadQueuedFile(uploadedFile);
+                }}
+                onRemoveFile={assetsController.removeQueuedFile}
               />
-
-              <PointCloudPreviewControlsPanel
-                viewSettings={previewController.viewSettings}
-                updateViewSettings={previewController.updateViewSettings}
-                currentCameraState={previewController.cameraState}
-                issueCameraCommand={previewController.issueCameraCommand}
-                savedViewpoints={viewpointsController.savedViewpoints}
-                onSaveViewpoint={viewpointsController.saveViewpoint}
-                onRenameViewpoint={viewpointsController.renameViewpoint}
-                onUpdateViewpoint={viewpointsController.updateViewpoint}
-                onDeleteViewpoint={viewpointsController.deleteViewpoint}
-              />
+              <DatasetStatsPanel data={data} />
             </div>
-          ) : (
+
+            <PointCloudPreviewViewport
+              previewHostRef={previewHostRef}
+              assetState={assetsController.assetState}
+              viewSettings={previewController.viewSettings}
+              effectiveMeshColorMode={effectiveMeshColorMode}
+              selectedHit={previewController.selectedHit}
+              framesPerSecond={previewController.framesPerSecond}
+              cameraCommand={previewController.cameraCommand}
+              canBatchScreenshot={assetsController.uploadedFiles.length > 1}
+              onScreenshot={screenshotsController.captureScreenshot}
+              onOpenBatchScreenshot={
+                screenshotsController.openBatchScreenshotModal
+              }
+              onHoverSampleChange={previewController.setSelectedHit}
+              onCameraStateChange={previewController.handleCameraStateChange}
+              onCameraCommandApplied={
+                screenshotsController.handleCameraCommandApplied
+              }
+              onFrameRendered={screenshotsController.handlePreviewFrameRendered}
+              onFramesPerSecondChange={previewController.setFramesPerSecond}
+            />
+
+            <PointCloudPreviewControlsPanel
+              viewSettings={previewController.viewSettings}
+              updateViewSettings={previewController.updateViewSettings}
+              currentCameraState={previewController.cameraState}
+              issueCameraCommand={previewController.issueCameraCommand}
+              savedViewpoints={viewpointsController.savedViewpoints}
+              onSaveViewpoint={viewpointsController.saveViewpoint}
+              onRenameViewpoint={viewpointsController.renameViewpoint}
+              onUpdateViewpoint={viewpointsController.updateViewpoint}
+              onDeleteViewpoint={viewpointsController.deleteViewpoint}
+            />
+          </div>
+
+          <div
+            id="pointcloud-ablation-panel"
+            data-testid="pointcloud-ablation-tab-panel"
+            role="tabpanel"
+            aria-labelledby="pointcloud-ablation-tab"
+            hidden={activeTab !== "ablation"}
+            className={
+              activeTab === "ablation" ? "flex min-h-0 flex-1" : "hidden"
+            }
+          >
             <PointCloudAblationTab
+              savedViewpoints={viewpointsController.savedViewpoints}
               onPreviewExperimentFile={async (file, sourceLabel) => {
                 const didLoad = await assetsController.loadTransientFile(
                   file,
@@ -210,8 +244,9 @@ export function PointCloudPreviewApp() {
                 }
                 return didLoad;
               }}
+              onExportAblationGrid={exportAblationGrid}
             />
-          )}
+          </div>
         </div>
       </main>
 

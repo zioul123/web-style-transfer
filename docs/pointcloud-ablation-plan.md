@@ -7,7 +7,7 @@ and point-cloud JSON schema.
 
 ## Current State
 
-The branch currently includes phases 1 through 3:
+The branch currently includes phases 1 through 4:
 
 1. **Parser and data model:** `experimentFilenames.ts` parses experiment
    filenames produced by the Python `name_expt` format, including optional
@@ -23,6 +23,11 @@ The branch currently includes phases 1 through 3:
    it reads the selected file only when clicked, switches back to the Preview
    tab on success, preserves the camera when possible, and does not add the
    experiment file to the manual upload queue.
+4. **Grid PNG export:** the ablation tab exports the current matrix as one
+   labelled PNG for a selected saved viewpoint. Export reads unique-cell JSON
+   files only during capture, reuses the route's synchronized camera/render
+   wait path, renders missing cells as placeholders, restores the previous
+   preview state, and blocks while ambiguous cells remain.
 
 The current matrix defaults are:
 
@@ -34,10 +39,6 @@ The current matrix defaults are:
 
 ## Remaining Stopping Points
 
-4. **Grid PNG export:** add labelled single-PNG grid export for one selected
-   saved viewpoint. Missing cells should render placeholders, ambiguous cells
-   should block export, and export should reuse the route's synchronized
-   camera/render waiting pattern.
 5. **Docs, polish, and final review:** update user-facing and architecture docs
    for the completed export behavior, smooth empty/error/progress states, run
    repository checks, and complete independent review.
@@ -49,7 +50,7 @@ The current matrix defaults are:
 - Do not change worker protocol types, model/fixture formats, or optimization
   code for this browser-only tool.
 - Keep JSON contents unread during import/filter/matrix construction; read a
-  file only for transient preview or future export capture.
+  file only for transient preview or export capture.
 - Prefer new route-local helpers under `src/features/pointcloud-preview/ablation/`.
 
 ## Useful Verification

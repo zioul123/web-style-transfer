@@ -240,6 +240,18 @@ const readStoredZipEntries = (archive: Buffer): ReadonlyMap<string, Buffer> => {
   return entries;
 };
 
+const readPngSize = (
+  png: Buffer,
+): { readonly width: number; readonly height: number } => {
+  expect(png.subarray(0, 8)).toEqual(
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  );
+  return {
+    width: png.readUInt32BE(16),
+    height: png.readUInt32BE(20),
+  };
+};
+
 test("point-cloud preview boots from the standalone route with the bundled demo", async ({
   page,
 }) => {
@@ -280,6 +292,7 @@ test("point-cloud preview boots from the standalone route with the bundled demo"
 test("point-cloud preview hosts a filename-only ablation tab shell", async ({
   page,
 }, testInfo) => {
+  await page.setViewportSize({ width: 1600, height: 720 });
   await gotoStableApp(page, "/pointcloud-preview");
 
   await expect(page.getByTestId("pointcloud-preview-tab")).toHaveAttribute(
@@ -298,7 +311,7 @@ test("point-cloud preview hosts a filename-only ablation tab shell", async ({
     "aria-selected",
     "true",
   );
-  await expect(page.getByTestId("pointcloud-preview-canvas")).toHaveCount(0);
+  await expect(page.getByTestId("pointcloud-preview-canvas")).toBeHidden();
   await expect(page.getByTestId("pointcloud-ablation-empty")).toBeVisible();
   await expect(
     page.getByTestId("pointcloud-ablation-selected-count"),
@@ -411,6 +424,25 @@ test("point-cloud preview hosts a filename-only ablation tab shell", async ({
   await expect(
     page.getByTestId("pointcloud-ablation-summary-outputStep"),
   ).toContainText("step120");
+  await expect
+    .poll(async () =>
+      page
+        .getByTestId("pointcloud-ablation-scroll-region")
+        .evaluate((element) => element.scrollHeight > element.clientHeight),
+    )
+    .toBe(true);
+  await page
+    .getByTestId("pointcloud-ablation-scroll-region")
+    .evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+  await expect
+    .poll(async () =>
+      page
+        .getByTestId("pointcloud-ablation-scroll-region")
+        .evaluate((element) => element.scrollTop),
+    )
+    .toBeGreaterThan(0);
 
   await page.getByTestId("pointcloud-preview-tab").click();
   await expect(page.getByTestId("pointcloud-preview-tab")).toHaveAttribute(
@@ -434,6 +466,8 @@ test("point-cloud ablation matrix filters cells and previews a unique experiment
     page.getByTestId("camera-state"),
     page.getByTestId("snap-axis-pos-x"),
   );
+  await page.getByTestId("save-viewpoint-button").click();
+  await page.getByTestId("viewpoint-name-1").fill("Export view");
 
   await page.getByTestId("pointcloud-ablation-tab").click();
   await expect(page.getByTestId("pointcloud-ablation-empty")).toBeVisible();
@@ -510,6 +544,15 @@ test("point-cloud ablation matrix filters cells and previews a unique experiment
   await expect(
     availableCell.getByRole("button", { name: "Available" }),
   ).toBeVisible();
+  await expect(
+    page.getByTestId("pointcloud-ablation-export-viewpoint-select"),
+  ).toHaveValue("1");
+  await expect(
+    page.getByTestId("pointcloud-ablation-export-blocked"),
+  ).toContainText("Resolve 1 ambiguous cell before export.");
+  await expect(
+    page.getByTestId("pointcloud-ablation-export-button"),
+  ).toBeDisabled();
 
   await page
     .getByTestId("pointcloud-ablation-fixed-outputStep-select")
@@ -518,6 +561,27 @@ test("point-cloud ablation matrix filters cells and previews a unique experiment
   await expect(
     page.getByTestId(ablationCellTestId(4, "SPECTRAL")),
   ).toHaveAttribute("data-status", "missing");
+  await expect(
+    page.getByTestId("pointcloud-ablation-export-button"),
+  ).toBeEnabled();
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByTestId("pointcloud-ablation-export-button").click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(
+    /^pointcloud-ablation-grid-export-view-\d{8}-\d{6}\.png$/,
+  );
+  const downloadPath = await download.path();
+  expect(downloadPath).not.toBeNull();
+  const png = await readFile(downloadPath!);
+  expect(readPngSize(png)).toEqual({ width: 944, height: 632 });
+  await expect(page.getByTestId("pointcloud-ablation-tab")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(
+    page.getByTestId("pointcloud-ablation-export-button"),
+  ).toBeEnabled();
 
   await ambiguousCell.getByRole("button", { name: "Available" }).click();
   await expect(page.getByTestId("pointcloud-preview-tab")).toHaveAttribute(
@@ -542,7 +606,7 @@ test("point-cloud preview reports upload errors and recovers on a valid upload",
 }) => {
   await gotoStableApp(page, "/pointcloud-preview");
 
-  const fileInput = page.locator('input[type="file"]');
+  const fileInput = page.getByTestId("pointcloud-upload-input");
   await fileInput.setInputFiles({
     name: "invalid-pointcloud.json",
     mimeType: "application/json",
@@ -574,7 +638,7 @@ test("point-cloud preview queues multiple uploads and lazily switches between th
 }) => {
   await gotoStableApp(page, "/pointcloud-preview");
 
-  const fileInput = page.locator('input[type="file"]');
+  const fileInput = page.getByTestId("pointcloud-upload-input");
   const uploadRows = page.locator('[data-testid^="pointcloud-upload-row-"]');
 
   await fileInput.setInputFiles([
@@ -674,7 +738,7 @@ test("point-cloud preview keeps fragment shading active for larger uploads via s
 }) => {
   await gotoStableApp(page, "/pointcloud-preview");
 
-  const fileInput = page.locator('input[type="file"]');
+  const fileInput = page.getByTestId("pointcloud-upload-input");
   await fileInput.setInputFiles({
     name: "large-upload.json",
     mimeType: "application/json",
@@ -696,7 +760,7 @@ test("point-cloud preview falls back to baked colours when one spatial-hash cell
 }) => {
   await gotoStableApp(page, "/pointcloud-preview");
 
-  const fileInput = page.locator('input[type="file"]');
+  const fileInput = page.getByTestId("pointcloud-upload-input");
   await fileInput.setInputFiles({
     name: "dense-cell-upload.json",
     mimeType: "application/json",
@@ -797,7 +861,7 @@ test("point-cloud preview disables dependent controls and saves viewpoints", asy
   await page.getByTestId("viewpoint-go-1").click();
   await expect(page.getByTestId("swap-yz-button")).toHaveText(/Y\/Z swapped/i);
 
-  const fileInput = page.locator('input[type="file"]');
+  const fileInput = page.getByTestId("pointcloud-upload-input");
   await fileInput.setInputFiles({
     name: "tiny-upload.json",
     mimeType: "application/json",
@@ -864,7 +928,7 @@ test("point-cloud preview shows and copies saved viewpoint camera details", asyn
 test("point-cloud preview can download a screenshot", async ({ page }) => {
   await gotoStableApp(page, "/pointcloud-preview");
 
-  const fileInput = page.locator('input[type="file"]');
+  const fileInput = page.getByTestId("pointcloud-upload-input");
   await fileInput.setInputFiles({
     name: "tiny-upload.json",
     mimeType: "application/json",
@@ -886,7 +950,7 @@ test("point-cloud preview disables batch screenshots without saved viewpoints", 
 }) => {
   await gotoStableApp(page, "/pointcloud-preview");
 
-  await page.locator('input[type="file"]').setInputFiles([
+  await page.getByTestId("pointcloud-upload-input").setInputFiles([
     {
       name: "tiny-a.json",
       mimeType: "application/json",
@@ -912,7 +976,7 @@ test("point-cloud preview stacks panels and keeps batch actions clickable on nar
   await page.setViewportSize({ width: 1280, height: 720 });
   await gotoStableApp(page, "/pointcloud-preview");
 
-  await page.locator('input[type="file"]').setInputFiles([
+  await page.getByTestId("pointcloud-upload-input").setInputFiles([
     {
       name: "tiny-a.json",
       mimeType: "application/json",
@@ -957,7 +1021,7 @@ test("point-cloud preview downloads every mesh and selected viewpoint in one ZIP
   await page.getByTestId("viewpoint-name-2").fill("Swapped view");
   await page.getByTestId("swap-yz-button").click();
 
-  await page.locator('input[type="file"]').setInputFiles([
+  await page.getByTestId("pointcloud-upload-input").setInputFiles([
     {
       name: "duplicate.json",
       mimeType: "application/json",
@@ -1039,7 +1103,7 @@ test("point-cloud batch screenshot reports malformed queued meshes and restores 
   await page.getByTestId("save-viewpoint-button").click();
   await page.getByTestId("viewpoint-name-1").fill("Swapped view");
 
-  await page.locator('input[type="file"]').setInputFiles([
+  await page.getByTestId("pointcloud-upload-input").setInputFiles([
     {
       name: "valid.json",
       mimeType: "application/json",

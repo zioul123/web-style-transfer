@@ -1,4 +1,9 @@
 import { useId, useMemo, useState, type ChangeEvent } from "react";
+import type {
+  PointCloudAblationGridExportRequest,
+  PointCloudAblationGridExportRow,
+} from "../usePointCloudScreenshotsController";
+import type { SavedViewpoint } from "../pointCloudPreviewModels";
 import {
   buildAblationMatrix,
   chooseDefaultAblationAxes,
@@ -33,10 +38,14 @@ type AblationImportResult = {
 };
 
 type PointCloudAblationTabProps = {
+  readonly savedViewpoints: readonly SavedViewpoint[];
   readonly onPreviewExperimentFile?: (
     file: File,
     sourceLabel: string,
   ) => Promise<boolean>;
+  readonly onExportAblationGrid?: (
+    request: PointCloudAblationGridExportRequest,
+  ) => Promise<void>;
 };
 
 const emptyParseResult: AblationImportResult = {
@@ -103,7 +112,9 @@ const selectedValueForFixedFilter = (
 ): AblationDimensionValue | null => value ?? null;
 
 export function PointCloudAblationTab({
+  savedViewpoints,
   onPreviewExperimentFile,
+  onExportAblationGrid,
 }: PointCloudAblationTabProps) {
   const folderInputId = useId();
   const fileInputId = useId();
@@ -116,7 +127,12 @@ export function PointCloudAblationTab({
   const [selectedFixedValueKeys, setSelectedFixedValueKeys] = useState<
     Partial<Record<AblationDimensionKey, string>>
   >({});
+  const [selectedExportViewpointId, setSelectedExportViewpointId] = useState<
+    number | null
+  >(null);
   const [previewLoadError, setPreviewLoadError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState<boolean>(false);
   const summaries = useMemo(
     () =>
       sortAblationSummariesByDefinitionOrder(
@@ -194,6 +210,28 @@ export function PointCloudAblationTab({
     [matrixSelection, parseResult.files, summaries],
   );
   const selectedCount = parseResult.files.length + parseResult.failures.length;
+  const ambiguousCellCount = useMemo(
+    () =>
+      matrix?.rows.reduce(
+        (count, row) =>
+          count +
+          row.cells.filter((cell) => cell.status === "ambiguous").length,
+        0,
+      ) ?? 0,
+    [matrix],
+  );
+  const selectedExportViewpoint =
+    savedViewpoints.find(
+      (viewpoint) => viewpoint.id === selectedExportViewpointId,
+    ) ??
+    savedViewpoints[0] ??
+    null;
+  const canExportGrid =
+    onExportAblationGrid !== undefined &&
+    matrix !== null &&
+    selectedExportViewpoint !== null &&
+    ambiguousCellCount === 0 &&
+    !isExporting;
 
   const handleFileSelection = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.currentTarget.files ?? []);
@@ -254,6 +292,72 @@ export function PointCloudAblationTab({
     }
   };
 
+  const exportAblationGrid = async (): Promise<void> => {
+    if (
+      onExportAblationGrid === undefined ||
+      matrix === null ||
+      selectedExportViewpoint === null
+    ) {
+      return;
+    }
+
+    if (ambiguousCellCount > 0) {
+      setExportError("Resolve ambiguous matrix cells before exporting.");
+      return;
+    }
+
+    const rows: PointCloudAblationGridExportRow[] = matrix.rows.map((row) => ({
+      yLabel: row.yLabel,
+      cells: row.cells.map((cell, columnIndex) => {
+        const xLabel = matrix.xSummary.values[columnIndex]?.label ?? "";
+        if (cell.status === "missing") {
+          return {
+            status: "missing",
+            xLabel,
+            yLabel: row.yLabel,
+          };
+        }
+
+        const [experimentFile] = cell.files;
+        if (experimentFile === undefined || cell.status !== "available") {
+          return {
+            status: "missing",
+            xLabel,
+            yLabel: row.yLabel,
+          };
+        }
+
+        return {
+          status: "available",
+          xLabel,
+          yLabel: row.yLabel,
+          file: experimentFile.file,
+          sourceLabel: experimentFile.sourceLabel,
+        };
+      }),
+    }));
+
+    setExportError(null);
+    setIsExporting(true);
+    try {
+      await onExportAblationGrid({
+        xAxisLabel: matrix.xSummary.definition.label,
+        yAxisLabel: matrix.ySummary.definition.label,
+        xLabels: matrix.xSummary.values.map((value) => value.label),
+        rows,
+        viewpoint: selectedExportViewpoint,
+      });
+    } catch (error) {
+      setExportError(
+        error instanceof Error
+          ? error.message
+          : "Unable to export the ablation grid.",
+      );
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const setDirectoryInputRef = (node: HTMLInputElement | null) => {
     if (node !== null) {
       node.setAttribute("webkitdirectory", "");
@@ -262,11 +366,8 @@ export function PointCloudAblationTab({
 
   return (
     <section
-      id="pointcloud-ablation-panel"
-      data-testid="pointcloud-ablation-tab-panel"
-      role="tabpanel"
-      aria-labelledby="pointcloud-ablation-tab"
       className="min-h-0 flex-1 overflow-y-auto rounded-[1.1rem] border border-white/10 bg-slate-950/55 p-5 shadow-xl shadow-black/20"
+      data-testid="pointcloud-ablation-scroll-region"
     >
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
@@ -515,6 +616,71 @@ export function PointCloudAblationTab({
               {previewLoadError}
             </p>
           ) : null}
+
+          <div className="mt-4 rounded-lg border border-white/10 bg-slate-950/65 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <label className="flex min-w-0 flex-col gap-1 text-sm font-medium text-slate-200">
+                <span>Export viewpoint</span>
+                <select
+                  className="min-w-56 rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  data-testid="pointcloud-ablation-export-viewpoint-select"
+                  value={selectedExportViewpoint?.id ?? ""}
+                  disabled={savedViewpoints.length === 0 || isExporting}
+                  onChange={(event) =>
+                    setSelectedExportViewpointId(
+                      event.currentTarget.value.length === 0
+                        ? null
+                        : Number(event.currentTarget.value),
+                    )
+                  }
+                >
+                  {savedViewpoints.length === 0 ? (
+                    <option value="">No saved viewpoints</option>
+                  ) : null}
+                  {savedViewpoints.map((viewpoint) => (
+                    <option key={viewpoint.id} value={viewpoint.id}>
+                      {viewpoint.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className="inline-flex items-center justify-center rounded-lg bg-sky-300 px-4 py-2 text-sm font-semibold text-sky-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-60"
+                type="button"
+                data-testid="pointcloud-ablation-export-button"
+                disabled={!canExportGrid}
+                onClick={() => {
+                  void exportAblationGrid();
+                }}
+              >
+                {isExporting ? "Exporting grid..." : "Export grid PNG"}
+              </button>
+            </div>
+            {savedViewpoints.length === 0 ? (
+              <p
+                className="mt-3 text-sm text-slate-400"
+                data-testid="pointcloud-ablation-export-empty"
+              >
+                Save a viewpoint on the Preview tab before exporting a grid.
+              </p>
+            ) : ambiguousCellCount > 0 ? (
+              <p
+                className="mt-3 text-sm text-amber-100"
+                data-testid="pointcloud-ablation-export-blocked"
+              >
+                Resolve {ambiguousCellCount} ambiguous{" "}
+                {pluralize(ambiguousCellCount, "cell", "cells")} before export.
+              </p>
+            ) : null}
+            {exportError !== null ? (
+              <p
+                className="mt-3 rounded-lg border border-rose-300/15 bg-rose-400/10 px-4 py-3 text-sm text-rose-100"
+                data-testid="pointcloud-ablation-export-error"
+              >
+                {exportError}
+              </p>
+            ) : null}
+          </div>
 
           <div className="mt-4 overflow-x-auto">
             <table

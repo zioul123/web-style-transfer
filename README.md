@@ -83,8 +83,9 @@ upload replacement JSON exports, and provides:
   viewpoint when multiple meshes are loaded.
 - an Ablation tab that parses experiment filenames, filters configurations into
   an availability matrix, and loads unique cells into the preview without
-  adding them to the manual upload queue. Grid PNG export is planned but not
-  implemented yet; see [docs/pointcloud-ablation-plan.md](docs/pointcloud-ablation-plan.md).
+  adding them to the manual upload queue. The matrix can export a labelled PNG
+  grid for one saved viewpoint, with placeholders for missing cells and export
+  blocked while ambiguous cells remain.
 
 ## Model packs
 
