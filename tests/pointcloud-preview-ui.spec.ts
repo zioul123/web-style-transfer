@@ -126,6 +126,23 @@ const denseCellUploadJson = JSON.stringify({
   ],
 });
 
+const ablationExperimentFilename = ({
+  contentSamplesPerFace,
+  distanceMeasure,
+  outputStep,
+}: {
+  readonly contentSamplesPerFace: number;
+  readonly distanceMeasure: "EUCLIDEAN" | "SPECTRAL";
+  readonly outputStep: number;
+}): string =>
+  `1sw_0cw_0.1tv_L1_${contentSamplesPerFace}c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_${distanceMeasure}_4knn_0.7rf_2gr_1.5std-attn_300steps_step${outputStep}.json`;
+
+const ablationCellTestId = (
+  contentSamplesPerFace: number,
+  distanceMeasure: "EUCLIDEAN" | "SPECTRAL",
+): string =>
+  `pointcloud-ablation-cell-contentSamplesPerFace=number:${contentSamplesPerFace}|distanceMeasure=string:${distanceMeasure}`;
+
 const readPreviewBackgroundPixel = async (
   previewCanvas: Locator,
 ): Promise<readonly number[]> =>
@@ -406,6 +423,118 @@ test("point-cloud preview hosts a filename-only ablation tab shell", async ({
   ).toBeVisible();
   await expect(page.getByTestId("screenshot-button")).toBeVisible();
   await expect(page.getByTestId("save-viewpoint-button")).toBeEnabled();
+});
+
+test("point-cloud ablation matrix filters cells and previews a unique experiment", async ({
+  page,
+}, testInfo) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  const cameraStateBeforePreview = await snapCameraToPositiveX(
+    page.getByTestId("camera-state"),
+    page.getByTestId("snap-axis-pos-x"),
+  );
+
+  await page.getByTestId("pointcloud-ablation-tab").click();
+  await expect(page.getByTestId("pointcloud-ablation-empty")).toBeVisible();
+
+  const matrixDir = testInfo.outputPath("ablation-matrix");
+  const step60Dir = join(matrixDir, "step60");
+  const step120aDir = join(matrixDir, "step120-a");
+  const step120bDir = join(matrixDir, "step120-b");
+  const spectralDir = join(matrixDir, "spectral");
+  await mkdir(step60Dir, { recursive: true });
+  await mkdir(step120aDir, { recursive: true });
+  await mkdir(step120bDir, { recursive: true });
+  await mkdir(spectralDir, { recursive: true });
+
+  const uniqueStep60Filename = ablationExperimentFilename({
+    contentSamplesPerFace: 2,
+    distanceMeasure: "EUCLIDEAN",
+    outputStep: 60,
+  });
+  const duplicateStep120Filename = ablationExperimentFilename({
+    contentSamplesPerFace: 2,
+    distanceMeasure: "EUCLIDEAN",
+    outputStep: 120,
+  });
+  const spectralStep120Filename = ablationExperimentFilename({
+    contentSamplesPerFace: 4,
+    distanceMeasure: "SPECTRAL",
+    outputStep: 120,
+  });
+
+  await writeFile(join(step60Dir, uniqueStep60Filename), validUploadJson);
+  await writeFile(join(step120aDir, duplicateStep120Filename), "not json");
+  await writeFile(
+    join(step120bDir, duplicateStep120Filename),
+    '{"m_verts":"broken"}',
+  );
+  await writeFile(join(spectralDir, spectralStep120Filename), "not json");
+
+  await page
+    .getByTestId("pointcloud-ablation-folder-input")
+    .setInputFiles(matrixDir);
+
+  await expect(
+    page.getByTestId("pointcloud-ablation-selected-count"),
+  ).toHaveText("4");
+  await expect(page.getByTestId("pointcloud-ablation-parsed-count")).toHaveText(
+    "4",
+  );
+  await expect(
+    page.getByTestId("pointcloud-ablation-unparsed-count"),
+  ).toHaveText("0");
+  await expect(
+    page.getByTestId("pointcloud-ablation-x-axis-select"),
+  ).toHaveValue("contentSamplesPerFace");
+  await expect(
+    page.getByTestId("pointcloud-ablation-y-axis-select"),
+  ).toHaveValue("distanceMeasure");
+  await expect(
+    page.getByTestId("pointcloud-ablation-fixed-outputStep-select"),
+  ).toHaveValue("number:120");
+
+  const ambiguousCell = page.getByTestId(ablationCellTestId(2, "EUCLIDEAN"));
+  await expect(ambiguousCell).toHaveAttribute("data-status", "ambiguous");
+  await expect(ambiguousCell).toContainText("Ambiguous x2");
+  await expect(ambiguousCell.getByRole("button")).toHaveCount(0);
+
+  const missingCell = page.getByTestId(ablationCellTestId(4, "EUCLIDEAN"));
+  await expect(missingCell).toHaveAttribute("data-status", "missing");
+  await expect(missingCell).toContainText("Missing");
+  await expect(missingCell.getByRole("button")).toHaveCount(0);
+
+  const availableCell = page.getByTestId(ablationCellTestId(4, "SPECTRAL"));
+  await expect(availableCell).toHaveAttribute("data-status", "available");
+  await expect(
+    availableCell.getByRole("button", { name: "Available" }),
+  ).toBeVisible();
+
+  await page
+    .getByTestId("pointcloud-ablation-fixed-outputStep-select")
+    .selectOption("number:60");
+  await expect(ambiguousCell).toHaveAttribute("data-status", "available");
+  await expect(
+    page.getByTestId(ablationCellTestId(4, "SPECTRAL")),
+  ).toHaveAttribute("data-status", "missing");
+
+  await ambiguousCell.getByRole("button", { name: "Available" }).click();
+  await expect(page.getByTestId("pointcloud-preview-tab")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByTestId("pointcloud-source-label")).toContainText(
+    uniqueStep60Filename,
+  );
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+  await expect(page.getByTestId("point-sample-count")).toHaveText("3");
+  await expect(
+    page.locator('[data-testid^="pointcloud-upload-row-"]'),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("camera-state")).toHaveText(
+    cameraStateBeforePreview,
+  );
 });
 
 test("point-cloud preview reports upload errors and recovers on a valid upload", async ({

@@ -199,7 +199,18 @@ export function PointCloudPreviewApp() {
               />
             </div>
           ) : (
-            <PointCloudAblationTab />
+            <PointCloudAblationTab
+              onPreviewExperimentFile={async (file, sourceLabel) => {
+                const didLoad = await assetsController.loadTransientFile(
+                  file,
+                  sourceLabel,
+                );
+                if (didLoad) {
+                  setActiveTab("preview");
+                }
+                return didLoad;
+              }}
+            />
           )}
         </div>
       </main>
