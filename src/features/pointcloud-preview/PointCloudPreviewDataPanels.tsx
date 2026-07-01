@@ -110,11 +110,11 @@ export function DataSourcePanel({
         />
       </div>
       <div className="mt-4 space-y-2 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-3 text-sm text-slate-200">
-        <div className="flex items-center justify-between gap-4">
-          <span className="text-slate-300">Current source</span>
+        <div className="flex items-start justify-between gap-4">
+          <span className="shrink-0 text-slate-300">Current source</span>
           <span
             data-testid="pointcloud-source-label"
-            className="text-right font-semibold text-white"
+            className="min-w-0 flex-1 break-all text-right font-semibold text-white"
           >
             {assetState.sourceLabel}
           </span>
@@ -159,7 +159,7 @@ export function DataSourcePanel({
                   title={uploadedFile.label}
                   onClick={() => onSelectFile(uploadedFile)}
                 >
-                  <span className="block truncate text-sm font-semibold text-white">
+                  <span className="block whitespace-normal break-all text-sm font-semibold text-white">
                     {uploadedFile.label}
                   </span>
                   <span
