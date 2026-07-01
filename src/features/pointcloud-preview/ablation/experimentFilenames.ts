@@ -3,12 +3,13 @@ export type AblationFrameMode = "PCP" | "SPL-S" | "BST-S" | "SIMPLE_AXIS";
 export type AblationInputColorMode = "RAW_COLORS" | "LOGIT";
 export type AblationPoolMode = "MAX" | "AVG";
 export type AblationDistanceMeasure = "EUCLIDEAN" | "SPECTRAL";
+export type AblationStyleWeight = number | readonly number[];
 
 export type AblationDimensionValue = number | string;
 export type AblationDimensionValueType = "number" | "string";
 
 export type AblationExperimentConfig = {
-  readonly styleWeight: number;
+  readonly styleWeight: AblationStyleWeight;
   readonly contentWeight: number;
   readonly tvWeight: number;
   readonly tvMode: AblationTvMode;
@@ -112,6 +113,7 @@ export type AblationMatrixCell = {
 
 const numberPattern = String.raw`-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)`;
 const integerPattern = String.raw`[0-9]+`;
+const styleWeightPattern = String.raw`${numberPattern}(?:-${numberPattern})*`;
 const styleSourcePattern = String.raw`(?:(?:${numberPattern})x(?:${numberPattern})s-img|(?:${numberPattern})s-spf)`;
 
 const frameModeTokens = ["PCP", "SPL-S", "BST-S", "SIMPLE_AXIS"] as const;
@@ -132,7 +134,7 @@ const distanceMeasurePattern = tokenPattern([
 ]);
 
 const experimentFilenamePattern = new RegExp(
-  `^(${numberPattern})sw_` +
+  `^(${styleWeightPattern})sw_` +
     `(${numberPattern})cw_` +
     `(${numberPattern})tv_` +
     `(L1|L2)_` +
@@ -161,7 +163,7 @@ const distanceMeasures =
 
 export const ablationDimensionDefinitions: readonly AblationDimensionDefinition[] =
   [
-    { key: "styleWeight", label: "Style weight", valueType: "number" },
+    { key: "styleWeight", label: "Style weight", valueType: "string" },
     { key: "contentWeight", label: "Content weight", valueType: "number" },
     { key: "tvWeight", label: "TV weight", valueType: "number" },
     { key: "tvMode", label: "TV mode", valueType: "string", order: tvModes },
@@ -247,6 +249,16 @@ const parseInteger = (value: string, label: string): number => {
   return parsed;
 };
 
+const parseStyleWeight = (value: string): AblationStyleWeight => {
+  const values = value
+    .split("-")
+    .map((entry) => parseNumber(entry, "Style weight"));
+  return values.length === 1 ? values[0] : values;
+};
+
+const formatStyleWeight = (value: AblationStyleWeight): string =>
+  Array.isArray(value) ? value.map(String).join("-") : String(value);
+
 const parseStyleSource = (
   value: string | undefined,
 ): Pick<
@@ -312,7 +324,7 @@ export const parseAblationExperimentFilename = (
       file: {
         filename,
         config: {
-          styleWeight: parseNumber(match[1], "Style weight"),
+          styleWeight: parseStyleWeight(match[1]),
           contentWeight: parseNumber(match[2], "Content weight"),
           tvWeight: parseNumber(match[3], "TV weight"),
           tvMode: match[4] as AblationTvMode,
@@ -375,7 +387,7 @@ export const getAblationDimensionValue = (
 ): AblationDimensionValue | null => {
   switch (key) {
     case "styleWeight":
-      return config.styleWeight;
+      return formatStyleWeight(config.styleWeight);
     case "contentWeight":
       return config.contentWeight;
     case "tvWeight":

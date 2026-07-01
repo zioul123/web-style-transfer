@@ -200,6 +200,32 @@ test("point-cloud ablation parser reads name_expt filenames with output steps", 
   });
 });
 
+test("point-cloud ablation parser reads list-valued style weights", () => {
+  const filename =
+    "1.0-0.5-0.25sw_3cw_0.5tv_L1_2c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_MAX_EUCLIDEAN_12knn_1.25rf_3gr_2.0std-attn_60steps_step987.json";
+
+  const result = parseAblationExperimentFilename(filename);
+
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error(result.failure.reason);
+  }
+  expect(result.file.config.styleWeight).toEqual([1, 0.5, 0.25]);
+
+  const summaries = summarizeAblationDimensions([result.file]);
+  const styleWeightSummary = summaries.find(
+    (summary) => summary.definition.key === "styleWeight",
+  );
+  expect(styleWeightSummary?.values).toEqual([
+    {
+      value: "1-0.5-0.25",
+      label: "1-0.5-0.25",
+      key: "string:1-0.5-0.25",
+      count: 1,
+    },
+  ]);
+});
+
 test("point-cloud ablation parser reads mapped labels and style samples per face", () => {
   const filename =
     "7sw_3cw_0.5tv_L1_2.5c-spf_4.5s-spf_PCP_LOGIT_AVG_SPECTRAL_12knn_1.25rf_3gr_2.0std-attn_60steps_step987.json";
