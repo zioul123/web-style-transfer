@@ -155,11 +155,8 @@ export const buildAblationMatrix = <TFile extends AblationExperimentFile>(
       summary.definition.key !== selection.yAxis,
   );
 
-  return {
-    xSummary,
-    ySummary,
-    fixedSummaries,
-    rows: ySummary.values.map((yValue) => ({
+  const candidateRows: readonly AblationMatrixRow<TFile>[] =
+    ySummary.values.map((yValue) => ({
       yValue: yValue.value,
       yValueKey: yValue.key,
       yLabel: yValue.label,
@@ -211,6 +208,36 @@ export const buildAblationMatrix = <TFile extends AblationExperimentFile>(
           files: matchingFiles,
         };
       }),
-    })),
+    }));
+  const retainedColumnIndices = xSummary.values
+    .map((_, columnIndex) => columnIndex)
+    .filter((columnIndex) =>
+      candidateRows.some((row) => row.cells[columnIndex]?.status !== "missing"),
+    );
+  const retainedColumnIndexSet = new Set(retainedColumnIndices);
+  const retainedRows = candidateRows
+    .map((row) => ({
+      ...row,
+      cells: row.cells.filter((_, columnIndex) =>
+        retainedColumnIndexSet.has(columnIndex),
+      ),
+    }))
+    .filter((row) => row.cells.some((cell) => cell.status !== "missing"));
+
+  return {
+    xSummary: {
+      ...xSummary,
+      values: xSummary.values.filter((_, columnIndex) =>
+        retainedColumnIndexSet.has(columnIndex),
+      ),
+    },
+    ySummary: {
+      ...ySummary,
+      values: ySummary.values.filter((value) =>
+        retainedRows.some((row) => row.yValueKey === value.key),
+      ),
+    },
+    fixedSummaries,
+    rows: retainedRows,
   };
 };

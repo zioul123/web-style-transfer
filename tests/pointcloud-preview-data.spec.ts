@@ -12,6 +12,7 @@ import {
   parseAblationExperimentFilenames,
   summarizeAblationDimensions,
 } from "../src/features/pointcloud-preview/ablation/experimentFilenames";
+import { buildAblationMatrix } from "../src/features/pointcloud-preview/ablation/ablationMatrix";
 import { sampleInterpolatedColor } from "../src/features/pointcloud-preview/math/interpolation";
 import {
   buildKdTree3d,
@@ -371,4 +372,32 @@ test("point-cloud ablation keys are stable for matrix and experiment lookup", ()
   expect(buildAblationExperimentKey(parsed.file)).toContain(
     "outputStep=number:60",
   );
+});
+
+test("point-cloud ablation matrix prunes empty axes after fixed filters", () => {
+  const filenames = [
+    "1sw_2cw_0tv_L2_2c-spf_SIMPLE_AXIS_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_3.0std-attn_120steps_step60.json",
+    "1sw_2cw_0tv_L2_4c-spf_SIMPLE_AXIS_RAW_COLORS_SPECTRAL_4knn_0.7rf_2gr_3.0std-attn_120steps_step60.json",
+    "1sw_2cw_0tv_L2_8c-spf_SIMPLE_AXIS_RAW_COLORS_SPECTRAL_4knn_0.7rf_2gr_3.0std-attn_120steps_step120.json",
+  ];
+  const parsed = parseAblationExperimentFilenames(filenames);
+  const summaries = summarizeAblationDimensions(parsed.files);
+  const matrix = buildAblationMatrix(parsed.files, summaries, {
+    xAxis: "contentSamplesPerFace",
+    yAxis: "distanceMeasure",
+    fixedValues: new Map([["outputStep", [60]]]),
+  });
+
+  expect(matrix).not.toBeNull();
+  expect(matrix?.xSummary.values.map((value) => value.value)).toEqual([2, 4]);
+  expect(matrix?.rows.map((row) => row.yValue)).toEqual([
+    "EUCLIDEAN",
+    "SPECTRAL",
+  ]);
+  expect(
+    matrix?.rows.map((row) => row.cells.map((cell) => cell.status)),
+  ).toEqual([
+    ["available", "missing"],
+    ["missing", "available"],
+  ]);
 });

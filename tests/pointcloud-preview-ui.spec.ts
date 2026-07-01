@@ -570,8 +570,13 @@ test("point-cloud ablation matrix filters cells and previews a unique experiment
   await outputStepSelect.selectOption("number:60");
   await expect(ambiguousCell).toHaveAttribute("data-status", "available");
   await expect(
-    page.getByTestId(ablationCellTestId(4, "SPECTRAL")),
-  ).toHaveAttribute("data-status", "missing");
+    page.getByTestId(
+      "pointcloud-ablation-column-contentSamplesPerFace-number:4",
+    ),
+  ).toHaveCount(0);
+  await expect(
+    page.getByTestId("pointcloud-ablation-row-distanceMeasure-string:SPECTRAL"),
+  ).toHaveCount(0);
   await expect(
     page.getByTestId("pointcloud-ablation-export-button"),
   ).toBeEnabled();
@@ -585,7 +590,7 @@ test("point-cloud ablation matrix filters cells and previews a unique experiment
   const downloadPath = await download.path();
   expect(downloadPath).not.toBeNull();
   const png = await readFile(downloadPath!);
-  expect(readPngSize(png)).toEqual({ width: 944, height: 632 });
+  expect(readPngSize(png)).toEqual({ width: 580, height: 358 });
   await expect(page.getByTestId("pointcloud-ablation-tab")).toHaveAttribute(
     "aria-selected",
     "true",
@@ -751,6 +756,74 @@ test("point-cloud ablation output-step fixed filter supports multiple selections
         ),
     )
     .toEqual(["number:301", "number:302", "number:305", "number:320"]);
+});
+
+test("point-cloud ablation matrix hides empty rows and columns", async ({
+  page,
+}, testInfo) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+  await page.getByTestId("pointcloud-ablation-tab").click();
+
+  const matrixDir = testInfo.outputPath("ablation-empty-axes");
+  await mkdir(matrixDir, { recursive: true });
+
+  const filenames = [
+    ablationExperimentFilename({
+      contentSamplesPerFace: 2,
+      distanceMeasure: "EUCLIDEAN",
+      outputStep: 60,
+    }),
+    ablationExperimentFilename({
+      contentSamplesPerFace: 4,
+      distanceMeasure: "EUCLIDEAN",
+      outputStep: 60,
+    }),
+    ablationExperimentFilename({
+      contentSamplesPerFace: 8,
+      distanceMeasure: "SPECTRAL",
+      outputStep: 120,
+    }),
+  ];
+  await Promise.all(
+    filenames.map((filename) =>
+      writeFile(join(matrixDir, filename), validUploadJson),
+    ),
+  );
+
+  await page
+    .getByTestId("pointcloud-ablation-folder-input")
+    .setInputFiles(matrixDir);
+
+  await page
+    .getByTestId("pointcloud-ablation-fixed-outputStep-select")
+    .selectOption("number:60");
+
+  await expect(
+    page.getByTestId(
+      "pointcloud-ablation-column-contentSamplesPerFace-number:2",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId(
+      "pointcloud-ablation-column-contentSamplesPerFace-number:4",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId(
+      "pointcloud-ablation-column-contentSamplesPerFace-number:8",
+    ),
+  ).toHaveCount(0);
+  await expect(
+    page.getByTestId(
+      "pointcloud-ablation-row-distanceMeasure-string:EUCLIDEAN",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("pointcloud-ablation-row-distanceMeasure-string:SPECTRAL"),
+  ).toHaveCount(0);
+  await expect(page.getByTestId(ablationCellTestId(8, "SPECTRAL"))).toHaveCount(
+    0,
+  );
 });
 
 test("point-cloud ablation options persist and fall back when unavailable", async ({
