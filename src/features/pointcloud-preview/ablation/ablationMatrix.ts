@@ -177,10 +177,14 @@ export const buildAblationMatrix = <TFile extends AblationExperimentFile>(
             return false;
           }
 
-          for (const [dimensionKey, fixedValue] of selection.fixedValues) {
+          for (const [dimensionKey, fixedValues] of selection.fixedValues) {
+            const dimensionValue = getAblationDimensionValue(
+              file.config,
+              dimensionKey,
+            );
             if (
-              getAblationDimensionValue(file.config, dimensionKey) !==
-              fixedValue
+              dimensionValue === null ||
+              !fixedValues.includes(dimensionValue)
             ) {
               return false;
             }

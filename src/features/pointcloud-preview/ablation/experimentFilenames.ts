@@ -1,7 +1,8 @@
 export type AblationTvMode = "L1" | "L2";
 export type AblationFrameMode = "PCP" | "SPL-S" | "BST-S" | "SIMPLE_AXIS";
-export type AblationColorMode = "LOGIT" | "RAW_COLORS";
-export type AblationDistanceMeasure = "EUCLIDEAN" | "SPECTRAL" | "BIHARMONIC";
+export type AblationInputColorMode = "RAW_COLORS" | "LOGIT";
+export type AblationPoolMode = "MAX" | "AVG";
+export type AblationDistanceMeasure = "EUCLIDEAN" | "SPECTRAL";
 
 export type AblationDimensionValue = number | string;
 export type AblationDimensionValueType = "number" | "string";
@@ -15,7 +16,8 @@ export type AblationExperimentConfig = {
   readonly styleResolution: string | null;
   readonly styleSamplesPerFace: number | null;
   readonly frameMode: AblationFrameMode;
-  readonly colorMode: AblationColorMode;
+  readonly colorMode: AblationInputColorMode;
+  readonly poolMode: AblationPoolMode;
   readonly distanceMeasure: AblationDistanceMeasure;
   readonly knn: number;
   readonly radiusFactor: number;
@@ -60,6 +62,7 @@ export type AblationDimensionKey =
   | "styleSamplesPerFace"
   | "frameMode"
   | "colorMode"
+  | "poolMode"
   | "distanceMeasure"
   | "knn"
   | "radiusFactor"
@@ -93,7 +96,7 @@ export type AblationGridSelection = {
   readonly yAxis: AblationDimensionKey;
   readonly fixedValues: ReadonlyMap<
     AblationDimensionKey,
-    AblationDimensionValue
+    readonly AblationDimensionValue[]
   >;
 };
 
@@ -111,6 +114,23 @@ const numberPattern = String.raw`-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)`;
 const integerPattern = String.raw`[0-9]+`;
 const styleSourcePattern = String.raw`(?:(?:${numberPattern})x(?:${numberPattern})s-img|(?:${numberPattern})s-spf)`;
 
+const frameModeTokens = ["PCP", "SPL-S", "BST-S", "SIMPLE_AXIS"] as const;
+const inputColorModeTokens = ["RAW_COLORS", "LOGIT"] as const;
+const poolModeTokens = ["MAX", "AVG"] as const;
+const distanceMeasureTokens = ["EUCLIDEAN", "SPECTRAL"] as const;
+const legacyDistanceMeasureTokens = ["BIHARMONIC"] as const;
+
+const tokenPattern = (tokens: readonly string[]): string =>
+  tokens.map((token) => token.replaceAll("-", String.raw`\-`)).join("|");
+
+const frameModePattern = tokenPattern(frameModeTokens);
+const inputColorModePattern = tokenPattern(inputColorModeTokens);
+const poolModePattern = tokenPattern(poolModeTokens);
+const distanceMeasurePattern = tokenPattern([
+  ...distanceMeasureTokens,
+  ...legacyDistanceMeasureTokens,
+]);
+
 const experimentFilenamePattern = new RegExp(
   `^(${numberPattern})sw_` +
     `(${numberPattern})cw_` +
@@ -118,7 +138,10 @@ const experimentFilenamePattern = new RegExp(
     `(L1|L2)_` +
     `(${numberPattern})c-spf_` +
     `(?:(${styleSourcePattern})_)?` +
-    `(.+)_` +
+    `(${frameModePattern})_` +
+    `(${inputColorModePattern})_` +
+    `(?:(${poolModePattern})_)?` +
+    `(${distanceMeasurePattern})_` +
     `(${integerPattern})knn_` +
     `(${numberPattern})rf_` +
     `(${numberPattern})gr_` +
@@ -129,21 +152,12 @@ const experimentFilenamePattern = new RegExp(
 );
 
 const tvModes = ["L1", "L2"] as const satisfies readonly AblationTvMode[];
-const frameModes = [
-  "PCP",
-  "SPL-S",
-  "BST-S",
-  "SIMPLE_AXIS",
-] as const satisfies readonly AblationFrameMode[];
-const colorModes = [
-  "LOGIT",
-  "RAW_COLORS",
-] as const satisfies readonly AblationColorMode[];
-const distanceMeasures = [
-  "EUCLIDEAN",
-  "SPECTRAL",
-  "BIHARMONIC",
-] as const satisfies readonly AblationDistanceMeasure[];
+const frameModes = frameModeTokens satisfies readonly AblationFrameMode[];
+const inputColorModes =
+  inputColorModeTokens satisfies readonly AblationInputColorMode[];
+const poolModes = poolModeTokens satisfies readonly AblationPoolMode[];
+const distanceMeasures =
+  distanceMeasureTokens satisfies readonly AblationDistanceMeasure[];
 
 export const ablationDimensionDefinitions: readonly AblationDimensionDefinition[] =
   [
@@ -176,7 +190,13 @@ export const ablationDimensionDefinitions: readonly AblationDimensionDefinition[
       key: "colorMode",
       label: "Color mode",
       valueType: "string",
-      order: colorModes,
+      order: inputColorModes,
+    },
+    {
+      key: "poolMode",
+      label: "Pool mode",
+      valueType: "string",
+      order: poolModes,
     },
     {
       key: "distanceMeasure",
@@ -266,35 +286,8 @@ const parseStyleSource = (
   throw new Error(`Unknown style source token: ${value}.`);
 };
 
-const parseModeTriple = (
-  value: string,
-): Pick<
-  AblationExperimentConfig,
-  "frameMode" | "colorMode" | "distanceMeasure"
-> | null => {
-  for (const distanceMeasure of distanceMeasures) {
-    const distanceSuffix = `_${distanceMeasure}`;
-    if (!value.endsWith(distanceSuffix)) {
-      continue;
-    }
-    const frameAndColor = value.slice(0, -distanceSuffix.length);
-    for (const colorMode of colorModes) {
-      const colorSuffix = `_${colorMode}`;
-      if (!frameAndColor.endsWith(colorSuffix)) {
-        continue;
-      }
-      const frameMode = frameAndColor.slice(0, -colorSuffix.length);
-      if (frameModes.includes(frameMode as AblationFrameMode)) {
-        return {
-          frameMode: frameMode as AblationFrameMode,
-          colorMode,
-          distanceMeasure,
-        };
-      }
-    }
-  }
-  return null;
-};
+const normalizeDistanceMeasure = (value: string): AblationDistanceMeasure =>
+  value === "BIHARMONIC" ? "SPECTRAL" : (value as AblationDistanceMeasure);
 
 export const parseAblationExperimentFilename = (
   filename: string,
@@ -312,19 +305,8 @@ export const parseAblationExperimentFilename = (
     };
   }
 
-  const modeTriple = parseModeTriple(match[7]);
-  if (modeTriple === null) {
-    return {
-      ok: false,
-      failure: {
-        filename,
-        reason: `Unknown frame/color/distance token: ${match[7]}.`,
-      },
-    };
-  }
-
   try {
-    const outputStep = match[13] ?? null;
+    const outputStep = match[16] ?? null;
     return {
       ok: true,
       file: {
@@ -339,12 +321,15 @@ export const parseAblationExperimentFilename = (
             "Content samples per face",
           ),
           ...parseStyleSource(match[6]),
-          ...modeTriple,
-          knn: parseInteger(match[8], "KNN"),
-          radiusFactor: parseNumber(match[9], "Radius factor"),
-          geodesicRatio: parseNumber(match[10], "Geodesic ratio"),
-          attenuationLabel: match[11],
-          optimizationSteps: parseInteger(match[12], "Optimization steps"),
+          frameMode: match[7] as AblationFrameMode,
+          colorMode: match[8] as AblationInputColorMode,
+          poolMode: (match[9] ?? "MAX") as AblationPoolMode,
+          distanceMeasure: normalizeDistanceMeasure(match[10]),
+          knn: parseInteger(match[11], "KNN"),
+          radiusFactor: parseNumber(match[12], "Radius factor"),
+          geodesicRatio: parseNumber(match[13], "Geodesic ratio"),
+          attenuationLabel: match[14],
+          optimizationSteps: parseInteger(match[15], "Optimization steps"),
           outputStep:
             outputStep === null
               ? null
@@ -407,6 +392,8 @@ export const getAblationDimensionValue = (
       return config.frameMode;
     case "colorMode":
       return config.colorMode;
+    case "poolMode":
+      return config.poolMode;
     case "distanceMeasure":
       return config.distanceMeasure;
     case "knn":

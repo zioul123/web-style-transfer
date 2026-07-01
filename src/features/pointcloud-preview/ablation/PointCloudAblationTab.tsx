@@ -60,7 +60,9 @@ const ABLATION_BROWSER_OPTIONS_STORAGE_KEY =
 type StoredAblationBrowserOptions = {
   readonly xAxis: AblationDimensionKey | null;
   readonly yAxis: AblationDimensionKey | null;
-  readonly fixedValueKeys: Partial<Record<AblationDimensionKey, string>>;
+  readonly fixedValueKeys: Partial<
+    Record<AblationDimensionKey, readonly string[]>
+  >;
   readonly exportViewpointId: number | null;
 };
 
@@ -94,17 +96,32 @@ const parseStoredAblationBrowserOptions = (
     return emptyStoredAblationBrowserOptions;
   }
 
-  const fixedValueKeys: Partial<Record<AblationDimensionKey, string>> = {};
+  const fixedValueKeys: Partial<
+    Record<AblationDimensionKey, readonly string[]>
+  > = {};
   const storedFixedValueKeys = value.fixedValueKeys;
   if (isRecord(storedFixedValueKeys)) {
-    Object.entries(storedFixedValueKeys).forEach(([dimensionKey, valueKey]) => {
-      if (
-        isAblationDimensionKey(dimensionKey) &&
-        typeof valueKey === "string"
-      ) {
-        fixedValueKeys[dimensionKey] = valueKey;
-      }
-    });
+    Object.entries(storedFixedValueKeys).forEach(
+      ([dimensionKey, valueKeys]) => {
+        if (!isAblationDimensionKey(dimensionKey)) {
+          return;
+        }
+
+        if (typeof valueKeys === "string") {
+          fixedValueKeys[dimensionKey] = [valueKeys];
+          return;
+        }
+
+        if (Array.isArray(valueKeys)) {
+          const stringValueKeys = valueKeys.filter(
+            (valueKey): valueKey is string => typeof valueKey === "string",
+          );
+          if (stringValueKeys.length > 0) {
+            fixedValueKeys[dimensionKey] = stringValueKeys;
+          }
+        }
+      },
+    );
   }
 
   return {
@@ -221,7 +238,7 @@ export function PointCloudAblationTab({
   const [selectedYAxis, setSelectedYAxis] =
     useState<AblationDimensionKey | null>(initialStoredOptions.yAxis);
   const [selectedFixedValueKeys, setSelectedFixedValueKeys] = useState<
-    Partial<Record<AblationDimensionKey, string>>
+    Partial<Record<AblationDimensionKey, readonly string[]>>
   >(initialStoredOptions.fixedValueKeys);
   const [selectedExportViewpointId, setSelectedExportViewpointId] = useState<
     number | null
@@ -272,7 +289,10 @@ export function PointCloudAblationTab({
       return null;
     }
 
-    const fixedValues = new Map<AblationDimensionKey, AblationDimensionValue>();
+    const fixedValues = new Map<
+      AblationDimensionKey,
+      readonly AblationDimensionValue[]
+    >();
     summaries.forEach((summary) => {
       const dimensionKey = summary.definition.key;
       if (
@@ -282,13 +302,24 @@ export function PointCloudAblationTab({
         return;
       }
 
-      const selectedValueKey = selectedFixedValueKeys[dimensionKey];
-      const selectedValue = selectedValueForFixedFilter(
-        summary.values.find((value) => value.key === selectedValueKey)?.value,
-      );
-      const fixedValue = selectedValue ?? getDefaultFixedAblationValue(summary);
-      if (fixedValue !== null) {
-        fixedValues.set(dimensionKey, fixedValue);
+      const selectedValueKeys = selectedFixedValueKeys[dimensionKey] ?? [];
+      const selectedValues = selectedValueKeys
+        .map((selectedValueKey) =>
+          selectedValueForFixedFilter(
+            summary.values.find((value) => value.key === selectedValueKey)
+              ?.value,
+          ),
+        )
+        .filter((value): value is AblationDimensionValue => value !== null);
+      const defaultValue = getDefaultFixedAblationValue(summary);
+      const fixedValueSet =
+        selectedValues.length > 0
+          ? selectedValues
+          : defaultValue === null
+            ? []
+            : [defaultValue];
+      if (fixedValueSet.length > 0) {
+        fixedValues.set(dimensionKey, fixedValueSet);
       }
     });
 
@@ -368,11 +399,11 @@ export function PointCloudAblationTab({
 
   const handleFixedFilterChange = (
     dimensionKey: AblationDimensionKey,
-    valueKey: string,
+    valueKeys: readonly string[],
   ) => {
     setSelectedFixedValueKeys((currentValues) => ({
       ...currentValues,
-      [dimensionKey]: valueKey,
+      [dimensionKey]: valueKeys,
     }));
   };
 
@@ -678,16 +709,18 @@ export function PointCloudAblationTab({
               data-testid="pointcloud-ablation-fixed-filters"
             >
               {matrix.fixedSummaries.map((summary) => {
-                const fixedValue = matrixSelection.fixedValues.get(
+                const fixedValues = matrixSelection.fixedValues.get(
                   summary.definition.key,
                 );
-                const fixedValueKey =
-                  fixedValue === undefined
-                    ? ""
-                    : getAblationDimensionValueKey(
-                        summary.definition,
-                        fixedValue,
-                      );
+                const fixedValueKeys =
+                  fixedValues?.map((fixedValue) =>
+                    getAblationDimensionValueKey(
+                      summary.definition,
+                      fixedValue,
+                    ),
+                  ) ?? [];
+                const isOutputStepFilter =
+                  summary.definition.key === "outputStep";
 
                 return (
                   <label
@@ -698,11 +731,26 @@ export function PointCloudAblationTab({
                     <select
                       className="min-w-0 rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
                       data-testid={`pointcloud-ablation-fixed-${summary.definition.key}-select`}
-                      value={fixedValueKey}
+                      multiple={isOutputStepFilter}
+                      size={
+                        isOutputStepFilter
+                          ? Math.min(Math.max(summary.values.length, 2), 6)
+                          : undefined
+                      }
+                      value={
+                        isOutputStepFilter
+                          ? fixedValueKeys
+                          : (fixedValueKeys[0] ?? "")
+                      }
                       onChange={(event) =>
                         handleFixedFilterChange(
                           summary.definition.key,
-                          event.currentTarget.value,
+                          isOutputStepFilter
+                            ? Array.from(
+                                event.currentTarget.selectedOptions,
+                                (option) => option.value,
+                              )
+                            : [event.currentTarget.value],
                         )
                       }
                     >

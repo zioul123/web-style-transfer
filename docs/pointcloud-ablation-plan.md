@@ -10,19 +10,21 @@ and point-cloud JSON schema.
 The branch currently includes phases 1 through 5:
 
 1. **Parser and data model:** `experimentFilenames.ts` parses experiment
-   filenames produced by the Python `name_expt` format, including optional
-   `_step<number>` output-step suffixes, and exposes dimension summaries and
-   stable value sorting.
+   filenames produced by the Python `name_expt` format, including pooling mode
+   and optional `_step<number>` output-step suffixes, and exposes dimension
+   summaries and stable value sorting.
 2. **Ablation tab shell:** `/pointcloud-preview` now has `Preview` and
    `Ablation` tabs. The ablation tab imports folders or direct JSON file
    selections, parses filenames only, and shows parsed/unparsed counts plus
    dimension summaries.
 3. **Filters and matrix:** the ablation tab provides X/Y axis selectors,
    fixed-value selectors for non-axis dimensions, available/missing/ambiguous
-   matrix cells, and unique-cell click-to-preview. Preview loading is transient:
-   it reads the selected file only when clicked, switches back to the Preview
-   tab on success, preserves the camera when possible, and does not add the
-   experiment file to the manual upload queue.
+   matrix cells, and unique-cell click-to-preview. The fixed `outputStep`
+   filter supports selecting multiple steps so late snapshots can be included
+   together while earlier checkpoints remain excluded. Preview loading is
+   transient: it reads the selected file only when clicked, switches back to the
+   Preview tab on success, preserves the camera when possible, and does not add
+   the experiment file to the manual upload queue.
 4. **Grid PNG export:** the ablation tab exports the current matrix as one
    labelled PNG for a selected saved viewpoint. Export reads unique-cell JSON
    files only during capture, reuses the route's synchronized camera/render

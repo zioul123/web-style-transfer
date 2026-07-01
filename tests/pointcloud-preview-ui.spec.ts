@@ -137,7 +137,7 @@ const ablationExperimentFilename = ({
 }): string => {
   const outputStepSuffix =
     outputStep === undefined || outputStep === null ? "" : `_step${outputStep}`;
-  return `1sw_0cw_0.1tv_L1_${contentSamplesPerFace}c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_${distanceMeasure}_4knn_0.7rf_2gr_1.5std-attn_300steps${outputStepSuffix}.json`;
+  return `1sw_0cw_0.1tv_L1_${contentSamplesPerFace}c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_MAX_${distanceMeasure}_4knn_0.7rf_2gr_1.5std-attn_300steps${outputStepSuffix}.json`;
 };
 
 const ablationCellTestId = (
@@ -353,14 +353,14 @@ test("point-cloud preview hosts a filename-only ablation tab shell", async ({
   await writeFile(
     join(
       mixedAblationDir,
-      "1sw_2cw_0tv_L2_8c-spf_SIMPLE_AXIS_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_3.0std-attn_120steps.json",
+      "1sw_2cw_0tv_L2_8c-spf_SIMPLE_AXIS_RAW_COLORS_MAX_EUCLIDEAN_4knn_0.7rf_2gr_3.0std-attn_120steps.json",
     ),
     "not json",
   );
   await writeFile(
     join(
       mixedAblationDir,
-      "5sw_2cw_0tv_L1_4c-spf_192x256s-img_PCP_LOGIT_SPECTRAL_8knn_1.2rf_1gr_1.0std-attn_60steps_step30.json",
+      "5sw_2cw_0tv_L1_4c-spf_192x256s-img_PCP_LOGIT_AVG_SPECTRAL_8knn_1.2rf_1gr_1.0std-attn_60steps_step30.json",
     ),
     "not json",
   );
@@ -396,12 +396,12 @@ test("point-cloud preview hosts a filename-only ablation tab shell", async ({
 
   await ablationFileInput.setInputFiles([
     {
-      name: "1sw_0cw_0.1tv_L1_2c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_1.5std-attn_300steps_step60.json",
+      name: "1sw_0cw_0.1tv_L1_2c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_MAX_EUCLIDEAN_4knn_0.7rf_2gr_1.5std-attn_300steps_step60.json",
       mimeType: "application/json",
       buffer: Buffer.from("not json", "utf8"),
     },
     {
-      name: "1sw_0cw_0.1tv_L1_4c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_SPECTRAL_4knn_0.7rf_2gr_1.5std-attn_300steps_step120.json",
+      name: "1sw_0cw_0.1tv_L1_4c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_MAX_SPECTRAL_4knn_0.7rf_2gr_1.5std-attn_300steps_step120.json",
       mimeType: "application/json",
       buffer: Buffer.from("not json", "utf8"),
     },
@@ -528,9 +528,19 @@ test("point-cloud ablation matrix filters cells and previews a unique experiment
   await expect(
     page.getByTestId("pointcloud-ablation-y-axis-select"),
   ).toHaveValue("distanceMeasure");
-  await expect(
-    page.getByTestId("pointcloud-ablation-fixed-outputStep-select"),
-  ).toHaveValue("number:120");
+  const outputStepSelect = page.getByTestId(
+    "pointcloud-ablation-fixed-outputStep-select",
+  );
+  await expect
+    .poll(() =>
+      outputStepSelect.evaluate((select) =>
+        Array.from(
+          (select as HTMLSelectElement).selectedOptions,
+          (option) => option.value,
+        ),
+      ),
+    )
+    .toEqual(["number:120"]);
 
   const ambiguousCell = page.getByTestId(ablationCellTestId(2, "EUCLIDEAN"));
   await expect(ambiguousCell).toHaveAttribute("data-status", "ambiguous");
@@ -557,9 +567,7 @@ test("point-cloud ablation matrix filters cells and previews a unique experiment
     page.getByTestId("pointcloud-ablation-export-button"),
   ).toBeDisabled();
 
-  await page
-    .getByTestId("pointcloud-ablation-fixed-outputStep-select")
-    .selectOption("number:60");
+  await outputStepSelect.selectOption("number:60");
   await expect(ambiguousCell).toHaveAttribute("data-status", "available");
   await expect(
     page.getByTestId(ablationCellTestId(4, "SPECTRAL")),
@@ -602,6 +610,147 @@ test("point-cloud ablation matrix filters cells and previews a unique experiment
   await expect(page.getByTestId("camera-state")).toHaveText(
     cameraStateBeforePreview,
   );
+});
+
+test("point-cloud ablation output-step fixed filter supports multiple selections", async ({
+  page,
+}, testInfo) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+  await page.getByTestId("pointcloud-ablation-tab").click();
+
+  const matrixDir = testInfo.outputPath("ablation-output-step-multiselect");
+  await mkdir(matrixDir, { recursive: true });
+
+  const filenames = [
+    ablationExperimentFilename({
+      contentSamplesPerFace: 2,
+      distanceMeasure: "EUCLIDEAN",
+      outputStep: 120,
+    }),
+    ablationExperimentFilename({
+      contentSamplesPerFace: 4,
+      distanceMeasure: "SPECTRAL",
+      outputStep: 220,
+    }),
+    ablationExperimentFilename({
+      contentSamplesPerFace: 2,
+      distanceMeasure: "EUCLIDEAN",
+      outputStep: 301,
+    }),
+    ablationExperimentFilename({
+      contentSamplesPerFace: 4,
+      distanceMeasure: "SPECTRAL",
+      outputStep: 302,
+    }),
+    ablationExperimentFilename({
+      contentSamplesPerFace: 2,
+      distanceMeasure: "SPECTRAL",
+      outputStep: 305,
+    }),
+    ablationExperimentFilename({
+      contentSamplesPerFace: 4,
+      distanceMeasure: "EUCLIDEAN",
+      outputStep: 320,
+    }),
+  ];
+  await Promise.all(
+    filenames.map((filename) =>
+      writeFile(join(matrixDir, filename), validUploadJson),
+    ),
+  );
+
+  await page
+    .getByTestId("pointcloud-ablation-folder-input")
+    .setInputFiles(matrixDir);
+  await expect(
+    page.getByTestId("pointcloud-ablation-x-axis-select"),
+  ).toHaveValue("contentSamplesPerFace");
+  await expect(
+    page.getByTestId("pointcloud-ablation-y-axis-select"),
+  ).toHaveValue("distanceMeasure");
+
+  const outputStepSelect = page.getByTestId(
+    "pointcloud-ablation-fixed-outputStep-select",
+  );
+  await expect(outputStepSelect).toHaveAttribute("multiple", "");
+  await expect
+    .poll(() =>
+      outputStepSelect.evaluate((select) =>
+        Array.from(
+          (select as HTMLSelectElement).selectedOptions,
+          (option) => option.value,
+        ),
+      ),
+    )
+    .toEqual(["number:320"]);
+
+  await outputStepSelect.selectOption([
+    "number:301",
+    "number:302",
+    "number:305",
+    "number:320",
+  ]);
+  await expect
+    .poll(() =>
+      outputStepSelect.evaluate((select) =>
+        Array.from(
+          (select as HTMLSelectElement).selectedOptions,
+          (option) => option.value,
+        ),
+      ),
+    )
+    .toEqual(["number:301", "number:302", "number:305", "number:320"]);
+
+  await expect(
+    page.getByTestId(ablationCellTestId(2, "EUCLIDEAN")),
+  ).toHaveAttribute("data-status", "available");
+  await expect(
+    page.getByTestId(ablationCellTestId(4, "SPECTRAL")),
+  ).toHaveAttribute("data-status", "available");
+  await expect(
+    page.getByTestId(ablationCellTestId(2, "SPECTRAL")),
+  ).toHaveAttribute("data-status", "available");
+  await expect(
+    page.getByTestId(ablationCellTestId(4, "EUCLIDEAN")),
+  ).toHaveAttribute("data-status", "available");
+
+  await outputStepSelect.selectOption(["number:120", "number:220"]);
+  await expect(
+    page.getByTestId(ablationCellTestId(2, "EUCLIDEAN")),
+  ).toHaveAttribute("data-status", "available");
+  await expect(
+    page.getByTestId(ablationCellTestId(4, "SPECTRAL")),
+  ).toHaveAttribute("data-status", "available");
+  await expect(
+    page.getByTestId(ablationCellTestId(2, "SPECTRAL")),
+  ).toHaveAttribute("data-status", "missing");
+  await expect(
+    page.getByTestId(ablationCellTestId(4, "EUCLIDEAN")),
+  ).toHaveAttribute("data-status", "missing");
+
+  await outputStepSelect.selectOption([
+    "number:301",
+    "number:302",
+    "number:305",
+    "number:320",
+  ]);
+  await page.reload();
+  await page.getByTestId("pointcloud-ablation-tab").click();
+  await page
+    .getByTestId("pointcloud-ablation-folder-input")
+    .setInputFiles(matrixDir);
+  await expect
+    .poll(() =>
+      page
+        .getByTestId("pointcloud-ablation-fixed-outputStep-select")
+        .evaluate((select) =>
+          Array.from(
+            (select as HTMLSelectElement).selectedOptions,
+            (option) => option.value,
+          ),
+        ),
+    )
+    .toEqual(["number:301", "number:302", "number:305", "number:320"]);
 });
 
 test("point-cloud ablation options persist and fall back when unavailable", async ({

@@ -171,7 +171,7 @@ test("k-d tree nearest-3 query stays ordered on the tiny fixture", () => {
 
 test("point-cloud ablation parser reads name_expt filenames with output steps", () => {
   const filename =
-    "1000000sw_0cw_0.001tv_L2_2c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_SPECTRAL_4knn_0.7rf_2gr_1.5std-attn_300steps_step320.json";
+    "1000000sw_0cw_0.001tv_L2_2c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_MAX_SPECTRAL_4knn_0.7rf_2gr_1.5std-attn_300steps_step320.json";
 
   const result = parseAblationExperimentFilename(filename);
 
@@ -189,6 +189,7 @@ test("point-cloud ablation parser reads name_expt filenames with output steps", 
     styleSamplesPerFace: null,
     frameMode: "SIMPLE_AXIS",
     colorMode: "RAW_COLORS",
+    poolMode: "MAX",
     distanceMeasure: "SPECTRAL",
     knn: 4,
     radiusFactor: 0.7,
@@ -201,7 +202,7 @@ test("point-cloud ablation parser reads name_expt filenames with output steps", 
 
 test("point-cloud ablation parser reads mapped labels and style samples per face", () => {
   const filename =
-    "7sw_3cw_0.5tv_L1_2.5c-spf_4.5s-spf_PCP_LOGIT_SPECTRAL_12knn_1.25rf_3gr_2.0std-attn_60steps_step987.json";
+    "7sw_3cw_0.5tv_L1_2.5c-spf_4.5s-spf_PCP_LOGIT_AVG_SPECTRAL_12knn_1.25rf_3gr_2.0std-attn_60steps_step987.json";
 
   const result = parseAblationExperimentFilename(filename);
 
@@ -211,6 +212,7 @@ test("point-cloud ablation parser reads mapped labels and style samples per face
   }
   expect(result.file.config.frameMode).toBe("PCP");
   expect(result.file.config.colorMode).toBe("LOGIT");
+  expect(result.file.config.poolMode).toBe("AVG");
   expect(result.file.config.distanceMeasure).toBe("SPECTRAL");
   expect(result.file.config.tvMode).toBe("L1");
   expect(result.file.config.contentSamplesPerFace).toBe(2.5);
@@ -219,7 +221,7 @@ test("point-cloud ablation parser reads mapped labels and style samples per face
   expect(result.file.config.outputStep).toBe(987);
 });
 
-test("point-cloud ablation parser accepts absent style source and smoothed frames", () => {
+test("point-cloud ablation parser accepts absent style source and legacy max-pool filenames", () => {
   const filename =
     "1sw_2cw_0tv_L2_8c-spf_SPL-S_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_3.0std-attn_120steps.json";
 
@@ -230,12 +232,13 @@ test("point-cloud ablation parser accepts absent style source and smoothed frame
     throw new Error(result.failure.reason);
   }
   expect(result.file.config.frameMode).toBe("SPL-S");
+  expect(result.file.config.poolMode).toBe("MAX");
   expect(result.file.config.styleResolution).toBeNull();
   expect(result.file.config.styleSamplesPerFace).toBeNull();
   expect(result.file.config.outputStep).toBeNull();
 
   const bstResult = parseAblationExperimentFilename(
-    "1sw_2cw_0tv_L1_8c-spf_BST-S_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_3.0std-attn_120steps_step60.json",
+    "1sw_2cw_0tv_L1_8c-spf_BST-S_RAW_COLORS_MAX_EUCLIDEAN_4knn_0.7rf_2gr_3.0std-attn_120steps_step60.json",
   );
   expect(bstResult.ok).toBe(true);
   if (!bstResult.ok) {
@@ -243,6 +246,19 @@ test("point-cloud ablation parser accepts absent style source and smoothed frame
   }
   expect(bstResult.file.config.frameMode).toBe("BST-S");
   expect(bstResult.file.config.outputStep).toBe(60);
+});
+
+test("point-cloud ablation parser normalizes legacy biharmonic distance labels", () => {
+  const result = parseAblationExperimentFilename(
+    "1sw_2cw_0tv_L1_8c-spf_SIMPLE_AXIS_RAW_COLORS_MAX_BIHARMONIC_4knn_0.7rf_2gr_3.0std-attn_120steps_step60.json",
+  );
+
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error(result.failure.reason);
+  }
+  expect(result.file.config.distanceMeasure).toBe("SPECTRAL");
+  expect(result.file.config.poolMode).toBe("MAX");
 });
 
 test("point-cloud ablation batch parser reports unparsed filenames", () => {
@@ -264,9 +280,9 @@ test("point-cloud ablation batch parser reports unparsed filenames", () => {
 test("point-cloud ablation summaries sort values deterministically", () => {
   const filenames = [
     "1sw_2cw_10tv_L2_16c-spf_640x480s-img_SIMPLE_AXIS_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_3.0std-attn_120steps_step60.json",
-    "1sw_2cw_1tv_L1_2c-spf_192x256s-img_BST-S_RAW_COLORS_SPECTRAL_4knn_0.7rf_2gr_1.5std-attn_120steps_step320.json",
-    "1sw_2cw_0.1tv_L2_4c-spf_320x240s-img_PCP_LOGIT_SPECTRAL_4knn_0.7rf_2gr_2.0std-attn_120steps_step160.json",
-    "1sw_2cw_0.001tv_L1_8c-spf_4s-spf_SPL-S_RAW_COLORS_EUCLIDEAN_4knn_0.7rf_2gr_1.0std-attn_120steps_step120.json",
+    "1sw_2cw_1tv_L1_2c-spf_192x256s-img_BST-S_RAW_COLORS_MAX_SPECTRAL_4knn_0.7rf_2gr_1.5std-attn_120steps_step320.json",
+    "1sw_2cw_0.1tv_L2_4c-spf_320x240s-img_PCP_LOGIT_AVG_SPECTRAL_4knn_0.7rf_2gr_2.0std-attn_120steps_step160.json",
+    "1sw_2cw_0.001tv_L1_8c-spf_4s-spf_SPL-S_RAW_COLORS_AVG_EUCLIDEAN_4knn_0.7rf_2gr_1.0std-attn_120steps_step120.json",
   ];
   const parsed = parseAblationExperimentFilenames(filenames);
   expect(parsed.failures).toEqual([]);
@@ -288,6 +304,10 @@ test("point-cloud ablation summaries sort values deterministically", () => {
     "SPL-S",
     "BST-S",
     "SIMPLE_AXIS",
+  ]);
+  expect(byKey.get("poolMode")?.values.map((value) => value.value)).toEqual([
+    "MAX",
+    "AVG",
   ]);
   expect(
     byKey.get("styleResolution")?.values.map((value) => value.value),
