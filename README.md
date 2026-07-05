@@ -9,7 +9,7 @@ The codebase keeps a PyTorch reference implementation in `python-reference/` and
 The browser app is runnable and includes:
 
 - A React UI for content/style image selection, resolution presets, optimizer controls, model-pack selection, progress telemetry, and final image preview.
-- A standalone `/pointcloud-preview` route for rendering mesh-aligned point clouds from JSON exports, including fragment-KNN mesh shading, hit inspection, screenshots, reusable saved viewpoints, and an in-progress ablation browser for experiment folders.
+- A standalone `/pointcloud-preview` route for rendering mesh-aligned point clouds from JSON exports, including fragment-KNN mesh shading, convolution-kernel path previews when optional geodesic levels are present, hit inspection, screenshots, reusable saved viewpoints, and an in-progress ablation browser for experiment folders.
 - A Web Worker that owns WebGPU initialization, GPU buffers, shader dispatch, and pipeline execution.
 - WebGPU kernels for forward ops, loss ops, manual input-gradient backpropagation, and optimizer updates.
 - End-to-end style-transfer execution through VGG19 feature layers up to `conv5_1` / torch `features[28]`.
@@ -74,6 +74,9 @@ The point-cloud preview route boots from the committed medium demo, lets you
 upload replacement JSON exports, and provides:
 
 - baked-vertex versus spatial-hash fragment-KNN mesh colouring;
+- a Kernels render mode for convolution exports with optional
+  `level_{idx}_paths` geodesic groups, including level selection and hover path
+  tracing;
 - point visibility, wireframe, point-size, gamma, and brightness controls;
 - axis snapping, Y/Z swapping, camera reframing, and saved viewpoints stored in
   browser local storage across datasets on this route, with copyable camera
@@ -139,7 +142,8 @@ python python-reference/evaluate_vgg19_quantization.py
 
 Large generated fixtures and full model packs should not be committed unless the repository already tracks them or the task explicitly requires it.
 
-The point-cloud preview route accepts JSON with the same four arrays as `python-reference/pointcloud-style-transfer/data-storage.py`:
+The point-cloud preview route accepts JSON with the same four required arrays
+as `python-reference/pointcloud-style-transfer/data-storage.py`:
 
 ```json
 {
@@ -162,7 +166,11 @@ The point-cloud preview route accepts JSON with the same four arrays as `python-
 }
 ```
 
-`m_verts` and `pc_xyz` must be in the same coordinate space, and `pc_xyz` / `pc_rgb` must have matching lengths.
+`m_verts` and `pc_xyz` must be in the same coordinate space, and `pc_xyz` /
+`pc_rgb` must have matching lengths. Convolution-kernel preview exports may
+also include optional `level_{idx}_paths` keys; each level contains groups of 8
+geodesic paths in the same coordinate space, and the preview uses the first
+coordinate in each group as the kernel anchor point.
 
 See [public/pointcloud-style-transfer/README.md](public/pointcloud-style-transfer/README.md)
 for the committed preview examples and how they relate to the Python reference
