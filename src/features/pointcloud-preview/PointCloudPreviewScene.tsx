@@ -13,11 +13,15 @@ import {
   sampleInterpolatedColor,
 } from "./math/interpolation";
 import type {
+  ConvolutionKernelHitSample,
+  ConvolutionKernelLevelData,
+  ConvolutionKernelPathGroup,
   MeshColorMode,
   PointCloudHitSample,
   PointCloudMeshData,
   PointCloudPreviewBackgroundColor,
   PointCloudPreviewCameraCommand,
+  PointCloudPreviewRenderMode,
   PointCloudPreviewViewAxis,
   PreviewCameraState,
 } from "./types";
@@ -26,11 +30,13 @@ export const maxFragmentShaderPointsPerCell = 256;
 
 type PointCloudPreviewSceneProps = {
   readonly data: PointCloudMeshData;
+  readonly renderMode: PointCloudPreviewRenderMode;
   readonly showMesh: boolean;
   readonly showPoints: boolean;
   readonly showWireframe: boolean;
   readonly showGroundPlane: boolean;
   readonly meshColorMode: MeshColorMode;
+  readonly kernelLevelIndex: number;
   readonly showNeighborDebug: boolean;
   readonly pointSize: number;
   readonly backgroundColor: PointCloudPreviewBackgroundColor;
@@ -38,8 +44,12 @@ type PointCloudPreviewSceneProps = {
   readonly brightness: number;
   readonly swapYZ: boolean;
   readonly selectedHit: PointCloudHitSample | null;
+  readonly selectedKernelHit: ConvolutionKernelHitSample | null;
   readonly cameraCommand: PointCloudPreviewCameraCommand;
   readonly onHoverSampleChange: (sample: PointCloudHitSample | null) => void;
+  readonly onHoverKernelSampleChange: (
+    sample: ConvolutionKernelHitSample | null,
+  ) => void;
   readonly onCameraStateChange: (state: PreviewCameraState) => void;
   readonly onCameraCommandApplied?: (commandId: number) => void;
   readonly onFrameRendered?: (commandId: number) => void;
@@ -55,9 +65,10 @@ type OrbitCameraControlsProps = {
 
 type SceneContentProps = Omit<
   PointCloudPreviewSceneProps,
-  "selectedHit" | "cameraCommand"
+  "selectedHit" | "selectedKernelHit" | "cameraCommand"
 > & {
   readonly highlightSample: PointCloudHitSample | null;
+  readonly highlightKernelSample: ConvolutionKernelHitSample | null;
   readonly transformMatrix: THREE.Matrix4;
   readonly inverseTransformMatrix: THREE.Matrix4;
 };
@@ -427,6 +438,53 @@ const buildScalarTexture = (values: Uint32Array): PackedTexture => {
   return { texture, width, height };
 };
 
+const findKernelLevel = (
+  levels: readonly ConvolutionKernelLevelData[],
+  levelIndex: number,
+): ConvolutionKernelLevelData | null =>
+  levels.find((level) => level.levelIndex === levelIndex) ?? levels[0] ?? null;
+
+const buildKernelPathPositions = (
+  group: ConvolutionKernelPathGroup,
+): {
+  readonly linePositions: Float32Array;
+  readonly pointPositions: Float32Array;
+} => {
+  const pointCount = group.reduce((sum, path) => sum + path.length, 0);
+  const segmentCount = group.reduce(
+    (sum, path) => sum + Math.max(0, path.length - 1),
+    0,
+  );
+  const pointPositions = new Float32Array(pointCount * 3);
+  const linePositions = new Float32Array(segmentCount * 6);
+  let pointOffset = 0;
+  let lineOffset = 0;
+
+  group.forEach((path) => {
+    path.forEach((point, pointIndex) => {
+      pointPositions[pointOffset] = point[0];
+      pointPositions[pointOffset + 1] = point[1];
+      pointPositions[pointOffset + 2] = point[2];
+      pointOffset += 3;
+
+      if (pointIndex === 0) {
+        return;
+      }
+
+      const previousPoint = path[pointIndex - 1];
+      linePositions[lineOffset] = previousPoint[0];
+      linePositions[lineOffset + 1] = previousPoint[1];
+      linePositions[lineOffset + 2] = previousPoint[2];
+      linePositions[lineOffset + 3] = point[0];
+      linePositions[lineOffset + 4] = point[1];
+      linePositions[lineOffset + 5] = point[2];
+      lineOffset += 6;
+    });
+  });
+
+  return { linePositions, pointPositions };
+};
+
 function OrbitCameraControls({
   data,
   command,
@@ -558,20 +616,24 @@ function FpsSampler({
 
 function SceneContent({
   data,
+  renderMode,
   showMesh,
   showPoints,
   showWireframe,
   showGroundPlane,
   meshColorMode,
+  kernelLevelIndex,
   showNeighborDebug,
   pointSize,
   backgroundColor,
   pointGammaCorrection,
   brightness,
   highlightSample,
+  highlightKernelSample,
   transformMatrix,
   inverseTransformMatrix,
   onHoverSampleChange,
+  onHoverKernelSampleChange,
 }: SceneContentProps) {
   const displayMeshVertexColors = useMemo(
     () =>
@@ -618,6 +680,77 @@ function SceneContent({
     geometry.computeBoundingSphere();
     return geometry;
   }, [data.pointPositions, displayPointColors]);
+
+  const activeKernelLevel = useMemo(
+    () =>
+      renderMode === "kernels"
+        ? findKernelLevel(data.convolutionKernelLevels, kernelLevelIndex)
+        : null,
+    [data.convolutionKernelLevels, kernelLevelIndex, renderMode],
+  );
+
+  const kernelAnchorGeometry = useMemo(() => {
+    if (activeKernelLevel === null) {
+      return null;
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(activeKernelLevel.anchorPositions, 3),
+    );
+    geometry.computeBoundingSphere();
+    return geometry;
+  }, [activeKernelLevel]);
+
+  const selectedKernelGroup = useMemo(() => {
+    if (
+      activeKernelLevel === null ||
+      highlightKernelSample === null ||
+      highlightKernelSample.levelIndex !== activeKernelLevel.levelIndex
+    ) {
+      return null;
+    }
+    return activeKernelLevel.groups[highlightKernelSample.groupIndex] ?? null;
+  }, [activeKernelLevel, highlightKernelSample]);
+
+  const selectedKernelPathPositions = useMemo(
+    () =>
+      selectedKernelGroup === null
+        ? {
+            linePositions: new Float32Array(),
+            pointPositions: new Float32Array(),
+          }
+        : buildKernelPathPositions(selectedKernelGroup),
+    [selectedKernelGroup],
+  );
+
+  const selectedKernelLineGeometry = useMemo(() => {
+    if (selectedKernelPathPositions.linePositions.length === 0) {
+      return null;
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(selectedKernelPathPositions.linePositions, 3),
+    );
+    return geometry;
+  }, [selectedKernelPathPositions.linePositions]);
+
+  const selectedKernelPointGeometry = useMemo(() => {
+    if (selectedKernelPathPositions.pointPositions.length === 0) {
+      return null;
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(selectedKernelPathPositions.pointPositions, 3),
+    );
+    geometry.computeBoundingSphere();
+    return geometry;
+  }, [selectedKernelPathPositions.pointPositions]);
 
   const debugLinePositions = useMemo(() => {
     if (!showNeighborDebug || highlightSample === null) {
@@ -739,6 +872,9 @@ function SceneContent({
       meshGeometry.dispose();
       pointGeometry.dispose();
       debugLineGeometry?.dispose();
+      kernelAnchorGeometry?.dispose();
+      selectedKernelLineGeometry?.dispose();
+      selectedKernelPointGeometry?.dispose();
       fragmentShaderPointPositionTexture?.texture.dispose();
       fragmentShaderPointColorTexture?.texture.dispose();
       fragmentShaderCellOffsetTexture?.texture.dispose();
@@ -750,8 +886,11 @@ function SceneContent({
       fragmentShaderMaterial,
       fragmentShaderPointColorTexture,
       fragmentShaderPointPositionTexture,
+      kernelAnchorGeometry,
       meshGeometry,
       pointGeometry,
+      selectedKernelLineGeometry,
+      selectedKernelPointGeometry,
     ],
   );
 
@@ -760,6 +899,14 @@ function SceneContent({
   const fogNear = sceneRadius * 4;
   const fogFar = sceneRadius * 12;
   const effectivePointSize = Math.max(data.bounds.radius * pointSize, 0.008);
+  const effectiveKernelAnchorSize = Math.max(
+    data.bounds.radius * Math.max(pointSize, 0.045),
+    0.012,
+  );
+  const effectiveKernelPathPointSize = Math.max(
+    effectiveKernelAnchorSize * 0.55,
+    0.006,
+  );
   const sceneBackgroundColor = backgroundColors[backgroundColor];
   const displayHighlightColor = useMemo(
     () =>
@@ -779,6 +926,33 @@ function SceneContent({
       ) ?? [],
     [brightness, highlightSample?.neighbors, pointGammaCorrection],
   );
+
+  const handleKernelAnchorIntersection = (
+    event: ThreeEvent<PointerEvent>,
+  ): void => {
+    event.stopPropagation();
+    if (activeKernelLevel === null || typeof event.index !== "number") {
+      return;
+    }
+
+    const groupIndex = event.index;
+    if (groupIndex < 0 || groupIndex >= activeKernelLevel.groupCount) {
+      return;
+    }
+
+    const pointIndex = groupIndex * 3;
+    const group = activeKernelLevel.groups[groupIndex];
+    onHoverKernelSampleChange({
+      levelIndex: activeKernelLevel.levelIndex,
+      groupIndex,
+      point: [
+        activeKernelLevel.anchorPositions[pointIndex],
+        activeKernelLevel.anchorPositions[pointIndex + 1],
+        activeKernelLevel.anchorPositions[pointIndex + 2],
+      ],
+      pathCount: group?.length ?? 0,
+    });
+  };
 
   const handleIntersection = (event: ThreeEvent<PointerEvent>): void => {
     event.stopPropagation();
@@ -822,58 +996,140 @@ function SceneContent({
             ]}
           />
         ) : null}
-        {showMesh ? (
-          <mesh
-            geometry={meshGeometry}
-            onPointerMove={handleIntersection}
-            onClick={handleIntersection}
-            onPointerOut={() => onHoverSampleChange(null)}
-          >
-            {fragmentShaderMaterial !== null ? (
-              <primitive object={fragmentShaderMaterial} attach="material" />
-            ) : (
-              <meshBasicMaterial
-                side={THREE.DoubleSide}
-                vertexColors
-                wireframe={showWireframe}
-                polygonOffset
-                polygonOffsetFactor={1}
-                polygonOffsetUnits={1}
-              />
-            )}
-          </mesh>
-        ) : null}
-        {showPoints ? (
-          <points geometry={pointGeometry} renderOrder={1}>
-            <pointsMaterial
-              size={effectivePointSize}
-              sizeAttenuation
-              vertexColors
-              depthWrite={false}
-            />
-          </points>
-        ) : null}
-        {showNeighborDebug && highlightSample !== null ? (
+        {renderMode === "kernels" ? (
           <>
-            <mesh position={highlightSample.point}>
-              <sphereGeometry args={[markerRadius, 18, 18]} />
-              <meshBasicMaterial color={displayHighlightColor ?? "#ffffff"} />
-            </mesh>
-            {highlightSample.neighbors.map((neighbor, index) => (
-              <mesh key={neighbor.index} position={neighbor.position}>
-                <sphereGeometry args={[markerRadius * 0.78, 16, 16]} />
+            {showMesh ? (
+              <mesh geometry={meshGeometry}>
                 <meshBasicMaterial
-                  color={displayNeighborColors[index] ?? "#ffffff"}
+                  color="#94a3b8"
+                  side={THREE.DoubleSide}
+                  wireframe={showWireframe}
+                  transparent
+                  opacity={showWireframe ? 0.85 : 0.38}
+                  depthWrite={false}
+                  polygonOffset
+                  polygonOffsetFactor={1}
+                  polygonOffsetUnits={1}
                 />
               </mesh>
-            ))}
-            {debugLineGeometry !== null ? (
-              <lineSegments geometry={debugLineGeometry}>
-                <lineBasicMaterial color="#f8fafc" transparent opacity={0.75} />
-              </lineSegments>
+            ) : null}
+            {showPoints && kernelAnchorGeometry !== null ? (
+              <points
+                geometry={kernelAnchorGeometry}
+                renderOrder={1}
+                onPointerMove={handleKernelAnchorIntersection}
+                onClick={handleKernelAnchorIntersection}
+                onPointerOut={() => onHoverKernelSampleChange(null)}
+              >
+                <pointsMaterial
+                  color="#f59e0b"
+                  size={effectiveKernelAnchorSize}
+                  sizeAttenuation
+                  depthWrite={false}
+                />
+              </points>
+            ) : null}
+            {highlightKernelSample !== null ? (
+              <>
+                <mesh position={highlightKernelSample.point} renderOrder={3}>
+                  <sphereGeometry args={[markerRadius, 18, 18]} />
+                  <meshBasicMaterial color="#fde68a" depthTest={false} />
+                </mesh>
+                {selectedKernelLineGeometry !== null ? (
+                  <lineSegments
+                    geometry={selectedKernelLineGeometry}
+                    renderOrder={2}
+                  >
+                    <lineBasicMaterial
+                      color="#22d3ee"
+                      transparent
+                      opacity={0.95}
+                      depthTest={false}
+                    />
+                  </lineSegments>
+                ) : null}
+                {selectedKernelPointGeometry !== null ? (
+                  <points
+                    geometry={selectedKernelPointGeometry}
+                    renderOrder={2}
+                  >
+                    <pointsMaterial
+                      color="#fef3c7"
+                      size={effectiveKernelPathPointSize}
+                      sizeAttenuation
+                      depthWrite={false}
+                      depthTest={false}
+                    />
+                  </points>
+                ) : null}
+              </>
             ) : null}
           </>
-        ) : null}
+        ) : (
+          <>
+            {showMesh ? (
+              <mesh
+                geometry={meshGeometry}
+                onPointerMove={handleIntersection}
+                onClick={handleIntersection}
+                onPointerOut={() => onHoverSampleChange(null)}
+              >
+                {fragmentShaderMaterial !== null ? (
+                  <primitive
+                    object={fragmentShaderMaterial}
+                    attach="material"
+                  />
+                ) : (
+                  <meshBasicMaterial
+                    side={THREE.DoubleSide}
+                    vertexColors
+                    wireframe={showWireframe}
+                    polygonOffset
+                    polygonOffsetFactor={1}
+                    polygonOffsetUnits={1}
+                  />
+                )}
+              </mesh>
+            ) : null}
+            {showPoints ? (
+              <points geometry={pointGeometry} renderOrder={1}>
+                <pointsMaterial
+                  size={effectivePointSize}
+                  sizeAttenuation
+                  vertexColors
+                  depthWrite={false}
+                />
+              </points>
+            ) : null}
+            {showNeighborDebug && highlightSample !== null ? (
+              <>
+                <mesh position={highlightSample.point}>
+                  <sphereGeometry args={[markerRadius, 18, 18]} />
+                  <meshBasicMaterial
+                    color={displayHighlightColor ?? "#ffffff"}
+                  />
+                </mesh>
+                {highlightSample.neighbors.map((neighbor, index) => (
+                  <mesh key={neighbor.index} position={neighbor.position}>
+                    <sphereGeometry args={[markerRadius * 0.78, 16, 16]} />
+                    <meshBasicMaterial
+                      color={displayNeighborColors[index] ?? "#ffffff"}
+                    />
+                  </mesh>
+                ))}
+                {debugLineGeometry !== null ? (
+                  <lineSegments geometry={debugLineGeometry}>
+                    <lineBasicMaterial
+                      color="#f8fafc"
+                      transparent
+                      opacity={0.75}
+                    />
+                  </lineSegments>
+                ) : null}
+              </>
+            ) : null}
+          </>
+        )}
       </group>
     </>
   );
@@ -881,11 +1137,13 @@ function SceneContent({
 
 export function PointCloudPreviewScene({
   data,
+  renderMode,
   showMesh,
   showPoints,
   showWireframe,
   showGroundPlane,
   meshColorMode,
+  kernelLevelIndex,
   showNeighborDebug,
   pointSize,
   backgroundColor,
@@ -893,8 +1151,10 @@ export function PointCloudPreviewScene({
   brightness,
   swapYZ,
   selectedHit,
+  selectedKernelHit,
   cameraCommand,
   onHoverSampleChange,
+  onHoverKernelSampleChange,
   onCameraStateChange,
   onCameraCommandApplied,
   onFrameRendered,
@@ -941,6 +1201,7 @@ export function PointCloudPreviewScene({
     () => transformMatrix.clone().invert(),
     [transformMatrix],
   );
+  const pointRaycastThreshold = Math.max(data.bounds.radius * 0.035, 0.01);
 
   return (
     <div
@@ -951,6 +1212,15 @@ export function PointCloudPreviewScene({
         camera={{ fov: 42, near: 0.01, far: 1000, position: [3, 2, 3] }}
         dpr={[1, 2]}
         gl={{ antialias: true, alpha: false, preserveDrawingBuffer: true }}
+        raycaster={{
+          params: {
+            Mesh: {},
+            Line: { threshold: 1 },
+            LOD: {},
+            Points: { threshold: pointRaycastThreshold },
+            Sprite: {},
+          },
+        }}
       >
         <OrbitCameraControls
           data={data}
@@ -965,11 +1235,13 @@ export function PointCloudPreviewScene({
         <FpsSampler onFramesPerSecondChange={onFramesPerSecondChange} />
         <SceneContent
           data={data}
+          renderMode={renderMode}
           showMesh={showMesh}
           showPoints={showPoints}
           showWireframe={showWireframe}
           showGroundPlane={showGroundPlane}
           meshColorMode={meshColorMode}
+          kernelLevelIndex={kernelLevelIndex}
           showNeighborDebug={showNeighborDebug}
           pointSize={pointSize}
           backgroundColor={backgroundColor}
@@ -977,9 +1249,11 @@ export function PointCloudPreviewScene({
           brightness={brightness}
           swapYZ={swapYZ}
           highlightSample={selectedHit}
+          highlightKernelSample={selectedKernelHit}
           transformMatrix={transformMatrix}
           inverseTransformMatrix={inverseTransformMatrix}
           onHoverSampleChange={onHoverSampleChange}
+          onHoverKernelSampleChange={onHoverKernelSampleChange}
           onCameraStateChange={onCameraStateChange}
           onFramesPerSecondChange={onFramesPerSecondChange}
         />

@@ -24,7 +24,43 @@ Each file uses the shared mesh-plus-point-cloud JSON shape consumed by
   "m_verts": [[0, 0, 0]],
   "m_faces": [[0, 0, 0]],
   "pc_xyz": [[0, 0, 0]],
-  "pc_rgb": [[1, 1, 1]]
+  "pc_rgb": [[1, 1, 1]],
+  "level_0_paths": [
+    [
+      [
+        [0, 0, 0],
+        [0.1, 0, 0]
+      ],
+      [
+        [0, 0, 0],
+        [0, 0.1, 0]
+      ],
+      [
+        [0, 0, 0],
+        [0, 0, 0.1]
+      ],
+      [
+        [0, 0, 0],
+        [-0.1, 0, 0]
+      ],
+      [
+        [0, 0, 0],
+        [0, -0.1, 0]
+      ],
+      [
+        [0, 0, 0],
+        [0, 0, -0.1]
+      ],
+      [
+        [0, 0, 0],
+        [0.1, 0.1, 0]
+      ],
+      [
+        [0, 0, 0],
+        [0, 0.1, 0.1]
+      ]
+    ]
+  ]
 }
 ```
 
@@ -36,7 +72,12 @@ Rules:
   as the mesh.
 - `pc_rgb` contains per-point colours in `[r, g, b]` float form, one entry per
   `pc_xyz` sample.
+- `level_{idx}_paths` keys are optional convolution-kernel preview data. Each
+  level contains kernel groups, each group must contain 8 geodesic paths, and
+  each path contains `[x, y, z]` coordinates. The preview uses the first
+  coordinate of each group as the kernel anchor point.
 
 The preview route builds both exact CPU-side 3-nearest-neighbour inspection
 state and a spatial-hash layout for fragment shading from this data without
-changing the on-disk JSON schema.
+changing the base on-disk JSON schema. When optional kernel levels are present,
+the route also exposes a kernel render mode with level selection.

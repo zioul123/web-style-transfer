@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PointCloudAblationTab } from "./ablation/PointCloudAblationTab";
 import { BatchScreenshotModal } from "./BatchScreenshotModal";
 import { PointCloudPreviewControlsPanel } from "./PointCloudPreviewControlsPanel";
@@ -13,7 +13,7 @@ import {
   PointCloudPreviewInfoModal,
 } from "./PointCloudPreviewUi";
 import { PointCloudPreviewViewport } from "./PointCloudPreviewViewport";
-import type { MeshColorMode } from "./types";
+import type { MeshColorMode, PointCloudPreviewRenderMode } from "./types";
 import {
   bundledMediumExampleUrl,
   bundledMediumSourceLabel,
@@ -62,13 +62,35 @@ export function PointCloudPreviewApp() {
     setUploadedFileStatus: assetsController.setUploadedFileStatus,
     savedViewpoints: viewpointsController.savedViewpoints,
     currentCameraState: previewController.cameraState,
-    swapYZ: previewController.viewSettings.swapYZ,
+    viewSettings: previewController.viewSettings,
     updateViewSettings: previewController.updateViewSettings,
     issueCameraCommand: previewController.issueCameraCommand,
     resetPreviewInteraction: previewController.resetPreviewInteraction,
   });
 
+  const currentRenderMode = previewController.viewSettings.renderMode;
+  const currentKernelLevelIndex =
+    previewController.viewSettings.kernelLevelIndex;
+  const updatePreviewViewSettings = previewController.updateViewSettings;
   const data = assetsController.assetState.data;
+  const kernelLevelOptions = useMemo(
+    () =>
+      data?.convolutionKernelLevels.map((level) => ({
+        levelIndex: level.levelIndex,
+        groupCount: level.groupCount,
+      })) ?? [],
+    [data],
+  );
+  const hasKernelPreview = kernelLevelOptions.length > 0;
+  const effectiveRenderMode: PointCloudPreviewRenderMode =
+    currentRenderMode === "kernels" && hasKernelPreview ? "kernels" : "surface";
+  const activeKernelLevel = useMemo(
+    () =>
+      data?.convolutionKernelLevels.find(
+        (level) => level.levelIndex === currentKernelLevelIndex,
+      ) ?? data?.convolutionKernelLevels[0],
+    [currentKernelLevelIndex, data],
+  );
   const canUseFragmentKnnShading = useMemo(
     () =>
       data !== null &&
@@ -76,19 +98,49 @@ export function PointCloudPreviewApp() {
     [data],
   );
   const effectiveMeshColorMode: MeshColorMode =
+    effectiveRenderMode === "surface" &&
     previewController.viewSettings.meshColorMode === "fragment-knn" &&
     canUseFragmentKnnShading
       ? "fragment-knn"
       : "baked";
   const meshColorModeDescription =
-    effectiveMeshColorMode === "fragment-knn"
-      ? `Spatial-hash fragment KNN shading active (${data?.pointCount ?? 0} points across ${data?.spatialHash.cellCount ?? 0} cells).`
-      : previewController.viewSettings.meshColorMode === "fragment-knn" &&
-          data !== null
-        ? `Spatial-hash fragment KNN shading found a dense cell with ${data.spatialHash.maxPointsPerCell} points, which exceeds the current per-cell shader cap of ${maxFragmentShaderPointsPerCell}; this dataset falls back to baked vertex colours.`
-        : !previewController.viewSettings.disableGammaDecoding
-          ? "Baked vertex colours active with gamma decoding enabled."
-          : "Baked vertex colours active with gamma decoding disabled.";
+    effectiveRenderMode === "kernels"
+      ? `Kernel preview active for ${activeKernelLevel?.label ?? "selected level"} with ${activeKernelLevel?.groupCount ?? 0} anchors.`
+      : effectiveMeshColorMode === "fragment-knn"
+        ? `Spatial-hash fragment KNN shading active (${data?.pointCount ?? 0} points across ${data?.spatialHash.cellCount ?? 0} cells).`
+        : previewController.viewSettings.meshColorMode === "fragment-knn" &&
+            data !== null
+          ? `Spatial-hash fragment KNN shading found a dense cell with ${data.spatialHash.maxPointsPerCell} points, which exceeds the current per-cell shader cap of ${maxFragmentShaderPointsPerCell}; this dataset falls back to baked vertex colours.`
+          : !previewController.viewSettings.disableGammaDecoding
+            ? "Baked vertex colours active with gamma decoding enabled."
+            : "Baked vertex colours active with gamma decoding disabled.";
+
+  useEffect(() => {
+    if (data === null) {
+      return;
+    }
+
+    if (data.convolutionKernelLevels.length === 0) {
+      if (currentRenderMode === "kernels") {
+        updatePreviewViewSettings({ renderMode: "surface" });
+      }
+      return;
+    }
+
+    const hasSelectedKernelLevel = data.convolutionKernelLevels.some(
+      (level) => level.levelIndex === currentKernelLevelIndex,
+    );
+    if (!hasSelectedKernelLevel) {
+      updatePreviewViewSettings({
+        kernelLevelIndex: data.convolutionKernelLevels[0]?.levelIndex ?? 0,
+      });
+    }
+  }, [
+    currentKernelLevelIndex,
+    currentRenderMode,
+    data,
+    updatePreviewViewSettings,
+  ]);
 
   const exportAblationGrid = useCallback(
     async (request: PointCloudAblationGridExportRequest): Promise<void> => {
@@ -190,9 +242,11 @@ export function PointCloudPreviewApp() {
             <PointCloudPreviewViewport
               previewHostRef={previewHostRef}
               assetState={assetsController.assetState}
+              renderMode={effectiveRenderMode}
               viewSettings={previewController.viewSettings}
               effectiveMeshColorMode={effectiveMeshColorMode}
               selectedHit={previewController.selectedHit}
+              selectedKernelHit={previewController.selectedKernelHit}
               framesPerSecond={previewController.framesPerSecond}
               cameraCommand={previewController.cameraCommand}
               canBatchScreenshot={assetsController.uploadedFiles.length > 1}
@@ -201,6 +255,7 @@ export function PointCloudPreviewApp() {
                 screenshotsController.openBatchScreenshotModal
               }
               onHoverSampleChange={previewController.setSelectedHit}
+              onHoverKernelSampleChange={previewController.setSelectedKernelHit}
               onCameraStateChange={previewController.handleCameraStateChange}
               onCameraCommandApplied={
                 screenshotsController.handleCameraCommandApplied
@@ -211,6 +266,8 @@ export function PointCloudPreviewApp() {
 
             <PointCloudPreviewControlsPanel
               viewSettings={previewController.viewSettings}
+              hasKernelPreview={hasKernelPreview}
+              kernelLevelOptions={kernelLevelOptions}
               updateViewSettings={previewController.updateViewSettings}
               currentCameraState={previewController.cameraState}
               issueCameraCommand={previewController.issueCameraCommand}

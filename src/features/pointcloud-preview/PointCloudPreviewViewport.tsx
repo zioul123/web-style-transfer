@@ -3,9 +3,11 @@ import { PointCloudHitInspector } from "./PointCloudHitInspector";
 import { PointCloudPreviewScene } from "./PointCloudPreviewScene";
 import type { LoadedAssetState } from "./pointCloudPreviewModels";
 import type {
+  ConvolutionKernelHitSample,
   MeshColorMode,
   PointCloudHitSample,
   PointCloudPreviewCameraCommand,
+  PointCloudPreviewRenderMode,
   PointCloudPreviewViewSettings,
   PreviewCameraState,
 } from "./types";
@@ -16,15 +18,20 @@ const fpsLabel = (framesPerSecond: number): string =>
 type PointCloudPreviewViewportProps = {
   readonly previewHostRef: MutableRefObject<HTMLDivElement | null>;
   readonly assetState: LoadedAssetState;
+  readonly renderMode: PointCloudPreviewRenderMode;
   readonly viewSettings: PointCloudPreviewViewSettings;
   readonly effectiveMeshColorMode: MeshColorMode;
   readonly selectedHit: PointCloudHitSample | null;
+  readonly selectedKernelHit: ConvolutionKernelHitSample | null;
   readonly framesPerSecond: number;
   readonly cameraCommand: PointCloudPreviewCameraCommand;
   readonly canBatchScreenshot: boolean;
   readonly onScreenshot: () => void;
   readonly onOpenBatchScreenshot: () => void;
   readonly onHoverSampleChange: (hit: PointCloudHitSample | null) => void;
+  readonly onHoverKernelSampleChange: (
+    hit: ConvolutionKernelHitSample | null,
+  ) => void;
   readonly onCameraStateChange: (state: PreviewCameraState) => void;
   readonly onCameraCommandApplied: (commandId: number) => void;
   readonly onFrameRendered: (commandId: number) => void;
@@ -34,15 +41,18 @@ type PointCloudPreviewViewportProps = {
 export function PointCloudPreviewViewport({
   previewHostRef,
   assetState,
+  renderMode,
   viewSettings,
   effectiveMeshColorMode,
   selectedHit,
+  selectedKernelHit,
   framesPerSecond,
   cameraCommand,
   canBatchScreenshot,
   onScreenshot,
   onOpenBatchScreenshot,
   onHoverSampleChange,
+  onHoverKernelSampleChange,
   onCameraStateChange,
   onCameraCommandApplied,
   onFrameRendered,
@@ -87,11 +97,13 @@ export function PointCloudPreviewViewport({
         {data !== null ? (
           <PointCloudPreviewScene
             data={data}
+            renderMode={renderMode}
             showMesh={viewSettings.showMesh}
             showPoints={viewSettings.showPoints}
             showWireframe={viewSettings.showWireframe}
             showGroundPlane={viewSettings.showGroundPlane}
             meshColorMode={effectiveMeshColorMode}
+            kernelLevelIndex={viewSettings.kernelLevelIndex}
             showNeighborDebug
             pointSize={viewSettings.pointSize}
             backgroundColor={viewSettings.backgroundColor}
@@ -99,8 +111,10 @@ export function PointCloudPreviewViewport({
             brightness={viewSettings.brightness}
             swapYZ={viewSettings.swapYZ}
             selectedHit={selectedHit}
+            selectedKernelHit={selectedKernelHit}
             cameraCommand={cameraCommand}
             onHoverSampleChange={onHoverSampleChange}
+            onHoverKernelSampleChange={onHoverKernelSampleChange}
             onCameraStateChange={onCameraStateChange}
             onCameraCommandApplied={onCameraCommandApplied}
             onFrameRendered={onFrameRendered}
@@ -114,7 +128,7 @@ export function PointCloudPreviewViewport({
           </div>
         )}
 
-        {selectedHit !== null ? (
+        {renderMode === "surface" && selectedHit !== null ? (
           <PointCloudHitInspector hit={selectedHit} />
         ) : null}
       </div>

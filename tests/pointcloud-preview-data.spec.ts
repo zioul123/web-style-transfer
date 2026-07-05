@@ -18,7 +18,10 @@ import {
   buildKdTree3d,
   findKNearestNeighbors,
 } from "../src/ml/geometry/kdTree3d";
-import type { PointCloudMeshJson } from "../src/features/pointcloud-preview/types";
+import type {
+  ConvolutionKernelPathGroup,
+  PointCloudMeshJson,
+} from "../src/features/pointcloud-preview/types";
 
 const tinyFixture = JSON.parse(
   readFileSync(
@@ -29,6 +32,14 @@ const tinyFixture = JSON.parse(
     "utf8",
   ),
 ) as PointCloudMeshJson;
+
+const buildKernelPathGroup = (
+  anchor: readonly [number, number, number],
+): ConvolutionKernelPathGroup =>
+  Array.from({ length: 8 }, (_, pathIndex) => [
+    anchor,
+    [anchor[0] + (pathIndex + 1) * 0.1, anchor[1], anchor[2] + 0.25] as const,
+  ]);
 
 test("point-cloud preview parser converts the tiny fixture into typed arrays", () => {
   const data = buildPointCloudMeshData(tinyFixture);
@@ -52,6 +63,41 @@ test("point-cloud preview parser converts the tiny fixture into typed arrays", (
   );
   expect(data.spatialHash.cellOffsets[data.spatialHash.cellCount]).toBe(
     data.pointCount,
+  );
+  expect(data.sourceKind).toBe("point-cloud-mesh");
+  expect(data.convolutionKernelLevels).toEqual([]);
+});
+
+test("point-cloud preview parser derives convolution kernel levels and anchors", () => {
+  const data = buildPointCloudMeshData({
+    ...tinyFixture,
+    level_0_paths: [
+      buildKernelPathGroup([0, 0, 0]),
+      buildKernelPathGroup([1, 0, 0]),
+    ],
+    level_2_paths: [buildKernelPathGroup([0.5, 0, 0.5])],
+  });
+
+  expect(data.sourceKind).toBe("convolution-kernels");
+  expect(data.convolutionKernelLevels.map((level) => level.levelIndex)).toEqual(
+    [0, 2],
+  );
+  expect(data.convolutionKernelLevels[0]?.groupCount).toBe(2);
+  expect(
+    Array.from(data.convolutionKernelLevels[0]?.anchorPositions ?? []),
+  ).toEqual([0, 0, 0, 1, 0, 0]);
+  expect(data.convolutionKernelLevels[1]?.groupCount).toBe(1);
+  expect(data.convolutionKernelLevels[1]?.groups[0]?.length).toBe(8);
+});
+
+test("point-cloud preview parser rejects malformed convolution kernel groups", () => {
+  const invalidText = JSON.stringify({
+    ...tinyFixture,
+    level_0_paths: [[[[0, 0, 0]]]],
+  });
+
+  expect(() => parsePointCloudMeshText(invalidText)).toThrow(
+    /must contain exactly 8 geodesic paths/i,
   );
 });
 
