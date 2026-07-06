@@ -656,7 +656,6 @@ function InstancedSphereMarkers({
       depthWrite,
       opacity,
       transparent: opacity < 1,
-      vertexColors: colors !== undefined,
     });
     const instancedMesh = new THREE.InstancedMesh(geometry, material, count);
     instancedMesh.renderOrder = renderOrder;

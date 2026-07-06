@@ -118,6 +118,29 @@ const appendedUploadJson = JSON.stringify({
   ],
 });
 
+const saturatedPointUploadJson = JSON.stringify({
+  pc_xyz: [
+    [-0.4, 0, 0],
+    [0, 0, 0],
+    [0.4, 0, 0],
+  ],
+  pc_rgb: [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+  ],
+  m_verts: [
+    [-1, -0.5, -0.5],
+    [1, -0.5, -0.5],
+    [1, 0.5, -0.5],
+    [-1, 0.5, -0.5],
+  ],
+  m_faces: [
+    [0, 1, 2],
+    [0, 2, 3],
+  ],
+});
+
 const largeUploadJson = JSON.stringify({
   pc_xyz: Array.from({ length: 513 }, (_, index) => [
     (index % 19) / 18,
@@ -194,6 +217,43 @@ const readPreviewBackgroundPixel = async (
     const pixel = new Uint8Array(4);
     context.readPixels(1, 1, 1, 1, context.RGBA, context.UNSIGNED_BYTE, pixel);
     return Array.from(pixel);
+  });
+
+const readPreviewColorPixelCount = async (
+  previewCanvas: Locator,
+): Promise<number> =>
+  previewCanvas.locator("canvas").evaluate((canvas) => {
+    const target = canvas as HTMLCanvasElement;
+    const context = target.getContext("webgl2") ?? target.getContext("webgl");
+    if (context === null) {
+      throw new Error("Point-cloud preview WebGL context is unavailable.");
+    }
+
+    const width = target.width;
+    const height = target.height;
+    const pixels = new Uint8Array(width * height * 4);
+    context.readPixels(
+      0,
+      0,
+      width,
+      height,
+      context.RGBA,
+      context.UNSIGNED_BYTE,
+      pixels,
+    );
+
+    let colorPixelCount = 0;
+    for (let offset = 0; offset < pixels.length; offset += 4) {
+      const red = pixels[offset] ?? 0;
+      const green = pixels[offset + 1] ?? 0;
+      const blue = pixels[offset + 2] ?? 0;
+      const maxChannel = Math.max(red, green, blue);
+      const minChannel = Math.min(red, green, blue);
+      if (maxChannel >= 180 && maxChannel - minChannel >= 100) {
+        colorPixelCount += 1;
+      }
+    }
+    return colorPixelCount;
   });
 
 const readCameraState = async (
@@ -1323,6 +1383,29 @@ test("point-cloud preview disables dependent controls and saves viewpoints", asy
 
   await page.reload();
   await expect(page.getByTestId("viewpoint-go-1")).toHaveCount(0);
+});
+
+test("point-cloud preview renders point spheres with point colors", async ({
+  page,
+}) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await page.getByTestId("pointcloud-upload-input").setInputFiles({
+    name: "saturated-points.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(saturatedPointUploadJson, "utf8"),
+  });
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+
+  await page.getByTestId("toggle-mesh-button").click();
+  await page.getByTestId("toggle-points-button").click();
+  await page.getByTestId("toggle-point-spheres-button").click();
+  await page.getByTestId("point-size-slider").fill("0.12");
+
+  const previewCanvas = page.getByTestId("pointcloud-preview-canvas");
+  await expect
+    .poll(() => readPreviewColorPixelCount(previewCanvas), { timeout: 10_000 })
+    .toBeGreaterThan(100);
 });
 
 test("point-cloud preview shows and copies saved viewpoint camera details", async ({
