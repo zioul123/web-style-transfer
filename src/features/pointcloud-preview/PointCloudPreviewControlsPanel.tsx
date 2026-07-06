@@ -6,6 +6,7 @@ import {
 import type { SavedViewpoint } from "./pointCloudPreviewModels";
 import type {
   PointCloudPreviewBackgroundColor,
+  PointCloudPreviewRenderMode,
   PointCloudPreviewViewAxis,
   PointCloudPreviewViewSettings,
   PreviewCameraState,
@@ -30,6 +31,11 @@ const cameraTupleText = (tuple: readonly [number, number, number]): string =>
 const savedViewpointCameraText = (viewpoint: SavedViewpoint): string =>
   `position = ${cameraTupleText(viewpoint.camera.position)}\n` +
   `focal_point = ${cameraTupleText(viewpoint.camera.target)}`;
+
+type KernelLevelControlOption = {
+  readonly levelIndex: number;
+  readonly groupCount: number;
+};
 
 function SavedViewpointInfoPopover({
   viewpoint,
@@ -139,6 +145,8 @@ const snapAxisButtons: readonly {
 
 type PointCloudPreviewControlsPanelProps = {
   readonly viewSettings: PointCloudPreviewViewSettings;
+  readonly hasKernelPreview: boolean;
+  readonly kernelLevelOptions: readonly KernelLevelControlOption[];
   readonly updateViewSettings: (
     patch: Partial<PointCloudPreviewViewSettings>,
   ) => void;
@@ -155,6 +163,8 @@ type PointCloudPreviewControlsPanelProps = {
 
 export function PointCloudPreviewControlsPanel({
   viewSettings,
+  hasKernelPreview,
+  kernelLevelOptions,
   updateViewSettings,
   currentCameraState,
   issueCameraCommand,
@@ -164,6 +174,18 @@ export function PointCloudPreviewControlsPanel({
   onUpdateViewpoint,
   onDeleteViewpoint,
 }: PointCloudPreviewControlsPanelProps) {
+  const selectedRenderModeClassName = "bg-amber-300 text-slate-950";
+  const inactiveRenderModeClassName =
+    "border border-white/10 bg-white/5 text-slate-100 hover:bg-white/10";
+  const renderModeButtons: readonly {
+    readonly mode: PointCloudPreviewRenderMode;
+    readonly label: string;
+    readonly testId: string;
+  }[] = [
+    { mode: "surface", label: "Surface", testId: "render-mode-surface-button" },
+    { mode: "kernels", label: "Kernels", testId: "render-mode-kernels-button" },
+  ];
+
   return (
     <div
       data-testid="pointcloud-right-panel"
@@ -171,6 +193,61 @@ export function PointCloudPreviewControlsPanel({
     >
       <CollapsiblePanelCard title="View options" testId="view-options-card">
         <div className="space-y-3 text-sm text-slate-200">
+          {hasKernelPreview ? (
+            <div className="rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4">
+              <span className="mb-3 block text-slate-300">Render mode</span>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {renderModeButtons.map((button) => {
+                  const isSelected = viewSettings.renderMode === button.mode;
+                  return (
+                    <button
+                      key={button.mode}
+                      data-testid={button.testId}
+                      className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                        isSelected
+                          ? selectedRenderModeClassName
+                          : inactiveRenderModeClassName
+                      }`}
+                      type="button"
+                      aria-pressed={isSelected}
+                      onClick={() =>
+                        updateViewSettings({
+                          renderMode: button.mode,
+                          showPoints:
+                            button.mode === "kernels"
+                              ? true
+                              : viewSettings.showPoints,
+                        })
+                      }
+                    >
+                      {button.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+          {hasKernelPreview && viewSettings.renderMode === "kernels" ? (
+            <label className="block rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4">
+              <span className="mb-2 block text-slate-300">Kernel level</span>
+              <select
+                data-testid="kernel-level-select"
+                className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-slate-100"
+                value={viewSettings.kernelLevelIndex}
+                onChange={(event) =>
+                  updateViewSettings({
+                    kernelLevelIndex: Number(event.target.value),
+                  })
+                }
+              >
+                {kernelLevelOptions.map((level) => (
+                  <option key={level.levelIndex} value={level.levelIndex}>
+                    Level {level.levelIndex} ({level.groupCount} anchors)
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <div className="grid gap-3 sm:grid-cols-2">
             <PreviewVisibilityToggleButton
               label="Mesh"
@@ -191,6 +268,17 @@ export function PointCloudPreviewControlsPanel({
                 })
               }
             />
+            <PreviewVisibilityToggleButton
+              label="Solid mesh"
+              testId="toggle-solid-mesh-button"
+              visible={viewSettings.showSolidMesh}
+              disabled={!viewSettings.showMesh}
+              onClick={() =>
+                updateViewSettings({
+                  showSolidMesh: !viewSettings.showSolidMesh,
+                })
+              }
+            />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <PreviewVisibilityToggleButton
@@ -203,6 +291,19 @@ export function PointCloudPreviewControlsPanel({
                 })
               }
             />
+            <PreviewVisibilityToggleButton
+              label="Point spheres"
+              testId="toggle-point-spheres-button"
+              visible={viewSettings.renderPointsAsSpheres}
+              disabled={!viewSettings.showPoints}
+              onClick={() =>
+                updateViewSettings({
+                  renderPointsAsSpheres: !viewSettings.renderPointsAsSpheres,
+                })
+              }
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
             <PointCloudPreviewPointSizeControl
               viewSettings={viewSettings}
               testId="point-size-slider"

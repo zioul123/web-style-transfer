@@ -45,7 +45,8 @@ that matches the task, then follow imports and tests only as needed.
 - `src/features/style-transfer/modelPacks.ts`: pack names, URL loading, parsing,
   and cache integration.
 - `src/features/pointcloud-preview/loadPointCloudMesh.ts`: JSON validation,
-  typed-array conversion, bounds, and precomputed mesh vertex colours.
+  optional convolution-kernel level parsing, typed-array conversion, bounds,
+  and precomputed mesh vertex colours.
 - `src/features/pointcloud-preview/ablation/`: filename parsing, matrix helpers,
   and the route-local ablation browser UI for experiment-folder inspection.
 - `src/features/pointcloud-preview/usePointCloudAssetsController.ts`,
@@ -178,7 +179,8 @@ assertion layer.
 - `docs/review-rubric.md`: strict final-diff review checklist.
 - `.agents/skills/repo-change/references/context-routing.md`: conditional
   documentation and source retrieval.
-- `public/pointcloud-style-transfer/README.md`: preview example assets and
-  shared mesh-plus-point-cloud JSON shape.
+- `public/pointcloud-style-transfer/README.md`: preview example assets,
+  shared mesh-plus-point-cloud JSON shape, and optional convolution-kernel path
+  extension.
 - `public/vgg19-models/README.md`: pack layout and manifest schema.
 - `python-reference/vgg19-phase3-full-pass-README.md`: large fixture workflow.

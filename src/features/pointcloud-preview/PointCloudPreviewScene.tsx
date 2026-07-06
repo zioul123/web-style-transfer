@@ -13,11 +13,15 @@ import {
   sampleInterpolatedColor,
 } from "./math/interpolation";
 import type {
+  ConvolutionKernelHitSample,
+  ConvolutionKernelLevelData,
+  ConvolutionKernelPathGroup,
   MeshColorMode,
   PointCloudHitSample,
   PointCloudMeshData,
   PointCloudPreviewBackgroundColor,
   PointCloudPreviewCameraCommand,
+  PointCloudPreviewRenderMode,
   PointCloudPreviewViewAxis,
   PreviewCameraState,
 } from "./types";
@@ -26,11 +30,15 @@ export const maxFragmentShaderPointsPerCell = 256;
 
 type PointCloudPreviewSceneProps = {
   readonly data: PointCloudMeshData;
+  readonly renderMode: PointCloudPreviewRenderMode;
   readonly showMesh: boolean;
   readonly showPoints: boolean;
   readonly showWireframe: boolean;
+  readonly showSolidMesh: boolean;
+  readonly renderPointsAsSpheres: boolean;
   readonly showGroundPlane: boolean;
   readonly meshColorMode: MeshColorMode;
+  readonly kernelLevelIndex: number;
   readonly showNeighborDebug: boolean;
   readonly pointSize: number;
   readonly backgroundColor: PointCloudPreviewBackgroundColor;
@@ -38,8 +46,12 @@ type PointCloudPreviewSceneProps = {
   readonly brightness: number;
   readonly swapYZ: boolean;
   readonly selectedHit: PointCloudHitSample | null;
+  readonly selectedKernelHit: ConvolutionKernelHitSample | null;
   readonly cameraCommand: PointCloudPreviewCameraCommand;
   readonly onHoverSampleChange: (sample: PointCloudHitSample | null) => void;
+  readonly onHoverKernelSampleChange: (
+    sample: ConvolutionKernelHitSample | null,
+  ) => void;
   readonly onCameraStateChange: (state: PreviewCameraState) => void;
   readonly onCameraCommandApplied?: (commandId: number) => void;
   readonly onFrameRendered?: (commandId: number) => void;
@@ -55,9 +67,10 @@ type OrbitCameraControlsProps = {
 
 type SceneContentProps = Omit<
   PointCloudPreviewSceneProps,
-  "selectedHit" | "cameraCommand"
+  "selectedHit" | "selectedKernelHit" | "cameraCommand"
 > & {
   readonly highlightSample: PointCloudHitSample | null;
+  readonly highlightKernelSample: ConvolutionKernelHitSample | null;
   readonly transformMatrix: THREE.Matrix4;
   readonly inverseTransformMatrix: THREE.Matrix4;
 };
@@ -427,6 +440,53 @@ const buildScalarTexture = (values: Uint32Array): PackedTexture => {
   return { texture, width, height };
 };
 
+const findKernelLevel = (
+  levels: readonly ConvolutionKernelLevelData[],
+  levelIndex: number,
+): ConvolutionKernelLevelData | null =>
+  levels.find((level) => level.levelIndex === levelIndex) ?? levels[0] ?? null;
+
+const buildKernelPathPositions = (
+  group: ConvolutionKernelPathGroup,
+): {
+  readonly linePositions: Float32Array;
+  readonly pointPositions: Float32Array;
+} => {
+  const pointCount = group.reduce((sum, path) => sum + path.length, 0);
+  const segmentCount = group.reduce(
+    (sum, path) => sum + Math.max(0, path.length - 1),
+    0,
+  );
+  const pointPositions = new Float32Array(pointCount * 3);
+  const linePositions = new Float32Array(segmentCount * 6);
+  let pointOffset = 0;
+  let lineOffset = 0;
+
+  group.forEach((path) => {
+    path.forEach((point, pointIndex) => {
+      pointPositions[pointOffset] = point[0];
+      pointPositions[pointOffset + 1] = point[1];
+      pointPositions[pointOffset + 2] = point[2];
+      pointOffset += 3;
+
+      if (pointIndex === 0) {
+        return;
+      }
+
+      const previousPoint = path[pointIndex - 1];
+      linePositions[lineOffset] = previousPoint[0];
+      linePositions[lineOffset + 1] = previousPoint[1];
+      linePositions[lineOffset + 2] = previousPoint[2];
+      linePositions[lineOffset + 3] = point[0];
+      linePositions[lineOffset + 4] = point[1];
+      linePositions[lineOffset + 5] = point[2];
+      lineOffset += 6;
+    });
+  });
+
+  return { linePositions, pointPositions };
+};
+
 function OrbitCameraControls({
   data,
   command,
@@ -556,22 +616,221 @@ function FpsSampler({
   return null;
 }
 
+type InstancedSphereMarkersProps = {
+  readonly positions: Float32Array;
+  readonly colors?: Float32Array;
+  readonly color?: string;
+  readonly radius: number;
+  readonly opacity?: number;
+  readonly depthTest?: boolean;
+  readonly depthWrite?: boolean;
+  readonly renderOrder?: number;
+  readonly onPointerMove?: (event: ThreeEvent<PointerEvent>) => void;
+  readonly onClick?: (event: ThreeEvent<PointerEvent>) => void;
+  readonly onPointerOut?: () => void;
+};
+
+function InstancedSphereMarkers({
+  positions,
+  colors,
+  color = "#ffffff",
+  radius,
+  opacity = 1,
+  depthTest = true,
+  depthWrite = false,
+  renderOrder = 0,
+  onPointerMove,
+  onClick,
+  onPointerOut,
+}: InstancedSphereMarkersProps) {
+  const mesh = useMemo(() => {
+    const count = positions.length / 3;
+    if (count === 0) {
+      return null;
+    }
+
+    const geometry = new THREE.SphereGeometry(radius, 12, 8);
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      depthTest,
+      depthWrite,
+      opacity,
+      transparent: opacity < 1,
+    });
+    const instancedMesh = new THREE.InstancedMesh(geometry, material, count);
+    instancedMesh.renderOrder = renderOrder;
+
+    const matrix = new THREE.Matrix4();
+    const instanceColor = new THREE.Color();
+    for (let index = 0; index < count; index += 1) {
+      const offset = index * 3;
+      matrix.makeTranslation(
+        positions[offset],
+        positions[offset + 1],
+        positions[offset + 2],
+      );
+      instancedMesh.setMatrixAt(index, matrix);
+      if (colors !== undefined) {
+        instanceColor.setRGB(
+          colors[offset] ?? 1,
+          colors[offset + 1] ?? 1,
+          colors[offset + 2] ?? 1,
+        );
+        instancedMesh.setColorAt(index, instanceColor);
+      }
+    }
+    instancedMesh.instanceMatrix.needsUpdate = true;
+    if (instancedMesh.instanceColor !== null) {
+      instancedMesh.instanceColor.needsUpdate = true;
+    }
+    return instancedMesh;
+  }, [
+    color,
+    colors,
+    depthTest,
+    depthWrite,
+    opacity,
+    positions,
+    radius,
+    renderOrder,
+  ]);
+
+  useEffect(
+    () => () => {
+      mesh?.geometry.dispose();
+      const material = mesh?.material;
+      if (Array.isArray(material)) {
+        material.forEach((entry) => entry.dispose());
+      } else {
+        material?.dispose();
+      }
+    },
+    [mesh],
+  );
+
+  if (mesh === null) {
+    return null;
+  }
+
+  return (
+    <primitive
+      object={mesh}
+      onPointerMove={onPointerMove}
+      onClick={onClick}
+      onPointerOut={onPointerOut}
+    />
+  );
+}
+
+function InstancedCylinderSegments({
+  linePositions,
+  color,
+  radius,
+  depthTest,
+  renderOrder,
+}: {
+  readonly linePositions: Float32Array;
+  readonly color: string;
+  readonly radius: number;
+  readonly depthTest: boolean;
+  readonly renderOrder: number;
+}) {
+  const mesh = useMemo(() => {
+    const count = linePositions.length / 6;
+    if (count === 0) {
+      return null;
+    }
+
+    const geometry = new THREE.CylinderGeometry(1, 1, 1, 10);
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      depthTest,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    });
+    const instancedMesh = new THREE.InstancedMesh(geometry, material, count);
+    instancedMesh.renderOrder = renderOrder;
+
+    const yAxis = new THREE.Vector3(0, 1, 0);
+    const start = new THREE.Vector3();
+    const end = new THREE.Vector3();
+    const midpoint = new THREE.Vector3();
+    const direction = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    const matrix = new THREE.Matrix4();
+
+    for (let index = 0; index < count; index += 1) {
+      const offset = index * 6;
+      start.set(
+        linePositions[offset],
+        linePositions[offset + 1],
+        linePositions[offset + 2],
+      );
+      end.set(
+        linePositions[offset + 3],
+        linePositions[offset + 4],
+        linePositions[offset + 5],
+      );
+      direction.copy(end).sub(start);
+      const length = direction.length();
+      if (length <= minimumSquaredDistance) {
+        scale.set(0, 0, 0);
+        matrix.compose(start, quaternion.identity(), scale);
+        instancedMesh.setMatrixAt(index, matrix);
+        continue;
+      }
+
+      midpoint.copy(start).add(end).multiplyScalar(0.5);
+      quaternion.setFromUnitVectors(yAxis, direction.normalize());
+      scale.set(radius, length, radius);
+      matrix.compose(midpoint, quaternion, scale);
+      instancedMesh.setMatrixAt(index, matrix);
+    }
+    instancedMesh.instanceMatrix.needsUpdate = true;
+    return instancedMesh;
+  }, [color, depthTest, linePositions, radius, renderOrder]);
+
+  useEffect(
+    () => () => {
+      mesh?.geometry.dispose();
+      const material = mesh?.material;
+      if (Array.isArray(material)) {
+        material.forEach((entry) => entry.dispose());
+      } else {
+        material?.dispose();
+      }
+    },
+    [mesh],
+  );
+
+  return mesh === null ? null : <primitive object={mesh} />;
+}
+
 function SceneContent({
   data,
+  renderMode,
   showMesh,
   showPoints,
   showWireframe,
+  showSolidMesh,
+  renderPointsAsSpheres,
   showGroundPlane,
   meshColorMode,
+  kernelLevelIndex,
   showNeighborDebug,
   pointSize,
   backgroundColor,
   pointGammaCorrection,
   brightness,
   highlightSample,
+  highlightKernelSample,
   transformMatrix,
   inverseTransformMatrix,
   onHoverSampleChange,
+  onHoverKernelSampleChange,
 }: SceneContentProps) {
   const displayMeshVertexColors = useMemo(
     () =>
@@ -618,6 +877,50 @@ function SceneContent({
     geometry.computeBoundingSphere();
     return geometry;
   }, [data.pointPositions, displayPointColors]);
+
+  const activeKernelLevel = useMemo(
+    () =>
+      renderMode === "kernels"
+        ? findKernelLevel(data.convolutionKernelLevels, kernelLevelIndex)
+        : null,
+    [data.convolutionKernelLevels, kernelLevelIndex, renderMode],
+  );
+
+  const kernelAnchorGeometry = useMemo(() => {
+    if (activeKernelLevel === null) {
+      return null;
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(activeKernelLevel.anchorPositions, 3),
+    );
+    geometry.computeBoundingSphere();
+    return geometry;
+  }, [activeKernelLevel]);
+
+  const selectedKernelGroup = useMemo(() => {
+    if (
+      activeKernelLevel === null ||
+      highlightKernelSample === null ||
+      highlightKernelSample.levelIndex !== activeKernelLevel.levelIndex
+    ) {
+      return null;
+    }
+    return activeKernelLevel.groups[highlightKernelSample.groupIndex] ?? null;
+  }, [activeKernelLevel, highlightKernelSample]);
+
+  const selectedKernelPathPositions = useMemo(
+    () =>
+      selectedKernelGroup === null
+        ? {
+            linePositions: new Float32Array(),
+            pointPositions: new Float32Array(),
+          }
+        : buildKernelPathPositions(selectedKernelGroup),
+    [selectedKernelGroup],
+  );
 
   const debugLinePositions = useMemo(() => {
     if (!showNeighborDebug || highlightSample === null) {
@@ -715,7 +1018,7 @@ function SceneContent({
         data.spatialHash.maxPointsPerCell,
       ),
       side: THREE.DoubleSide,
-      wireframe: showWireframe,
+      wireframe: showWireframe && !showSolidMesh,
       polygonOffset: true,
       polygonOffsetFactor: 1,
       polygonOffsetUnits: 1,
@@ -731,6 +1034,7 @@ function SceneContent({
     fragmentShaderPointPositionTexture,
     meshColorMode,
     pointGammaCorrection,
+    showSolidMesh,
     showWireframe,
   ]);
 
@@ -739,6 +1043,7 @@ function SceneContent({
       meshGeometry.dispose();
       pointGeometry.dispose();
       debugLineGeometry?.dispose();
+      kernelAnchorGeometry?.dispose();
       fragmentShaderPointPositionTexture?.texture.dispose();
       fragmentShaderPointColorTexture?.texture.dispose();
       fragmentShaderCellOffsetTexture?.texture.dispose();
@@ -750,16 +1055,23 @@ function SceneContent({
       fragmentShaderMaterial,
       fragmentShaderPointColorTexture,
       fragmentShaderPointPositionTexture,
+      kernelAnchorGeometry,
       meshGeometry,
       pointGeometry,
     ],
   );
 
-  const markerRadius = Math.max(data.bounds.radius * 0.018, 0.004);
   const sceneRadius = Math.max(data.bounds.radius, 0.25);
   const fogNear = sceneRadius * 4;
   const fogFar = sceneRadius * 12;
-  const effectivePointSize = Math.max(data.bounds.radius * pointSize, 0.008);
+  const effectivePointSize = data.bounds.radius * pointSize;
+  const effectivePointSphereRadius = effectivePointSize * 0.5;
+  const effectiveKernelAnchorSize = data.bounds.radius * pointSize;
+  const effectiveKernelAnchorSphereRadius = effectiveKernelAnchorSize * 0.5;
+  const effectiveKernelPathPointSize = effectiveKernelAnchorSize * 0.72;
+  const effectiveKernelPathSphereRadius = effectiveKernelPathPointSize * 0.5;
+  const effectiveKernelPathCylinderRadius =
+    effectiveKernelPathSphereRadius * 0.45;
   const sceneBackgroundColor = backgroundColors[backgroundColor];
   const displayHighlightColor = useMemo(
     () =>
@@ -779,6 +1091,38 @@ function SceneContent({
       ) ?? [],
     [brightness, highlightSample?.neighbors, pointGammaCorrection],
   );
+
+  const handleKernelAnchorIntersection = (
+    event: ThreeEvent<PointerEvent>,
+  ): void => {
+    event.stopPropagation();
+    const groupIndex =
+      typeof event.instanceId === "number"
+        ? event.instanceId
+        : typeof event.index === "number"
+          ? event.index
+          : -1;
+    if (activeKernelLevel === null || groupIndex < 0) {
+      return;
+    }
+
+    if (groupIndex < 0 || groupIndex >= activeKernelLevel.groupCount) {
+      return;
+    }
+
+    const pointIndex = groupIndex * 3;
+    const group = activeKernelLevel.groups[groupIndex];
+    onHoverKernelSampleChange({
+      levelIndex: activeKernelLevel.levelIndex,
+      groupIndex,
+      point: [
+        activeKernelLevel.anchorPositions[pointIndex],
+        activeKernelLevel.anchorPositions[pointIndex + 1],
+        activeKernelLevel.anchorPositions[pointIndex + 2],
+      ],
+      pathCount: group?.length ?? 0,
+    });
+  };
 
   const handleIntersection = (event: ThreeEvent<PointerEvent>): void => {
     event.stopPropagation();
@@ -822,58 +1166,199 @@ function SceneContent({
             ]}
           />
         ) : null}
-        {showMesh ? (
-          <mesh
-            geometry={meshGeometry}
-            onPointerMove={handleIntersection}
-            onClick={handleIntersection}
-            onPointerOut={() => onHoverSampleChange(null)}
-          >
-            {fragmentShaderMaterial !== null ? (
-              <primitive object={fragmentShaderMaterial} attach="material" />
-            ) : (
-              <meshBasicMaterial
-                side={THREE.DoubleSide}
-                vertexColors
-                wireframe={showWireframe}
-                polygonOffset
-                polygonOffsetFactor={1}
-                polygonOffsetUnits={1}
-              />
-            )}
-          </mesh>
-        ) : null}
-        {showPoints ? (
-          <points geometry={pointGeometry} renderOrder={1}>
-            <pointsMaterial
-              size={effectivePointSize}
-              sizeAttenuation
-              vertexColors
-              depthWrite={false}
-            />
-          </points>
-        ) : null}
-        {showNeighborDebug && highlightSample !== null ? (
+        {renderMode === "kernels" ? (
           <>
-            <mesh position={highlightSample.point}>
-              <sphereGeometry args={[markerRadius, 18, 18]} />
-              <meshBasicMaterial color={displayHighlightColor ?? "#ffffff"} />
-            </mesh>
-            {highlightSample.neighbors.map((neighbor, index) => (
-              <mesh key={neighbor.index} position={neighbor.position}>
-                <sphereGeometry args={[markerRadius * 0.78, 16, 16]} />
+            {showMesh ? (
+              <mesh geometry={meshGeometry}>
                 <meshBasicMaterial
-                  color={displayNeighborColors[index] ?? "#ffffff"}
+                  color={showSolidMesh ? "#64748b" : "#94a3b8"}
+                  side={showSolidMesh ? THREE.FrontSide : THREE.DoubleSide}
+                  wireframe={showWireframe && !showSolidMesh}
+                  transparent={!showSolidMesh}
+                  opacity={showSolidMesh ? 1 : showWireframe ? 0.85 : 0.38}
+                  depthWrite={showSolidMesh}
+                  polygonOffset
+                  polygonOffsetFactor={1}
+                  polygonOffsetUnits={1}
                 />
               </mesh>
-            ))}
-            {debugLineGeometry !== null ? (
-              <lineSegments geometry={debugLineGeometry}>
-                <lineBasicMaterial color="#f8fafc" transparent opacity={0.75} />
-              </lineSegments>
+            ) : null}
+            {showMesh && showWireframe && showSolidMesh ? (
+              <mesh geometry={meshGeometry} renderOrder={1}>
+                <meshBasicMaterial
+                  color="#e2e8f0"
+                  side={THREE.FrontSide}
+                  wireframe
+                  transparent
+                  opacity={0.45}
+                  depthWrite={false}
+                  depthTest
+                  polygonOffset
+                  polygonOffsetFactor={-1}
+                  polygonOffsetUnits={-1}
+                />
+              </mesh>
+            ) : null}
+            {showPoints && kernelAnchorGeometry !== null ? (
+              renderPointsAsSpheres && activeKernelLevel !== null ? (
+                <InstancedSphereMarkers
+                  positions={activeKernelLevel.anchorPositions}
+                  color="#f59e0b"
+                  radius={effectiveKernelAnchorSphereRadius}
+                  opacity={0.28}
+                  depthWrite={false}
+                  depthTest={showSolidMesh}
+                  renderOrder={2}
+                  onPointerMove={handleKernelAnchorIntersection}
+                  onClick={handleKernelAnchorIntersection}
+                  onPointerOut={() => onHoverKernelSampleChange(null)}
+                />
+              ) : (
+                <points
+                  geometry={kernelAnchorGeometry}
+                  renderOrder={2}
+                  onPointerMove={handleKernelAnchorIntersection}
+                  onClick={handleKernelAnchorIntersection}
+                  onPointerOut={() => onHoverKernelSampleChange(null)}
+                >
+                  <pointsMaterial
+                    color="#f59e0b"
+                    size={effectiveKernelAnchorSize}
+                    sizeAttenuation
+                    transparent
+                    opacity={0.28}
+                    depthWrite={false}
+                    depthTest={showSolidMesh}
+                  />
+                </points>
+              )
+            ) : null}
+            {highlightKernelSample !== null ? (
+              <>
+                <mesh position={highlightKernelSample.point} renderOrder={4}>
+                  <sphereGeometry
+                    args={[effectiveKernelAnchorSphereRadius, 16, 12]}
+                  />
+                  <meshBasicMaterial
+                    color="#f59e0b"
+                    depthTest={showSolidMesh}
+                  />
+                </mesh>
+                {selectedKernelPathPositions.linePositions.length > 0 ? (
+                  <InstancedCylinderSegments
+                    linePositions={selectedKernelPathPositions.linePositions}
+                    color="#06b6d4"
+                    radius={effectiveKernelPathCylinderRadius}
+                    depthTest={showSolidMesh}
+                    renderOrder={3}
+                  />
+                ) : null}
+                {selectedKernelPathPositions.pointPositions.length > 0 ? (
+                  <InstancedSphereMarkers
+                    positions={selectedKernelPathPositions.pointPositions}
+                    color="#f8fafc"
+                    radius={effectiveKernelPathSphereRadius}
+                    depthWrite={false}
+                    depthTest={showSolidMesh}
+                    renderOrder={3}
+                  />
+                ) : null}
+              </>
             ) : null}
           </>
-        ) : null}
+        ) : (
+          <>
+            {showMesh ? (
+              <mesh
+                geometry={meshGeometry}
+                onPointerMove={handleIntersection}
+                onClick={handleIntersection}
+                onPointerOut={() => onHoverSampleChange(null)}
+              >
+                {fragmentShaderMaterial !== null ? (
+                  <primitive
+                    object={fragmentShaderMaterial}
+                    attach="material"
+                  />
+                ) : (
+                  <meshBasicMaterial
+                    side={THREE.DoubleSide}
+                    vertexColors
+                    wireframe={showWireframe && !showSolidMesh}
+                    polygonOffset
+                    polygonOffsetFactor={1}
+                    polygonOffsetUnits={1}
+                  />
+                )}
+              </mesh>
+            ) : null}
+            {showMesh && showWireframe && showSolidMesh ? (
+              <mesh geometry={meshGeometry} renderOrder={1}>
+                <meshBasicMaterial
+                  color="#0f172a"
+                  side={THREE.DoubleSide}
+                  wireframe
+                  transparent
+                  opacity={0.45}
+                  depthWrite={false}
+                  depthTest
+                  polygonOffset
+                  polygonOffsetFactor={-1}
+                  polygonOffsetUnits={-1}
+                />
+              </mesh>
+            ) : null}
+            {showPoints ? (
+              renderPointsAsSpheres ? (
+                <InstancedSphereMarkers
+                  positions={data.pointPositions}
+                  colors={displayPointColors}
+                  radius={effectivePointSphereRadius}
+                  depthWrite={false}
+                  renderOrder={1}
+                />
+              ) : (
+                <points geometry={pointGeometry} renderOrder={1}>
+                  <pointsMaterial
+                    size={effectivePointSize}
+                    sizeAttenuation
+                    vertexColors
+                    depthWrite={false}
+                  />
+                </points>
+              )
+            ) : null}
+            {showNeighborDebug && highlightSample !== null ? (
+              <>
+                <mesh position={highlightSample.point}>
+                  <sphereGeometry args={[effectivePointSphereRadius, 16, 12]} />
+                  <meshBasicMaterial
+                    color={displayHighlightColor ?? "#ffffff"}
+                  />
+                </mesh>
+                {highlightSample.neighbors.map((neighbor, index) => (
+                  <mesh key={neighbor.index} position={neighbor.position}>
+                    <sphereGeometry
+                      args={[effectivePointSphereRadius * 0.78, 14, 10]}
+                    />
+                    <meshBasicMaterial
+                      color={displayNeighborColors[index] ?? "#ffffff"}
+                    />
+                  </mesh>
+                ))}
+                {debugLineGeometry !== null ? (
+                  <lineSegments geometry={debugLineGeometry}>
+                    <lineBasicMaterial
+                      color="#f8fafc"
+                      transparent
+                      opacity={0.75}
+                    />
+                  </lineSegments>
+                ) : null}
+              </>
+            ) : null}
+          </>
+        )}
       </group>
     </>
   );
@@ -881,11 +1366,15 @@ function SceneContent({
 
 export function PointCloudPreviewScene({
   data,
+  renderMode,
   showMesh,
   showPoints,
   showWireframe,
+  showSolidMesh,
+  renderPointsAsSpheres,
   showGroundPlane,
   meshColorMode,
+  kernelLevelIndex,
   showNeighborDebug,
   pointSize,
   backgroundColor,
@@ -893,8 +1382,10 @@ export function PointCloudPreviewScene({
   brightness,
   swapYZ,
   selectedHit,
+  selectedKernelHit,
   cameraCommand,
   onHoverSampleChange,
+  onHoverKernelSampleChange,
   onCameraStateChange,
   onCameraCommandApplied,
   onFrameRendered,
@@ -941,6 +1432,7 @@ export function PointCloudPreviewScene({
     () => transformMatrix.clone().invert(),
     [transformMatrix],
   );
+  const pointRaycastThreshold = Math.max(data.bounds.radius * 0.035, 0.01);
 
   return (
     <div
@@ -951,6 +1443,15 @@ export function PointCloudPreviewScene({
         camera={{ fov: 42, near: 0.01, far: 1000, position: [3, 2, 3] }}
         dpr={[1, 2]}
         gl={{ antialias: true, alpha: false, preserveDrawingBuffer: true }}
+        raycaster={{
+          params: {
+            Mesh: {},
+            Line: { threshold: 1 },
+            LOD: {},
+            Points: { threshold: pointRaycastThreshold },
+            Sprite: {},
+          },
+        }}
       >
         <OrbitCameraControls
           data={data}
@@ -965,11 +1466,15 @@ export function PointCloudPreviewScene({
         <FpsSampler onFramesPerSecondChange={onFramesPerSecondChange} />
         <SceneContent
           data={data}
+          renderMode={renderMode}
           showMesh={showMesh}
           showPoints={showPoints}
           showWireframe={showWireframe}
+          showSolidMesh={showSolidMesh}
+          renderPointsAsSpheres={renderPointsAsSpheres}
           showGroundPlane={showGroundPlane}
           meshColorMode={meshColorMode}
+          kernelLevelIndex={kernelLevelIndex}
           showNeighborDebug={showNeighborDebug}
           pointSize={pointSize}
           backgroundColor={backgroundColor}
@@ -977,9 +1482,11 @@ export function PointCloudPreviewScene({
           brightness={brightness}
           swapYZ={swapYZ}
           highlightSample={selectedHit}
+          highlightKernelSample={selectedKernelHit}
           transformMatrix={transformMatrix}
           inverseTransformMatrix={inverseTransformMatrix}
           onHoverSampleChange={onHoverSampleChange}
+          onHoverKernelSampleChange={onHoverKernelSampleChange}
           onCameraStateChange={onCameraStateChange}
           onFramesPerSecondChange={onFramesPerSecondChange}
         />

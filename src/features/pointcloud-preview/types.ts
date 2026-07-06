@@ -1,11 +1,26 @@
 import type { KdTree3DNode } from "../../ml/geometry/kdTree3d";
 
-export type PointCloudMeshJson = {
+export type ConvolutionKernelPathPoint = readonly [number, number, number];
+
+export type ConvolutionKernelPath = readonly ConvolutionKernelPathPoint[];
+
+export type ConvolutionKernelPathGroup = readonly ConvolutionKernelPath[];
+
+export type ConvolutionKernelLevelJson = readonly ConvolutionKernelPathGroup[];
+
+export type PointCloudMeshBaseJson = {
   readonly m_verts: readonly (readonly [number, number, number])[];
   readonly m_faces: readonly (readonly [number, number, number])[];
   readonly pc_xyz: readonly (readonly [number, number, number])[];
   readonly pc_rgb: readonly (readonly [number, number, number])[];
 };
+
+export type PointCloudMeshJson = PointCloudMeshBaseJson &
+  Partial<Record<`level_${number}_paths`, ConvolutionKernelLevelJson>>;
+
+export type PointCloudMeshSourceKind =
+  | "point-cloud-mesh"
+  | "convolution-kernels";
 
 export type Bounds3D = {
   readonly min: readonly [number, number, number];
@@ -26,7 +41,16 @@ export type SpatialHashGrid3D = {
   readonly maxPointsPerCell: number;
 };
 
+export type ConvolutionKernelLevelData = {
+  readonly levelIndex: number;
+  readonly label: string;
+  readonly groups: readonly ConvolutionKernelPathGroup[];
+  readonly anchorPositions: Float32Array;
+  readonly groupCount: number;
+};
+
 export type PointCloudMeshData = {
+  readonly sourceKind: PointCloudMeshSourceKind;
   readonly meshPositions: Float32Array;
   readonly meshIndices: Uint32Array;
   readonly meshVertexColors: Float32Array;
@@ -38,6 +62,7 @@ export type PointCloudMeshData = {
   readonly pointCount: number;
   readonly bounds: Bounds3D;
   readonly kdTree: KdTree3DNode | null;
+  readonly convolutionKernelLevels: readonly ConvolutionKernelLevelData[];
 };
 
 export type NeighborSample = {
@@ -53,12 +78,21 @@ export type PointCloudHitSample = {
   readonly neighbors: readonly NeighborSample[];
 };
 
+export type ConvolutionKernelHitSample = {
+  readonly levelIndex: number;
+  readonly groupIndex: number;
+  readonly point: readonly [number, number, number];
+  readonly pathCount: number;
+};
+
 export type PreviewCameraState = {
   readonly position: readonly [number, number, number];
   readonly target: readonly [number, number, number];
 };
 
 export type MeshColorMode = "baked" | "fragment-knn";
+
+export type PointCloudPreviewRenderMode = "surface" | "kernels";
 
 export type PointCloudPreviewBackgroundColor = "default" | "black" | "white";
 
@@ -87,11 +121,15 @@ export type PointCloudPreviewCameraCommand =
     };
 
 export type PointCloudPreviewViewSettings = {
+  readonly renderMode: PointCloudPreviewRenderMode;
   readonly showMesh: boolean;
   readonly showPoints: boolean;
   readonly showWireframe: boolean;
+  readonly showSolidMesh: boolean;
+  readonly renderPointsAsSpheres: boolean;
   readonly showGroundPlane: boolean;
   readonly meshColorMode: MeshColorMode;
+  readonly kernelLevelIndex: number;
   readonly pointSize: number;
   readonly backgroundColor: PointCloudPreviewBackgroundColor;
   readonly disableGammaDecoding: boolean;

@@ -16,6 +16,7 @@ import type {
   UploadedPointCloudFileStatus,
 } from "./pointCloudPreviewModels";
 import type {
+  PointCloudMeshData,
   PointCloudPreviewViewSettings,
   PreviewCameraState,
 } from "./types";
@@ -67,7 +68,7 @@ type UsePointCloudScreenshotsControllerOptions = {
   ) => void;
   readonly savedViewpoints: readonly SavedViewpoint[];
   readonly currentCameraState: PreviewCameraState | null;
-  readonly swapYZ: boolean;
+  readonly viewSettings: PointCloudPreviewViewSettings;
   readonly updateViewSettings: (
     patch: Partial<PointCloudPreviewViewSettings>,
   ) => void;
@@ -216,7 +217,7 @@ export const usePointCloudScreenshotsController = ({
   setUploadedFileStatus,
   savedViewpoints,
   currentCameraState,
-  swapYZ,
+  viewSettings,
   updateViewSettings,
   issueCameraCommand,
   resetPreviewInteraction,
@@ -307,22 +308,49 @@ export const usePointCloudScreenshotsController = ({
     [resolveCommandSignals],
   );
 
+  const viewSettingsForTemporaryData = useCallback(
+    (
+      data: PointCloudMeshData,
+      swapYZ: boolean,
+    ): PointCloudPreviewViewSettings => {
+      const hasKernelPreview = data.convolutionKernelLevels.length > 0;
+      const canKeepKernelMode =
+        viewSettings.renderMode === "kernels" && hasKernelPreview;
+      const hasSelectedKernelLevel =
+        canKeepKernelMode &&
+        data.convolutionKernelLevels.some(
+          (level) => level.levelIndex === viewSettings.kernelLevelIndex,
+        );
+
+      return {
+        ...viewSettings,
+        renderMode: canKeepKernelMode ? "kernels" : "surface",
+        kernelLevelIndex: hasSelectedKernelLevel
+          ? viewSettings.kernelLevelIndex
+          : (data.convolutionKernelLevels[0]?.levelIndex ??
+            viewSettings.kernelLevelIndex),
+        swapYZ,
+      };
+    },
+    [viewSettings],
+  );
+
   const restorePreviewAfterBatch = useCallback(
     async ({
       previousAssetState,
       previousActiveUploadedFileId,
       previousCameraState,
-      previousSwapYZ,
+      previousViewSettings,
     }: {
       readonly previousAssetState: LoadedAssetState;
       readonly previousActiveUploadedFileId: number | null;
       readonly previousCameraState: PreviewCameraState;
-      readonly previousSwapYZ: boolean;
+      readonly previousViewSettings: PointCloudPreviewViewSettings;
     }): Promise<void> => {
       setAssetState(previousAssetState);
       setActiveUploadedFileId(previousActiveUploadedFileId);
       resetPreviewInteraction();
-      updateViewSettings({ swapYZ: previousSwapYZ });
+      updateViewSettings(previousViewSettings);
       const commandId = issueCameraCommand({
         type: "restore",
         camera: previousCameraState,
@@ -366,7 +394,7 @@ export const usePointCloudScreenshotsController = ({
     const previousAssetState = assetState;
     const previousActiveUploadedFileId = activeUploadedFileId;
     const previousCameraState = currentCameraState;
-    const previousSwapYZ = swapYZ;
+    const previousViewSettings = viewSettings;
     const timestamp = screenshotTimestampLabel(new Date());
     const total = uploadedFiles.length * selectedViewpoints.length;
     const zipEntries: { readonly name: string; readonly data: Uint8Array }[] =
@@ -411,7 +439,9 @@ export const usePointCloudScreenshotsController = ({
             total,
             label: `${uploadedFile.label} at ${viewpoint.label}`,
           });
-          updateViewSettings({ swapYZ: viewpoint.swapYZ });
+          updateViewSettings(
+            viewSettingsForTemporaryData(meshData, viewpoint.swapYZ),
+          );
           const commandId = issueCameraCommand({
             type: "restore",
             camera: viewpoint.camera,
@@ -445,7 +475,7 @@ export const usePointCloudScreenshotsController = ({
         previousAssetState,
         previousActiveUploadedFileId,
         previousCameraState,
-        previousSwapYZ,
+        previousViewSettings,
       });
       setBatchScreenshotProgress({
         completed: total,
@@ -466,7 +496,7 @@ export const usePointCloudScreenshotsController = ({
           previousAssetState,
           previousActiveUploadedFileId,
           previousCameraState,
-          previousSwapYZ,
+          previousViewSettings,
         });
       } catch {
         // Preserve the original batch error because it identifies the failed item.
@@ -493,9 +523,10 @@ export const usePointCloudScreenshotsController = ({
     setActiveUploadedFileId,
     setAssetState,
     setUploadedFileStatus,
-    swapYZ,
     updateViewSettings,
     uploadedFiles,
+    viewSettings,
+    viewSettingsForTemporaryData,
     waitForCommandSignal,
   ]);
 
@@ -512,7 +543,7 @@ export const usePointCloudScreenshotsController = ({
       const previousAssetState = assetState;
       const previousActiveUploadedFileId = activeUploadedFileId;
       const previousCameraState = currentCameraState;
-      const previousSwapYZ = swapYZ;
+      const previousViewSettings = viewSettings;
       const timestamp = screenshotTimestampLabel(new Date());
       const leftLabelWidth = 220;
       const topLabelHeight = 88;
@@ -688,7 +719,9 @@ export const usePointCloudScreenshotsController = ({
             });
             setActiveUploadedFileId(null);
             resetPreviewInteraction();
-            updateViewSettings({ swapYZ: request.viewpoint.swapYZ });
+            updateViewSettings(
+              viewSettingsForTemporaryData(meshData, request.viewpoint.swapYZ),
+            );
             const commandId = issueCameraCommand({
               type: "restore",
               camera: request.viewpoint.camera,
@@ -727,7 +760,7 @@ export const usePointCloudScreenshotsController = ({
           previousAssetState,
           previousActiveUploadedFileId,
           previousCameraState,
-          previousSwapYZ,
+          previousViewSettings,
         });
 
         const pngBytes = await canvasPngBytes(outputCanvas);
@@ -750,7 +783,7 @@ export const usePointCloudScreenshotsController = ({
             previousAssetState,
             previousActiveUploadedFileId,
             previousCameraState,
-            previousSwapYZ,
+            previousViewSettings,
           });
         } catch {
           // Preserve the original export error because it identifies the failed cell.
@@ -770,8 +803,9 @@ export const usePointCloudScreenshotsController = ({
       restorePreviewAfterBatch,
       setActiveUploadedFileId,
       setAssetState,
-      swapYZ,
       updateViewSettings,
+      viewSettings,
+      viewSettingsForTemporaryData,
       waitForCommandSignal,
     ],
   );

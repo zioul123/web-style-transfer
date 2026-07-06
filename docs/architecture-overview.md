@@ -77,23 +77,28 @@ not couple preview-only behavior back into the optimization stack.
 The route currently provides:
 
 - loading of committed demo assets or a session-local queue of uploaded
-  mesh-plus-point-cloud JSON exports, with inactive uploads kept as `File`
-  references until selected;
+  mesh-plus-point-cloud JSON exports, including optional convolution-kernel
+  geodesic path levels, with inactive uploads kept as `File` references until
+  selected;
 - an Ablation tab for experiment-folder inspection, including filename parsing,
   X/Y axis selection, fixed configuration filters, matrix availability states,
   and transient preview loading for unique cells without adding those files to
   the manual upload queue;
-- JSON validation, typed-array conversion, bounds calculation, and precomputed
-  baked vertex colours in `loadPointCloudMesh.ts`;
+- JSON validation, optional convolution-kernel level parsing, typed-array
+  conversion, bounds calculation, and precomputed baked vertex colours in
+  `loadPointCloudMesh.ts`;
 - exact CPU-side 3-nearest-neighbour hit inspection via the shared
   `src/ml/geometry/kdTree3d.ts` helper and feature-local
   `math/interpolation.ts`;
 - fragment-space mesh colouring backed by a feature-local spatial hash in
   `math/spatialHash3d.ts`, with fallback to baked vertex colours when a dense
   cell would exceed current shader bounds;
-- browser-only view state such as mesh/point toggles, gamma and brightness
-  controls, screenshots, and saved viewpoints persisted in local storage across
-  datasets on this route.
+- a route-local Kernels render mode for convolution exports, where the scene
+  renders mesh geometry plus selected-level kernel anchors and hover-selected
+  geodesic path traces without using the worker pipeline;
+- browser-only view state such as mesh/point toggles, solid mesh occlusion,
+  point sphere rendering, gamma and brightness controls, screenshots, and saved
+  viewpoints persisted in local storage across datasets on this route.
 
 `PointCloudPreviewScene.tsx` owns the R3F canvas, point/mesh materials,
 fragment-shader textures, hit overlays, camera commands, and FPS sampling.
@@ -264,15 +269,17 @@ The app resolves model URLs through `src/shared/assetUrls.ts`:
    `/pointcloud-preview` after the Vite base.
 2. The route loads the committed medium example or parses an uploaded JSON
    export with `loadPointCloudMesh.ts`.
-3. The loader validates the four-array schema, builds typed arrays, computes
-   bounds, precomputes baked mesh colours, and derives both k-d tree and
-   spatial-hash lookup structures.
-4. `PointCloudPreviewScene.tsx` renders the mesh and aligned point cloud,
-   switching between baked colours and spatial-hash fragment-KNN shading as the
-   dataset allows.
+3. The loader validates the required four-array schema plus optional
+   convolution-kernel path levels, builds typed arrays, computes bounds,
+   precomputes baked mesh colours, and derives both k-d tree and spatial-hash
+   lookup structures.
+4. `PointCloudPreviewScene.tsx` renders either the mesh and aligned point
+   cloud, switching between baked colours and spatial-hash fragment-KNN shading
+   as the dataset allows, or a kernel preview with selected-level anchors and
+   hover-selected geodesic traces.
 5. Mesh hover hits use the CPU k-d tree path for exact nearest-3 inspection,
-   while route-local React state tracks controls, screenshots, and saved
-   viewpoints in browser storage.
+   kernel-anchor hover uses parsed geodesic groups, and route-local React state
+   tracks controls, screenshots, and saved viewpoints in browser storage.
 6. The Ablation tab parses selected experiment filenames without reading JSON
    contents, builds filters and an availability matrix from parsed dimensions,
    and reads a file only when a unique cell is clicked for transient preview.

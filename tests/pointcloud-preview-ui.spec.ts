@@ -26,6 +26,40 @@ const validUploadJson = JSON.stringify({
   ],
 });
 
+const buildKernelPathGroup = (anchor: readonly [number, number, number]) =>
+  Array.from({ length: 8 }, (_, pathIndex) => [
+    anchor,
+    [anchor[0] + (pathIndex + 1) * 0.08, anchor[1], anchor[2] + 0.2],
+  ]);
+
+const convolutionKernelUploadJson = JSON.stringify({
+  pc_xyz: [
+    [0.9, 0, -0.2],
+    [0.75, -0.25, 0],
+    [0.75, 0.25, 0],
+  ],
+  pc_rgb: [
+    [0.43, 0.54, 0.42],
+    [0.19, 0.31, 0.44],
+    [0.28, 0.4, 0.49],
+  ],
+  m_verts: [
+    [-1, 0, 1],
+    [1, 0, 1],
+    [1, 0, -1],
+    [-1, 0, -1],
+  ],
+  m_faces: [
+    [0, 1, 2],
+    [0, 2, 3],
+  ],
+  level_0_paths: [
+    buildKernelPathGroup([0, 0, 0]),
+    buildKernelPathGroup([0.5, 0, 0.25]),
+  ],
+  level_1_paths: [buildKernelPathGroup([0.25, 0, 0.5])],
+});
+
 const alternateUploadJson = JSON.stringify({
   pc_xyz: [
     [-0.9, 0, 0.2],
@@ -77,6 +111,29 @@ const appendedUploadJson = JSON.stringify({
     [1, 0, 1],
     [1, 0, -1],
     [-1, 0, -1],
+  ],
+  m_faces: [
+    [0, 1, 2],
+    [0, 2, 3],
+  ],
+});
+
+const saturatedPointUploadJson = JSON.stringify({
+  pc_xyz: [
+    [-0.4, 0, 0],
+    [0, 0, 0],
+    [0.4, 0, 0],
+  ],
+  pc_rgb: [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+  ],
+  m_verts: [
+    [-1, -0.5, -0.5],
+    [1, -0.5, -0.5],
+    [1, 0.5, -0.5],
+    [-1, 0.5, -0.5],
   ],
   m_faces: [
     [0, 1, 2],
@@ -160,6 +217,43 @@ const readPreviewBackgroundPixel = async (
     const pixel = new Uint8Array(4);
     context.readPixels(1, 1, 1, 1, context.RGBA, context.UNSIGNED_BYTE, pixel);
     return Array.from(pixel);
+  });
+
+const readPreviewColorPixelCount = async (
+  previewCanvas: Locator,
+): Promise<number> =>
+  previewCanvas.locator("canvas").evaluate((canvas) => {
+    const target = canvas as HTMLCanvasElement;
+    const context = target.getContext("webgl2") ?? target.getContext("webgl");
+    if (context === null) {
+      throw new Error("Point-cloud preview WebGL context is unavailable.");
+    }
+
+    const width = target.width;
+    const height = target.height;
+    const pixels = new Uint8Array(width * height * 4);
+    context.readPixels(
+      0,
+      0,
+      width,
+      height,
+      context.RGBA,
+      context.UNSIGNED_BYTE,
+      pixels,
+    );
+
+    let colorPixelCount = 0;
+    for (let offset = 0; offset < pixels.length; offset += 4) {
+      const red = pixels[offset] ?? 0;
+      const green = pixels[offset + 1] ?? 0;
+      const blue = pixels[offset + 2] ?? 0;
+      const maxChannel = Math.max(red, green, blue);
+      const minChannel = Math.min(red, green, blue);
+      if (maxChannel >= 180 && maxChannel - minChannel >= 100) {
+        colorPixelCount += 1;
+      }
+    }
+    return colorPixelCount;
   });
 
 const readCameraState = async (
@@ -971,6 +1065,50 @@ test("point-cloud preview reports upload errors and recovers on a valid upload",
   ).toHaveCount(0);
 });
 
+test("point-cloud preview exposes kernel render mode for convolution uploads", async ({
+  page,
+}) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await expect(page.getByTestId("render-mode-kernels-button")).toHaveCount(0);
+
+  const fileInput = page.getByTestId("pointcloud-upload-input");
+  await fileInput.setInputFiles({
+    name: "tiny-kernels.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(convolutionKernelUploadJson, "utf8"),
+  });
+
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+  await expect(page.getByTestId("render-mode-kernels-button")).toBeVisible();
+  await page.getByTestId("render-mode-kernels-button").click();
+  await expect(page.getByTestId("render-mode-kernels-button")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.getByTestId("kernel-level-select")).toHaveValue("0");
+  await expect(page.getByTestId("mesh-color-mode-status")).toContainText(
+    /Kernel preview active.*2 anchors/i,
+  );
+
+  await page.getByTestId("kernel-level-select").selectOption("1");
+  await expect(page.getByTestId("kernel-level-select")).toHaveValue("1");
+  await expect(page.getByTestId("mesh-color-mode-status")).toContainText(
+    /Kernel preview active.*1 anchors/i,
+  );
+
+  await page.getByTestId("render-mode-surface-button").click();
+  await expect(page.getByTestId("kernel-level-select")).toHaveCount(0);
+
+  await fileInput.setInputFiles({
+    name: "legacy-upload.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(validUploadJson, "utf8"),
+  });
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+  await expect(page.getByTestId("render-mode-kernels-button")).toHaveCount(0);
+});
+
 test("point-cloud preview queues multiple uploads and lazily switches between them", async ({
   page,
 }) => {
@@ -1183,13 +1321,36 @@ test("point-cloud preview disables dependent controls and saves viewpoints", asy
   await gotoStableApp(page, "/pointcloud-preview");
 
   await expect(page.getByTestId("point-size-slider")).toBeDisabled();
+  await expect(page.getByTestId("toggle-point-spheres-button")).toBeDisabled();
+  await expect(page.getByTestId("toggle-point-spheres-button")).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
   await page.getByTestId("toggle-points-button").click();
   await expect(page.getByTestId("point-size-slider")).toBeEnabled();
+  await expect(page.getByTestId("toggle-point-spheres-button")).toBeEnabled();
+  await page.getByTestId("toggle-point-spheres-button").click();
+  await expect(page.getByTestId("toggle-point-spheres-button")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await page.getByTestId("toggle-points-button").click();
   await expect(page.getByTestId("point-size-slider")).toBeDisabled();
+  await expect(page.getByTestId("toggle-point-spheres-button")).toBeDisabled();
 
   await page.getByTestId("toggle-mesh-button").click();
   await expect(page.getByTestId("toggle-wireframe-button")).toBeDisabled();
+  await expect(page.getByTestId("toggle-solid-mesh-button")).toBeDisabled();
+  await expect(page.getByTestId("toggle-solid-mesh-button")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await page.getByTestId("toggle-mesh-button").click();
+  await page.getByTestId("toggle-solid-mesh-button").click();
+  await expect(page.getByTestId("toggle-solid-mesh-button")).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
 
   await page.getByTestId("save-viewpoint-button").click();
   await expect(page.getByTestId("viewpoint-go-1")).toBeVisible();
@@ -1222,6 +1383,29 @@ test("point-cloud preview disables dependent controls and saves viewpoints", asy
 
   await page.reload();
   await expect(page.getByTestId("viewpoint-go-1")).toHaveCount(0);
+});
+
+test("point-cloud preview renders point spheres with point colors", async ({
+  page,
+}) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await page.getByTestId("pointcloud-upload-input").setInputFiles({
+    name: "saturated-points.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(saturatedPointUploadJson, "utf8"),
+  });
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+
+  await page.getByTestId("toggle-mesh-button").click();
+  await page.getByTestId("toggle-points-button").click();
+  await page.getByTestId("toggle-point-spheres-button").click();
+  await page.getByTestId("point-size-slider").fill("0.12");
+
+  const previewCanvas = page.getByTestId("pointcloud-preview-canvas");
+  await expect
+    .poll(() => readPreviewColorPixelCount(previewCanvas), { timeout: 10_000 })
+    .toBeGreaterThan(100);
 });
 
 test("point-cloud preview shows and copies saved viewpoint camera details", async ({
@@ -1433,6 +1617,56 @@ test("point-cloud preview downloads every mesh and selected viewpoint in one ZIP
   await expect(page.getByTestId("swap-yz-button")).toHaveText(/Flip Y and Z/i);
   await expect(page.getByTestId("camera-state")).toHaveText(
     cameraStateBeforeBatch!,
+  );
+});
+
+test("point-cloud batch screenshots restore kernel render settings", async ({
+  page,
+}) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await page.getByTestId("pointcloud-upload-input").setInputFiles([
+    {
+      name: "kernels-a.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(convolutionKernelUploadJson, "utf8"),
+    },
+    {
+      name: "kernels-b.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(convolutionKernelUploadJson, "utf8"),
+    },
+  ]);
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+  await page.getByTestId("render-mode-kernels-button").click();
+  await page.getByTestId("kernel-level-select").selectOption("1");
+  await expect(page.getByTestId("mesh-color-mode-status")).toContainText(
+    /Kernel preview active.*1 anchors/i,
+  );
+
+  await page.getByTestId("save-viewpoint-button").click();
+  await page.getByTestId("viewpoint-name-1").fill("Kernel view");
+  await page.getByTestId("batch-screenshot-button").click();
+  await page.getByTestId("batch-screenshot-select-all").click();
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByTestId("batch-screenshot-download").click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(
+    /^pointcloud-batch-screenshots-\d{8}-\d{6}\.zip$/,
+  );
+
+  await expect(page.getByTestId("batch-screenshot-modal")).toHaveCount(0);
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "kernels-a.json",
+  );
+  await expect(page.getByTestId("render-mode-kernels-button")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.getByTestId("kernel-level-select")).toHaveValue("1");
+  await expect(page.getByTestId("mesh-color-mode-status")).toContainText(
+    /Kernel preview active.*1 anchors/i,
   );
 });
 

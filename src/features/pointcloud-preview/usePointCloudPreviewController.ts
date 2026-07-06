@@ -7,6 +7,7 @@ import {
   type SetStateAction,
 } from "react";
 import type {
+  ConvolutionKernelHitSample,
   PointCloudHitSample,
   PointCloudPreviewCameraCommand,
   PointCloudPreviewViewAxis,
@@ -18,11 +19,15 @@ export const defaultPointCloudPreviewPointSize = 0.035;
 
 export const defaultPointCloudPreviewViewSettings: PointCloudPreviewViewSettings =
   {
+    renderMode: "surface",
     showMesh: true,
     showPoints: false,
     showWireframe: false,
+    showSolidMesh: true,
+    renderPointsAsSpheres: false,
     showGroundPlane: false,
     meshColorMode: "fragment-knn",
+    kernelLevelIndex: 0,
     pointSize: defaultPointCloudPreviewPointSize,
     backgroundColor: "white",
     disableGammaDecoding: false,
@@ -58,6 +63,10 @@ export type PointCloudPreviewController = {
   ) => void;
   readonly selectedHit: PointCloudHitSample | null;
   readonly setSelectedHit: Dispatch<SetStateAction<PointCloudHitSample | null>>;
+  readonly selectedKernelHit: ConvolutionKernelHitSample | null;
+  readonly setSelectedKernelHit: Dispatch<
+    SetStateAction<ConvolutionKernelHitSample | null>
+  >;
   readonly framesPerSecond: number;
   readonly setFramesPerSecond: Dispatch<SetStateAction<number>>;
   readonly cameraCommand: PointCloudPreviewCameraCommand;
@@ -84,6 +93,8 @@ export const usePointCloudPreviewController = ({
   const [selectedHit, setSelectedHit] = useState<PointCloudHitSample | null>(
     null,
   );
+  const [selectedKernelHit, setSelectedKernelHit] =
+    useState<ConvolutionKernelHitSample | null>(null);
   const [cameraCommand, setCameraCommand] =
     useState<PointCloudPreviewCameraCommand>({
       id: 0,
@@ -128,6 +139,7 @@ export const usePointCloudPreviewController = ({
   const resetPreviewInteraction = useCallback(
     (options: ResetPreviewInteractionOptions = {}): void => {
       setSelectedHit(null);
+      setSelectedKernelHit(null);
       setFramesPerSecond(0);
       if (options.clearCameraState === true) {
         cameraStateRef.current = null;
@@ -142,6 +154,8 @@ export const usePointCloudPreviewController = ({
     updateViewSettings,
     selectedHit,
     setSelectedHit,
+    selectedKernelHit,
+    setSelectedKernelHit,
     framesPerSecond,
     setFramesPerSecond,
     cameraCommand,

@@ -1,9 +1,20 @@
 import { buildMeshVertexColors } from "./math/interpolation";
 import { buildKdTree3d } from "../../ml/geometry/kdTree3d";
 import { buildSpatialHashGrid3d } from "./math/spatialHash3d";
-import type { Bounds3D, PointCloudMeshData, PointCloudMeshJson } from "./types";
+import type {
+  Bounds3D,
+  ConvolutionKernelLevelData,
+  ConvolutionKernelPath,
+  ConvolutionKernelPathGroup,
+  ConvolutionKernelPathPoint,
+  PointCloudMeshBaseJson,
+  PointCloudMeshData,
+  PointCloudMeshJson,
+} from "./types";
 
 const dimensionsPerEntry = 3;
+const pathsPerKernelGroup = 8;
+const kernelLevelKeyPattern = /^level_(\d+)_paths$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -15,7 +26,7 @@ const clampColor = (value: number): number => Math.min(1, Math.max(0, value));
 
 const parseVectorTriples = (
   value: unknown,
-  fieldName: keyof PointCloudMeshJson,
+  fieldName: keyof PointCloudMeshBaseJson,
   options?: {
     readonly clampValues?: boolean;
     readonly integerValues?: boolean;
@@ -108,6 +119,108 @@ const computeBounds = (meshPositions: Float32Array): Bounds3D => {
   };
 };
 
+const parseKernelPathPoint = (
+  value: unknown,
+  fieldPath: string,
+): ConvolutionKernelPathPoint => {
+  if (!Array.isArray(value) || value.length !== dimensionsPerEntry) {
+    throw new Error(`${fieldPath} must contain exactly 3 numeric values.`);
+  }
+
+  const coordinates = value.map((coordinate, coordinateIndex) => {
+    if (!isFiniteNumber(coordinate)) {
+      throw new Error(
+        `${fieldPath}[${coordinateIndex}] must be a finite number.`,
+      );
+    }
+    return coordinate;
+  });
+
+  return [coordinates[0], coordinates[1], coordinates[2]];
+};
+
+const parseConvolutionKernelLevel = (
+  value: unknown,
+  levelKey: string,
+  levelIndex: number,
+): ConvolutionKernelLevelData => {
+  if (!Array.isArray(value)) {
+    throw new Error(`${levelKey} must be an array of 8-path groups.`);
+  }
+
+  const groups: ConvolutionKernelPathGroup[] = value.map(
+    (rawGroup, groupIndex): ConvolutionKernelPathGroup => {
+      const groupPath = `${levelKey}[${groupIndex}]`;
+      if (!Array.isArray(rawGroup) || rawGroup.length !== pathsPerKernelGroup) {
+        throw new Error(
+          `${groupPath} must contain exactly ${pathsPerKernelGroup} geodesic paths.`,
+        );
+      }
+
+      return rawGroup.map((rawPath, pathIndex): ConvolutionKernelPath => {
+        const pathPath = `${groupPath}[${pathIndex}]`;
+        if (!Array.isArray(rawPath) || rawPath.length === 0) {
+          throw new Error(
+            `${pathPath} must contain at least one 3-number coordinate.`,
+          );
+        }
+        return rawPath.map((rawPoint, pointIndex) =>
+          parseKernelPathPoint(rawPoint, `${pathPath}[${pointIndex}]`),
+        );
+      });
+    },
+  );
+
+  const anchorPositions = new Float32Array(groups.length * dimensionsPerEntry);
+  groups.forEach((group, groupIndex) => {
+    const anchor = group[0]?.[0];
+    if (anchor === undefined) {
+      throw new Error(
+        `${levelKey}[${groupIndex}] must contain at least one anchor coordinate.`,
+      );
+    }
+    const targetIndex = groupIndex * dimensionsPerEntry;
+    anchorPositions[targetIndex] = anchor[0];
+    anchorPositions[targetIndex + 1] = anchor[1];
+    anchorPositions[targetIndex + 2] = anchor[2];
+  });
+
+  return {
+    levelIndex,
+    label: `Level ${levelIndex}`,
+    groups,
+    anchorPositions,
+    groupCount: groups.length,
+  };
+};
+
+const parseConvolutionKernelLevels = (
+  value: Record<string, unknown>,
+): readonly ConvolutionKernelLevelData[] =>
+  Object.keys(value)
+    .map((key) => {
+      const match = kernelLevelKeyPattern.exec(key);
+      if (match === null) {
+        return null;
+      }
+      return {
+        key,
+        levelIndex: Number(match[1]),
+      };
+    })
+    .filter(
+      (
+        entry,
+      ): entry is {
+        readonly key: string;
+        readonly levelIndex: number;
+      } => entry !== null,
+    )
+    .sort((left, right) => left.levelIndex - right.levelIndex)
+    .map(({ key, levelIndex }) =>
+      parseConvolutionKernelLevel(value[key], key, levelIndex),
+    );
+
 const validateFaceIndices = (
   meshIndices: Uint32Array,
   meshVertexCount: number,
@@ -178,7 +291,14 @@ export const buildPointCloudMeshData = (
 
   const kdTree = buildKdTree3d(pointPositions);
   const spatialHash = buildSpatialHashGrid3d(pointPositions, pointColors);
+  const convolutionKernelLevels = parseConvolutionKernelLevels(
+    json as Record<string, unknown>,
+  );
   return {
+    sourceKind:
+      convolutionKernelLevels.length > 0
+        ? "convolution-kernels"
+        : "point-cloud-mesh",
     meshPositions,
     meshIndices,
     meshVertexColors: buildMeshVertexColors(
@@ -195,6 +315,7 @@ export const buildPointCloudMeshData = (
     pointCount,
     bounds: computeBounds(meshPositions),
     kdTree,
+    convolutionKernelLevels,
   };
 };
 
