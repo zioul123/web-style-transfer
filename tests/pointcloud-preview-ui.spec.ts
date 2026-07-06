@@ -1261,13 +1261,36 @@ test("point-cloud preview disables dependent controls and saves viewpoints", asy
   await gotoStableApp(page, "/pointcloud-preview");
 
   await expect(page.getByTestId("point-size-slider")).toBeDisabled();
+  await expect(page.getByTestId("toggle-point-spheres-button")).toBeDisabled();
+  await expect(page.getByTestId("toggle-point-spheres-button")).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
   await page.getByTestId("toggle-points-button").click();
   await expect(page.getByTestId("point-size-slider")).toBeEnabled();
+  await expect(page.getByTestId("toggle-point-spheres-button")).toBeEnabled();
+  await page.getByTestId("toggle-point-spheres-button").click();
+  await expect(page.getByTestId("toggle-point-spheres-button")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await page.getByTestId("toggle-points-button").click();
   await expect(page.getByTestId("point-size-slider")).toBeDisabled();
+  await expect(page.getByTestId("toggle-point-spheres-button")).toBeDisabled();
 
   await page.getByTestId("toggle-mesh-button").click();
   await expect(page.getByTestId("toggle-wireframe-button")).toBeDisabled();
+  await expect(page.getByTestId("toggle-solid-mesh-button")).toBeDisabled();
+  await expect(page.getByTestId("toggle-solid-mesh-button")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await page.getByTestId("toggle-mesh-button").click();
+  await page.getByTestId("toggle-solid-mesh-button").click();
+  await expect(page.getByTestId("toggle-solid-mesh-button")).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
 
   await page.getByTestId("save-viewpoint-button").click();
   await expect(page.getByTestId("viewpoint-go-1")).toBeVisible();

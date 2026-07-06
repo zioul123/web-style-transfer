@@ -96,9 +96,9 @@ The route currently provides:
 - a route-local Kernels render mode for convolution exports, where the scene
   renders mesh geometry plus selected-level kernel anchors and hover-selected
   geodesic path traces without using the worker pipeline;
-- browser-only view state such as mesh/point toggles, gamma and brightness
-  controls, screenshots, and saved viewpoints persisted in local storage across
-  datasets on this route.
+- browser-only view state such as mesh/point toggles, solid mesh occlusion,
+  point sphere rendering, gamma and brightness controls, screenshots, and saved
+  viewpoints persisted in local storage across datasets on this route.
 
 `PointCloudPreviewScene.tsx` owns the R3F canvas, point/mesh materials,
 fragment-shader textures, hit overlays, camera commands, and FPS sampling.

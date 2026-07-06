@@ -101,6 +101,8 @@ export function PointCloudPreviewViewport({
             showMesh={viewSettings.showMesh}
             showPoints={viewSettings.showPoints}
             showWireframe={viewSettings.showWireframe}
+            showSolidMesh={viewSettings.showSolidMesh}
+            renderPointsAsSpheres={viewSettings.renderPointsAsSpheres}
             showGroundPlane={viewSettings.showGroundPlane}
             meshColorMode={effectiveMeshColorMode}
             kernelLevelIndex={viewSettings.kernelLevelIndex}

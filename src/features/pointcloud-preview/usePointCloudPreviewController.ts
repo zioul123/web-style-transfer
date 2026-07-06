@@ -23,6 +23,8 @@ export const defaultPointCloudPreviewViewSettings: PointCloudPreviewViewSettings
     showMesh: true,
     showPoints: false,
     showWireframe: false,
+    showSolidMesh: true,
+    renderPointsAsSpheres: false,
     showGroundPlane: false,
     meshColorMode: "fragment-knn",
     kernelLevelIndex: 0,

@@ -268,6 +268,17 @@ export function PointCloudPreviewControlsPanel({
                 })
               }
             />
+            <PreviewVisibilityToggleButton
+              label="Solid mesh"
+              testId="toggle-solid-mesh-button"
+              visible={viewSettings.showSolidMesh}
+              disabled={!viewSettings.showMesh}
+              onClick={() =>
+                updateViewSettings({
+                  showSolidMesh: !viewSettings.showSolidMesh,
+                })
+              }
+            />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <PreviewVisibilityToggleButton
@@ -280,6 +291,19 @@ export function PointCloudPreviewControlsPanel({
                 })
               }
             />
+            <PreviewVisibilityToggleButton
+              label="Point spheres"
+              testId="toggle-point-spheres-button"
+              visible={viewSettings.renderPointsAsSpheres}
+              disabled={!viewSettings.showPoints}
+              onClick={() =>
+                updateViewSettings({
+                  renderPointsAsSpheres: !viewSettings.renderPointsAsSpheres,
+                })
+              }
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
             <PointCloudPreviewPointSizeControl
               viewSettings={viewSettings}
               testId="point-size-slider"

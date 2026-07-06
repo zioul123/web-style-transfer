@@ -125,6 +125,8 @@ export type PointCloudPreviewViewSettings = {
   readonly showMesh: boolean;
   readonly showPoints: boolean;
   readonly showWireframe: boolean;
+  readonly showSolidMesh: boolean;
+  readonly renderPointsAsSpheres: boolean;
   readonly showGroundPlane: boolean;
   readonly meshColorMode: MeshColorMode;
   readonly kernelLevelIndex: number;
