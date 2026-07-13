@@ -23,6 +23,7 @@ export type AblationExperimentConfig = {
   readonly knn: number;
   readonly radiusFactor: number;
   readonly geodesicRatio: number;
+  readonly maxTriangles: number | null;
   readonly attenuationLabel: string;
   readonly optimizationSteps: number;
   readonly outputStep: number | null;
@@ -68,6 +69,7 @@ export type AblationDimensionKey =
   | "knn"
   | "radiusFactor"
   | "geodesicRatio"
+  | "maxTriangles"
   | "attenuationLabel"
   | "optimizationSteps"
   | "outputStep";
@@ -147,6 +149,7 @@ const experimentFilenamePattern = new RegExp(
     `(${integerPattern})knn_` +
     `(${numberPattern})rf_` +
     `(${numberPattern})gr_` +
+    `(?:(${integerPattern})tris_)?` +
     `([^_]+)-attn_` +
     `(${integerPattern})steps` +
     `(?:_step(${integerPattern}))?` +
@@ -209,6 +212,7 @@ export const ablationDimensionDefinitions: readonly AblationDimensionDefinition[
     { key: "knn", label: "KNN", valueType: "number" },
     { key: "radiusFactor", label: "Radius factor", valueType: "number" },
     { key: "geodesicRatio", label: "Geodesic ratio", valueType: "number" },
+    { key: "maxTriangles", label: "Max triangles", valueType: "number" },
     { key: "attenuationLabel", label: "Attenuation", valueType: "string" },
     {
       key: "optimizationSteps",
@@ -318,7 +322,8 @@ export const parseAblationExperimentFilename = (
   }
 
   try {
-    const outputStep = match[16] ?? null;
+    const maxTriangles = match[14] ?? null;
+    const outputStep = match[17] ?? null;
     return {
       ok: true,
       file: {
@@ -340,8 +345,12 @@ export const parseAblationExperimentFilename = (
           knn: parseInteger(match[11], "KNN"),
           radiusFactor: parseNumber(match[12], "Radius factor"),
           geodesicRatio: parseNumber(match[13], "Geodesic ratio"),
-          attenuationLabel: match[14],
-          optimizationSteps: parseInteger(match[15], "Optimization steps"),
+          maxTriangles:
+            maxTriangles === null
+              ? null
+              : parseInteger(maxTriangles, "Maximum triangles"),
+          attenuationLabel: match[15],
+          optimizationSteps: parseInteger(match[16], "Optimization steps"),
           outputStep:
             outputStep === null
               ? null
@@ -414,6 +423,8 @@ export const getAblationDimensionValue = (
       return config.radiusFactor;
     case "geodesicRatio":
       return config.geodesicRatio;
+    case "maxTriangles":
+      return config.maxTriangles;
     case "attenuationLabel":
       return config.attenuationLabel;
     case "optimizationSteps":

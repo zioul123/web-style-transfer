@@ -11,9 +11,10 @@ The branch currently includes phases 1 through 5:
 
 1. **Parser and data model:** `experimentFilenames.ts` parses experiment
    filenames produced by the Python `name_expt` format, including pooling mode
-   and scalar or list-valued style weights plus optional `_step<number>`
-   output-step suffixes, and exposes dimension summaries and stable value
-   sorting.
+   and scalar or list-valued style weights, maximum-triangle limits, plus
+   optional `_step<number>` output-step suffixes, and exposes dimension
+   summaries and stable value sorting. Filenames produced before the
+   maximum-triangle segment was added remain supported.
 2. **Ablation tab shell:** `/pointcloud-preview` now has `Preview` and
    `Ablation` tabs. The ablation tab imports folders or direct JSON file
    selections, parses filenames only, and shows parsed/unparsed counts plus

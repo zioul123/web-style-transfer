@@ -218,7 +218,7 @@ test("k-d tree nearest-3 query stays ordered on the tiny fixture", () => {
 
 test("point-cloud ablation parser reads name_expt filenames with output steps", () => {
   const filename =
-    "1000000sw_0cw_0.001tv_L2_2c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_MAX_SPECTRAL_4knn_0.7rf_2gr_1.5std-attn_300steps_step320.json";
+    "1000000sw_0cw_0.001tv_L2_2c-spf_192x256s-img_SIMPLE_AXIS_RAW_COLORS_MAX_SPECTRAL_4knn_0.7rf_2gr_20000tris_1.5std-attn_300steps_step320.json";
 
   const result = parseAblationExperimentFilename(filename);
 
@@ -241,10 +241,23 @@ test("point-cloud ablation parser reads name_expt filenames with output steps", 
     knn: 4,
     radiusFactor: 0.7,
     geodesicRatio: 2,
+    maxTriangles: 20000,
     attenuationLabel: "1.5std",
     optimizationSteps: 300,
     outputStep: 320,
   });
+
+  const maxTrianglesSummary = summarizeAblationDimensions([result.file]).find(
+    (summary) => summary.definition.key === "maxTriangles",
+  );
+  expect(maxTrianglesSummary?.values).toEqual([
+    {
+      value: 20000,
+      label: "20000",
+      key: "number:20000",
+      count: 1,
+    },
+  ]);
 });
 
 test("point-cloud ablation parser reads list-valued style weights", () => {
@@ -308,6 +321,7 @@ test("point-cloud ablation parser accepts absent style source and legacy max-poo
   expect(result.file.config.poolMode).toBe("MAX");
   expect(result.file.config.styleResolution).toBeNull();
   expect(result.file.config.styleSamplesPerFace).toBeNull();
+  expect(result.file.config.maxTriangles).toBeNull();
   expect(result.file.config.outputStep).toBeNull();
 
   const bstResult = parseAblationExperimentFilename(
@@ -385,6 +399,7 @@ test("point-cloud ablation summaries sort values deterministically", () => {
   expect(
     byKey.get("styleResolution")?.values.map((value) => value.value),
   ).toEqual(["192x256", "320x240", "640x480"]);
+  expect(byKey.get("maxTriangles")).toBeUndefined();
   expect(byKey.get("outputStep")?.values.map((value) => value.label)).toEqual([
     "step60",
     "step120",
