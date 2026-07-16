@@ -93,7 +93,9 @@ The route currently provides:
   `math/interpolation.ts`;
 - fragment-space mesh colouring backed by a feature-local spatial hash in
   `math/spatialHash3d.ts`, with fallback to baked vertex colours when a dense
-  cell would exceed current shader bounds;
+  cell would exceed current shader bounds; see
+  [Fragment KNN mesh shading](fragment-knn-shading.md) for its algorithm,
+  performance design, and correctness limits;
 - a route-local Kernels render mode for convolution exports, where the scene
   renders mesh geometry plus selected-level kernel anchors and hover-selected
   geodesic path traces without using the worker pipeline;
