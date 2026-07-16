@@ -7,7 +7,7 @@ and point-cloud JSON schema.
 
 ## Current State
 
-The branch currently includes phases 1 through 5:
+The branch currently includes phases 1 through 6:
 
 1. **Parser and data model:** `experimentFilenames.ts` parses experiment
    filenames produced by the Python `name_expt` format, including pooling mode
@@ -38,6 +38,14 @@ The branch currently includes phases 1 through 5:
    choices are stored in localStorage; remembered choices are reused when the
    current imported folder still offers them, otherwise the browser falls back
    through the normal available options.
+6. **Single-setting viewpoint export:** a section below the matrix selects one
+   uniquely matched experiment setting and any number of saved viewpoints,
+   then exports a labelled PNG sheet. The setting JSON is read once during
+   capture, camera renders wrap at four columns, duplicate configuration matches
+   are excluded explicitly, and the previous preview state is restored after
+   success or failure. A blocking progress overlay prevents preview or tab
+   interaction while synchronized captures run. The selected setting and
+   viewpoint choices share the ablation browser's localStorage options.
 
 The current matrix defaults are:
 
@@ -51,7 +59,8 @@ The current matrix defaults are:
 
 - No route-level implementation phases remain in this branch. Future work should
   be driven by concrete user feedback from ablation-folder usage, such as
-  additional export formats or denser matrix navigation controls.
+  additional export formats, denser matrix navigation controls, or alternative
+  multi-view sheet layouts.
 
 ## Guardrails
 

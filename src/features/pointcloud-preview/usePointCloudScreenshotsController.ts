@@ -54,6 +54,12 @@ export type PointCloudAblationGridExportRequest = {
   readonly viewpoint: SavedViewpoint;
 };
 
+export type PointCloudAblationMultiViewExportRequest = {
+  readonly file: File;
+  readonly sourceLabel: string;
+  readonly viewpoints: readonly SavedViewpoint[];
+};
+
 type UsePointCloudScreenshotsControllerOptions = {
   readonly previewHostRef: MutableRefObject<HTMLDivElement | null>;
   readonly assetState: LoadedAssetState;
@@ -93,6 +99,9 @@ export type PointCloudScreenshotsController = {
   readonly captureBatchScreenshots: () => Promise<void>;
   readonly captureAblationGridPng: (
     request: PointCloudAblationGridExportRequest,
+  ) => Promise<void>;
+  readonly captureAblationViewpointsPng: (
+    request: PointCloudAblationMultiViewExportRequest,
   ) => Promise<void>;
   readonly handleCameraCommandApplied: (commandId: number) => void;
   readonly handlePreviewFrameRendered: (commandId: number) => void;
@@ -810,6 +819,235 @@ export const usePointCloudScreenshotsController = ({
     ],
   );
 
+  const captureAblationViewpointsPng = useCallback(
+    async (
+      request: PointCloudAblationMultiViewExportRequest,
+    ): Promise<void> => {
+      if (assetState.status !== "ready" || currentCameraState === null) {
+        throw new Error(
+          "The preview must finish loading before viewpoint export.",
+        );
+      }
+
+      if (request.viewpoints.length === 0) {
+        throw new Error("Select at least one saved viewpoint to export.");
+      }
+
+      let meshData: PointCloudMeshData;
+      try {
+        meshData = parsePointCloudMeshText(await request.file.text());
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unable to parse JSON.";
+        throw new Error(`${request.sourceLabel}: ${message}`, {
+          cause: error,
+        });
+      }
+
+      const previousAssetState = assetState;
+      const previousActiveUploadedFileId = activeUploadedFileId;
+      const previousCameraState = currentCameraState;
+      const previousViewSettings = viewSettings;
+      const timestamp = screenshotTimestampLabel(new Date());
+      const columnCount = Math.min(request.viewpoints.length, 4);
+      const rowCount = Math.ceil(request.viewpoints.length / columnCount);
+      const topLabelHeight = 88;
+      const tileWidth = 360;
+      const tileLabelHeight = 54;
+      const imageHeight = 270;
+      const tileHeight = tileLabelHeight + imageHeight;
+      const gap = 4;
+      const width =
+        columnCount * tileWidth + Math.max(0, columnCount - 1) * gap;
+      const height =
+        topLabelHeight +
+        rowCount * tileHeight +
+        Math.max(0, rowCount - 1) * gap;
+      const outputCanvas = document.createElement("canvas");
+      outputCanvas.width = width;
+      outputCanvas.height = height;
+      const context = outputCanvas.getContext("2d");
+      if (context === null) {
+        throw new Error("The viewpoint export canvas is not available.");
+      }
+      clearPointCloudExportPerformanceEntries();
+
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, width, height);
+      context.fillStyle = "#f1f5f9";
+      context.fillRect(0, 0, width, topLabelHeight - gap);
+      context.strokeStyle = "#cbd5e1";
+      context.lineWidth = 1;
+      context.strokeRect(0.5, 0.5, width - 1, topLabelHeight - gap - 1);
+      context.fillStyle = "#0f172a";
+      context.font = "700 18px system-ui, sans-serif";
+      drawWrappedText(
+        context,
+        `${request.viewpoints.length} saved ${
+          request.viewpoints.length === 1 ? "viewpoint" : "viewpoints"
+        }`,
+        width / 2,
+        29,
+        width - 32,
+        22,
+        1,
+        "center",
+      );
+      context.fillStyle = "#475569";
+      context.font = "500 13px system-ui, sans-serif";
+      drawWrappedText(
+        context,
+        request.sourceLabel,
+        width / 2,
+        55,
+        width - 32,
+        17,
+        2,
+        "center",
+      );
+
+      try {
+        clearPointCloudExportPerformanceEntries();
+        setAssetState({
+          status: "ready",
+          sourceLabel: request.sourceLabel,
+          errorMessage: null,
+          data: meshData,
+        });
+        setActiveUploadedFileId(null);
+        resetPreviewInteraction();
+
+        for (const [
+          viewpointIndex,
+          viewpoint,
+        ] of request.viewpoints.entries()) {
+          const columnIndex = viewpointIndex % columnCount;
+          const rowIndex = Math.floor(viewpointIndex / columnCount);
+          const x = columnIndex * (tileWidth + gap);
+          const y = topLabelHeight + rowIndex * (tileHeight + gap);
+
+          context.fillStyle = "#f8fafc";
+          context.fillRect(x, y, tileWidth, tileLabelHeight - gap);
+          context.strokeStyle = "#cbd5e1";
+          context.lineWidth = 1;
+          context.strokeRect(
+            x + 0.5,
+            y + 0.5,
+            tileWidth - 1,
+            tileLabelHeight - gap - 1,
+          );
+          context.fillStyle = "#0f172a";
+          context.font = "700 17px system-ui, sans-serif";
+          drawWrappedText(
+            context,
+            `${viewpoint.label}${viewpoint.swapYZ ? " (Y/Z)" : ""}`,
+            x + tileWidth / 2,
+            y + 30,
+            tileWidth - 28,
+            20,
+            1,
+            "center",
+          );
+
+          updateViewSettings(
+            viewSettingsForTemporaryData(meshData, viewpoint.swapYZ),
+          );
+          const commandId = issueCameraCommand({
+            type: "restore",
+            camera: viewpoint.camera,
+          });
+          await waitForCommandSignal(
+            cameraAppliedWaitersRef,
+            commandId,
+            "camera update",
+          );
+          await waitForCommandSignal(
+            frameRenderedWaitersRef,
+            commandId,
+            "rendered frame",
+          );
+
+          const previewCanvas = previewHostRef.current?.querySelector("canvas");
+          if (!(previewCanvas instanceof HTMLCanvasElement)) {
+            throw new Error("The preview canvas is not available.");
+          }
+          const imageY = y + tileLabelHeight;
+          context.fillStyle = "#ffffff";
+          context.fillRect(x, imageY, tileWidth, imageHeight);
+          context.strokeStyle = "#cbd5e1";
+          context.strokeRect(
+            x + 0.5,
+            imageY + 0.5,
+            tileWidth - 1,
+            imageHeight - 1,
+          );
+          drawFittedImage(
+            context,
+            previewCanvas,
+            previewCanvas.width,
+            previewCanvas.height,
+            x + 12,
+            imageY + 12,
+            tileWidth - 24,
+            imageHeight - 24,
+          );
+          clearPointCloudExportPerformanceEntries();
+        }
+
+        await restorePreviewAfterBatch({
+          previousAssetState,
+          previousActiveUploadedFileId,
+          previousCameraState,
+          previousViewSettings,
+        });
+
+        const pngBytes = await canvasPngBytes(outputCanvas);
+        const pngBuffer = new ArrayBuffer(pngBytes.byteLength);
+        new Uint8Array(pngBuffer).set(pngBytes);
+        const pngUrl = URL.createObjectURL(
+          new Blob([pngBuffer], { type: "image/png" }),
+        );
+        const downloadLink = document.createElement("a");
+        downloadLink.href = pngUrl;
+        downloadLink.download = `pointcloud-ablation-viewpoints-${screenshotFilenameStemForSourceLabel(
+          request.sourceLabel,
+        )}-${timestamp}.png`;
+        downloadLink.click();
+        window.setTimeout(() => URL.revokeObjectURL(pngUrl), 0);
+        clearPointCloudExportPerformanceEntries();
+      } catch (error) {
+        try {
+          await restorePreviewAfterBatch({
+            previousAssetState,
+            previousActiveUploadedFileId,
+            previousCameraState,
+            previousViewSettings,
+          });
+        } catch {
+          // Preserve the original export error because it identifies the failed capture.
+        }
+        throw error;
+      } finally {
+        clearPointCloudExportPerformanceEntries();
+      }
+    },
+    [
+      activeUploadedFileId,
+      assetState,
+      currentCameraState,
+      issueCameraCommand,
+      previewHostRef,
+      resetPreviewInteraction,
+      restorePreviewAfterBatch,
+      setActiveUploadedFileId,
+      setAssetState,
+      updateViewSettings,
+      viewSettings,
+      viewSettingsForTemporaryData,
+      waitForCommandSignal,
+    ],
+  );
+
   const captureScreenshot = useCallback((): void => {
     const canvas = previewHostRef.current?.querySelector("canvas");
     if (!(canvas instanceof HTMLCanvasElement)) {
@@ -834,6 +1072,7 @@ export const usePointCloudScreenshotsController = ({
     captureScreenshot,
     captureBatchScreenshots,
     captureAblationGridPng,
+    captureAblationViewpointsPng,
     handleCameraCommandApplied,
     handlePreviewFrameRendered,
   };

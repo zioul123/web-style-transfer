@@ -82,8 +82,9 @@ The route currently provides:
   selected;
 - an Ablation tab for experiment-folder inspection, including filename parsing,
   X/Y axis selection, fixed configuration filters, matrix availability states,
-  and transient preview loading for unique cells without adding those files to
-  the manual upload queue;
+  transient preview loading for unique cells without adding those files to the
+  manual upload queue, matrix PNG export for one saved viewpoint, and labelled
+  PNG-sheet export for one unique setting across selected saved viewpoints;
 - JSON validation, optional convolution-kernel level parsing, typed-array
   conversion, bounds calculation, and precomputed baked vertex colours in
   `loadPointCloudMesh.ts`;
@@ -112,8 +113,9 @@ presentation components:
   protection;
 - `useSavedViewpointsController.ts` owns saved-camera persistence and
   mutations;
-- `usePointCloudScreenshotsController.ts` owns current-canvas downloads and
-  synchronized batch capture/restoration;
+- `usePointCloudScreenshotsController.ts` owns current-canvas downloads,
+  synchronized batch capture/restoration, and both route-local ablation PNG
+  export layouts;
 - `ablation/experimentFilenames.ts`, `ablation/ablationMatrix.ts`, and
   `ablation/PointCloudAblationTab.tsx` own filename parsing, dimension
   summaries, matrix construction, and the ablation browser presentation;
@@ -282,7 +284,8 @@ The app resolves model URLs through `src/shared/assetUrls.ts`:
    tracks controls, screenshots, and saved viewpoints in browser storage.
 6. The Ablation tab parses selected experiment filenames without reading JSON
    contents, builds filters and an availability matrix from parsed dimensions,
-   and reads a file only when a unique cell is clicked for transient preview.
+   and reads a file only when a unique cell is clicked for transient preview or
+   a unique setting is captured for matrix or multi-view export.
 
 ## Testing architecture
 
@@ -291,7 +294,8 @@ Playwright is used for integration, worker, and WebGPU parity coverage. The suit
 - App boot and worker/WebGPU initialization checks.
 - Point-cloud preview route boot, upload, fallback, screenshot, and viewpoint
   persistence checks.
-- Point-cloud ablation parser, tab, matrix, and transient preview checks.
+- Point-cloud ablation parser, tab, matrix, transient preview, matrix export,
+  and single-setting multi-view export checks.
 - Tensor primitive parity tests.
 - VGG first-pool forward and optimization checks.
 - Full phase-3 forward/loss parity checks when fixtures are present.
@@ -307,6 +311,3 @@ Performance-oriented benchmark specs, including pack-acceptance threshold helper
 - Keep model-pack UI options in sync with what is actually hosted for non-local deployments.
 - Continue promoting successful kernel-lab flags into default pipeline behavior only after broad device validation.
 - Add a consolidated model-pack export guide or script that covers all supported formats.
-- Finish the point-cloud ablation browser export phase: labelled PNG grid
-  capture for a selected saved viewpoint, followed by docs and UI polish. See
-  `docs/pointcloud-ablation-plan.md`.

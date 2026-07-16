@@ -1,5 +1,5 @@
 export type AblationTvMode = "L1" | "L2";
-export type AblationFrameMode = "PCP" | "SPL-S" | "BST-S" | "SIMPLE_AXIS";
+export type AblationFrameMode = "PCP" | "SPL-S" | "BST-S" | "SIMPLE_AXIS" | "SPL-A";
 export type AblationInputColorMode = "RAW_COLORS" | "LOGIT";
 export type AblationPoolMode = "MAX" | "AVG";
 export type AblationDistanceMeasure = "EUCLIDEAN" | "SPECTRAL";
@@ -118,7 +118,7 @@ const integerPattern = String.raw`[0-9]+`;
 const styleWeightPattern = String.raw`${numberPattern}(?:-${numberPattern})*`;
 const styleSourcePattern = String.raw`(?:(?:${numberPattern})x(?:${numberPattern})s-img|(?:${numberPattern})s-spf)`;
 
-const frameModeTokens = ["PCP", "SPL-S", "BST-S", "SIMPLE_AXIS"] as const;
+const frameModeTokens = ["PCP", "SPL-S", "BST-S", "SIMPLE_AXIS", "SPL-A"] as const;
 const inputColorModeTokens = ["RAW_COLORS", "LOGIT"] as const;
 const poolModeTokens = ["MAX", "AVG"] as const;
 const distanceMeasureTokens = ["EUCLIDEAN", "SPECTRAL"] as const;

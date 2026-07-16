@@ -88,7 +88,9 @@ upload replacement JSON exports, and provides:
   an availability matrix, and loads unique cells into the preview without
   adding them to the manual upload queue. The matrix can export a labelled PNG
   grid for one saved viewpoint, with placeholders for missing cells and export
-  blocked while ambiguous cells remain.
+  blocked while ambiguous cells remain. A second export section selects one
+  unique setting and captures it across multiple saved viewpoints in a labelled
+  PNG sheet.
 
 ## Model packs
 

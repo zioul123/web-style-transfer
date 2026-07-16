@@ -617,6 +617,14 @@ test("point-cloud ablation matrix filters cells and previews a unique experiment
     page.getByTestId("pointcloud-ablation-unparsed-count"),
   ).toHaveText("0");
   await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-ambiguous"),
+  ).toContainText("1 duplicate setting is excluded");
+  await expect(
+    page
+      .getByTestId("pointcloud-ablation-multi-view-setting-select")
+      .locator("option"),
+  ).toHaveCount(2);
+  await expect(
     page.getByTestId("pointcloud-ablation-x-axis-select"),
   ).toHaveValue("contentSamplesPerFace");
   await expect(
@@ -850,6 +858,166 @@ test("point-cloud ablation output-step fixed filter supports multiple selections
         ),
     )
     .toEqual(["number:301", "number:302", "number:305", "number:320"]);
+});
+
+test("point-cloud ablation exports one setting from multiple saved viewpoints", async ({
+  page,
+}, testInfo) => {
+  await page.addInitScript(() => {
+    const originalToBlob = HTMLCanvasElement.prototype.toBlob;
+    HTMLCanvasElement.prototype.toBlob = function (callback, type, quality) {
+      window.setTimeout(() => {
+        originalToBlob.call(this, callback, type, quality);
+      }, 500);
+    };
+  });
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await page.getByTestId("save-viewpoint-button").click();
+  await page.getByTestId("viewpoint-name-1").fill("Default view");
+  await snapCameraToPositiveX(
+    page.getByTestId("camera-state"),
+    page.getByTestId("snap-axis-pos-x"),
+  );
+  await page.getByTestId("save-viewpoint-button").click();
+  await page.getByTestId("viewpoint-name-2").fill("Side view");
+
+  const experimentDir = testInfo.outputPath("ablation-multi-view");
+  await mkdir(experimentDir, { recursive: true });
+  const filenames = [
+    ablationExperimentFilename({
+      contentSamplesPerFace: 2,
+      distanceMeasure: "EUCLIDEAN",
+      outputStep: 60,
+    }),
+    ablationExperimentFilename({
+      contentSamplesPerFace: 4,
+      distanceMeasure: "SPECTRAL",
+      outputStep: 120,
+    }),
+  ];
+  await Promise.all(
+    filenames.map((filename) =>
+      writeFile(join(experimentDir, filename), validUploadJson),
+    ),
+  );
+
+  await page.getByTestId("pointcloud-ablation-tab").click();
+  await page
+    .getByTestId("pointcloud-ablation-folder-input")
+    .setInputFiles(experimentDir);
+
+  await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-export"),
+  ).toBeVisible();
+  const settingSelect = page.getByTestId(
+    "pointcloud-ablation-multi-view-setting-select",
+  );
+  await expect(settingSelect.locator("option")).toHaveCount(2);
+  const secondSettingValue = await settingSelect
+    .locator("option")
+    .nth(1)
+    .getAttribute("value");
+  expect(secondSettingValue).not.toBeNull();
+  await settingSelect.selectOption(secondSettingValue!);
+  await expect(settingSelect).toHaveValue(secondSettingValue!);
+
+  await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-viewpoint-1"),
+  ).toBeChecked();
+  await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-viewpoint-2"),
+  ).toBeChecked();
+  await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-selected-count"),
+  ).toHaveText("2 of 2 selected");
+
+  await page.getByTestId("pointcloud-ablation-multi-view-select-all").click();
+  await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-export-button"),
+  ).toBeDisabled();
+  await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-selection-empty"),
+  ).toBeVisible();
+  const firstViewpointCheckbox = page.getByTestId(
+    "pointcloud-ablation-multi-view-viewpoint-1",
+  );
+  await firstViewpointCheckbox.click();
+  await expect(firstViewpointCheckbox).toBeChecked();
+  await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-selected-count"),
+  ).toHaveText("1 of 2 selected");
+  await expect(page.locator("#root > main")).toBeVisible();
+
+  await firstViewpointCheckbox.click();
+  await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-export-button"),
+  ).toBeDisabled();
+  await page.reload();
+  await expect(page.getByTestId("camera-state")).not.toHaveText("unavailable");
+  const cameraStateBeforeExport = await page
+    .getByTestId("camera-state")
+    .textContent();
+  expect(cameraStateBeforeExport).not.toBeNull();
+  await page.getByTestId("pointcloud-ablation-tab").click();
+  await page
+    .getByTestId("pointcloud-ablation-folder-input")
+    .setInputFiles(experimentDir);
+  await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-setting-select"),
+  ).toHaveValue(secondSettingValue!);
+  await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-viewpoint-1"),
+  ).not.toBeChecked();
+  const secondViewpointCheckbox = page.getByTestId(
+    "pointcloud-ablation-multi-view-viewpoint-2",
+  );
+  await expect(secondViewpointCheckbox).not.toBeChecked();
+  await secondViewpointCheckbox.click();
+  await expect(secondViewpointCheckbox).toBeChecked();
+  await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-selected-count"),
+  ).toHaveText("1 of 2 selected");
+  await expect(page.locator("#root > main")).toBeVisible();
+  await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-export-button"),
+  ).toBeEnabled();
+
+  await page.getByTestId("pointcloud-ablation-multi-view-select-all").click();
+  await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-selected-count"),
+  ).toHaveText("2 of 2 selected");
+
+  const downloadPromise = page.waitForEvent("download");
+  await page
+    .getByTestId("pointcloud-ablation-multi-view-export-button")
+    .click();
+  await expect(
+    page.getByTestId("pointcloud-ablation-export-overlay"),
+  ).toContainText("Exporting viewpoint sheet");
+  await expect(page.getByTestId("pointcloud-preview-tab")).toBeDisabled();
+  await expect(page.getByTestId("pointcloud-ablation-tab")).toBeDisabled();
+  await expect(page.locator("main")).toHaveAttribute("inert", "");
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(
+    /^pointcloud-ablation-viewpoints-.*-\d{8}-\d{6}\.png$/,
+  );
+  const downloadPath = await download.path();
+  expect(downloadPath).not.toBeNull();
+  const png = await readFile(downloadPath!);
+  expect(readPngSize(png)).toEqual({ width: 724, height: 412 });
+  await expect(page.getByTestId("pointcloud-ablation-tab")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(
+    page.getByTestId("pointcloud-ablation-multi-view-export-button"),
+  ).toBeEnabled();
+
+  await page.getByTestId("pointcloud-preview-tab").click();
+  await expect(page.getByTestId("camera-state")).toHaveText(
+    cameraStateBeforeExport!,
+  );
 });
 
 test("point-cloud ablation matrix hides empty rows and columns", async ({

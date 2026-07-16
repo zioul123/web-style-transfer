@@ -23,6 +23,7 @@ import { usePointCloudPreviewController } from "./usePointCloudPreviewController
 import {
   usePointCloudScreenshotsController,
   type PointCloudAblationGridExportRequest,
+  type PointCloudAblationMultiViewExportRequest,
 } from "./usePointCloudScreenshotsController";
 import { useSavedViewpointsController } from "./useSavedViewpointsController";
 
@@ -41,6 +42,9 @@ export function PointCloudPreviewApp() {
   const previewHostRef = useRef<HTMLDivElement | null>(null);
   const [activeTab, setActiveTab] = useState<PointCloudPreviewTab>("preview");
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
+  const [ablationExportLabel, setAblationExportLabel] = useState<string | null>(
+    null,
+  );
   const previewController = usePointCloudPreviewController();
   const assetsController = usePointCloudAssetsController({
     currentCameraStateRef: previewController.cameraStateRef,
@@ -145,6 +149,7 @@ export function PointCloudPreviewApp() {
   const exportAblationGrid = useCallback(
     async (request: PointCloudAblationGridExportRequest): Promise<void> => {
       const previousTab = activeTab;
+      setAblationExportLabel("Exporting ablation grid...");
       setActiveTab("preview");
       await new Promise<void>((resolve) => {
         window.requestAnimationFrame(() => {
@@ -155,6 +160,29 @@ export function PointCloudPreviewApp() {
         await screenshotsController.captureAblationGridPng(request);
       } finally {
         setActiveTab(previousTab);
+        setAblationExportLabel(null);
+      }
+    },
+    [activeTab, screenshotsController],
+  );
+
+  const exportAblationViewpoints = useCallback(
+    async (
+      request: PointCloudAblationMultiViewExportRequest,
+    ): Promise<void> => {
+      const previousTab = activeTab;
+      setAblationExportLabel("Exporting viewpoint sheet...");
+      setActiveTab("preview");
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => resolve());
+        });
+      });
+      try {
+        await screenshotsController.captureAblationViewpointsPng(request);
+      } finally {
+        setActiveTab(previousTab);
+        setAblationExportLabel(null);
       }
     },
     [activeTab, screenshotsController],
@@ -162,7 +190,10 @@ export function PointCloudPreviewApp() {
 
   return (
     <>
-      <main className="min-h-screen w-full overflow-x-hidden bg-[linear-gradient(180deg,_#071019_0%,_#0b1120_100%)] text-slate-100 2xl:h-screen 2xl:overflow-hidden">
+      <main
+        className="min-h-screen w-full overflow-x-hidden bg-[linear-gradient(180deg,_#071019_0%,_#0b1120_100%)] text-slate-100 2xl:h-screen 2xl:overflow-hidden"
+        inert={ablationExportLabel !== null}
+      >
         <div className="flex min-h-screen w-full flex-col px-4 py-4 2xl:h-full 2xl:min-h-0">
           <PointCloudPreviewHeader onShowInfo={() => setShowInfoModal(true)} />
 
@@ -188,6 +219,7 @@ export function PointCloudPreviewApp() {
                   aria-selected={isSelected}
                   aria-controls={`pointcloud-${tab.id}-panel`}
                   data-testid={tab.testId}
+                  disabled={ablationExportLabel !== null}
                   onClick={() => setActiveTab(tab.id)}
                 >
                   {tab.label}
@@ -302,10 +334,30 @@ export function PointCloudPreviewApp() {
                 return didLoad;
               }}
               onExportAblationGrid={exportAblationGrid}
+              onExportAblationViewpoints={exportAblationViewpoints}
             />
           </div>
         </div>
       </main>
+
+      {ablationExportLabel !== null ? (
+        <div
+          className="fixed inset-0 z-[100] flex cursor-wait items-center justify-center bg-slate-950/75 px-4 backdrop-blur-sm"
+          data-testid="pointcloud-ablation-export-overlay"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="w-full max-w-md rounded-[1.1rem] border border-sky-300/20 bg-slate-950 p-6 text-center shadow-2xl shadow-black/50">
+            <p className="text-lg font-semibold text-white">
+              {ablationExportLabel}
+            </p>
+            <p className="mt-2 text-sm text-slate-300">
+              Rendering saved camera views. Preview controls are temporarily
+              locked.
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       {activeTab === "preview" ? (
         <BatchScreenshotModal

@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useState, type ChangeEvent } from "react";
 import type {
   PointCloudAblationGridExportRequest,
   PointCloudAblationGridExportRow,
+  PointCloudAblationMultiViewExportRequest,
 } from "../usePointCloudScreenshotsController";
 import type { SavedViewpoint } from "../pointCloudPreviewModels";
 import {
@@ -13,6 +14,7 @@ import {
 } from "./ablationMatrix";
 import {
   ablationDimensionDefinitions,
+  buildAblationExperimentKey,
   formatAblationDimensionValue,
   getAblationDimensionValueKey,
   parseAblationExperimentFilename,
@@ -38,6 +40,11 @@ type AblationImportResult = {
   readonly failures: readonly AblationParseFailure[];
 };
 
+type SelectableAblationExperiment = {
+  readonly key: string;
+  readonly file: ImportedAblationExperimentFile;
+};
+
 type PointCloudAblationTabProps = {
   readonly savedViewpoints: readonly SavedViewpoint[];
   readonly onPreviewExperimentFile?: (
@@ -46,6 +53,9 @@ type PointCloudAblationTabProps = {
   ) => Promise<boolean>;
   readonly onExportAblationGrid?: (
     request: PointCloudAblationGridExportRequest,
+  ) => Promise<void>;
+  readonly onExportAblationViewpoints?: (
+    request: PointCloudAblationMultiViewExportRequest,
   ) => Promise<void>;
 };
 
@@ -64,6 +74,8 @@ type StoredAblationBrowserOptions = {
     Record<AblationDimensionKey, readonly string[]>
   >;
   readonly exportViewpointId: number | null;
+  readonly multiViewExperimentKey: string | null;
+  readonly multiViewpointIds: readonly number[] | null;
 };
 
 const emptyStoredAblationBrowserOptions: StoredAblationBrowserOptions = {
@@ -71,6 +83,8 @@ const emptyStoredAblationBrowserOptions: StoredAblationBrowserOptions = {
   yAxis: null,
   fixedValueKeys: {},
   exportViewpointId: null,
+  multiViewExperimentKey: null,
+  multiViewpointIds: null,
 };
 
 const ablationDimensionKeySet = new Set<AblationDimensionKey>(
@@ -133,6 +147,17 @@ const parseStoredAblationBrowserOptions = (
       Number.isSafeInteger(value.exportViewpointId)
         ? value.exportViewpointId
         : null,
+    multiViewExperimentKey:
+      typeof value.multiViewExperimentKey === "string"
+        ? value.multiViewExperimentKey
+        : null,
+    multiViewpointIds: Array.isArray(value.multiViewpointIds)
+      ? value.multiViewpointIds.filter(
+          (viewpointId): viewpointId is number =>
+            typeof viewpointId === "number" &&
+            Number.isSafeInteger(viewpointId),
+        )
+      : null,
   };
 };
 
@@ -227,6 +252,7 @@ export function PointCloudAblationTab({
   savedViewpoints,
   onPreviewExperimentFile,
   onExportAblationGrid,
+  onExportAblationViewpoints,
 }: PointCloudAblationTabProps) {
   const folderInputId = useId();
   const fileInputId = useId();
@@ -243,9 +269,19 @@ export function PointCloudAblationTab({
   const [selectedExportViewpointId, setSelectedExportViewpointId] = useState<
     number | null
   >(initialStoredOptions.exportViewpointId);
+  const [selectedMultiViewExperimentKey, setSelectedMultiViewExperimentKey] =
+    useState<string | null>(initialStoredOptions.multiViewExperimentKey);
+  const [selectedMultiViewpointIds, setSelectedMultiViewpointIds] = useState<
+    readonly number[] | null
+  >(initialStoredOptions.multiViewpointIds);
   const [previewLoadError, setPreviewLoadError] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState<boolean>(false);
+  const [multiViewExportError, setMultiViewExportError] = useState<
+    string | null
+  >(null);
+  const [isExportingMultiView, setIsExportingMultiView] =
+    useState<boolean>(false);
   const summaries = useMemo(
     () =>
       sortAblationSummariesByDefinitionOrder(
@@ -337,6 +373,37 @@ export function PointCloudAblationTab({
     [matrixSelection, parseResult.files, summaries],
   );
   const selectedCount = parseResult.files.length + parseResult.failures.length;
+  const groupedExperiments = useMemo(() => {
+    const grouped = new Map<string, ImportedAblationExperimentFile[]>();
+    parseResult.files.forEach((file) => {
+      const experimentKey = buildAblationExperimentKey(file);
+      const matchingFiles = grouped.get(experimentKey) ?? [];
+      matchingFiles.push(file);
+      grouped.set(experimentKey, matchingFiles);
+    });
+    return grouped;
+  }, [parseResult.files]);
+  const selectableExperiments = useMemo(
+    (): readonly SelectableAblationExperiment[] =>
+      Array.from(groupedExperiments.entries())
+        .flatMap(([key, files]) => {
+          const [file] = files;
+          return files.length === 1 && file !== undefined
+            ? [{ key, file }]
+            : [];
+        })
+        .sort((left, right) =>
+          left.file.sourceLabel.localeCompare(right.file.sourceLabel),
+        ),
+    [groupedExperiments],
+  );
+  const ambiguousExperimentCount = useMemo(
+    () =>
+      Array.from(groupedExperiments.values()).filter(
+        (matchingFiles) => matchingFiles.length > 1,
+      ).length,
+    [groupedExperiments],
+  );
   const ambiguousCellCount = useMemo(
     () =>
       matrix?.rows.reduce(
@@ -353,12 +420,29 @@ export function PointCloudAblationTab({
     ) ??
     savedViewpoints[0] ??
     null;
+  const selectedMultiViewExperiment =
+    selectableExperiments.find(
+      (experiment) => experiment.key === selectedMultiViewExperimentKey,
+    ) ??
+    selectableExperiments[0] ??
+    null;
+  const effectiveMultiViewpointIds =
+    selectedMultiViewpointIds ??
+    savedViewpoints.map((viewpoint) => viewpoint.id);
+  const selectedMultiViewpoints = savedViewpoints.filter((viewpoint) =>
+    effectiveMultiViewpointIds.includes(viewpoint.id),
+  );
   const canExportGrid =
     onExportAblationGrid !== undefined &&
     matrix !== null &&
     selectedExportViewpoint !== null &&
     ambiguousCellCount === 0 &&
     !isExporting;
+  const canExportMultiView =
+    onExportAblationViewpoints !== undefined &&
+    selectedMultiViewExperiment !== null &&
+    selectedMultiViewpoints.length > 0 &&
+    !isExportingMultiView;
 
   useEffect(() => {
     writeStoredAblationBrowserOptions({
@@ -366,8 +450,12 @@ export function PointCloudAblationTab({
       yAxis: selectedYAxis,
       fixedValueKeys: selectedFixedValueKeys,
       exportViewpointId: selectedExportViewpointId,
+      multiViewExperimentKey: selectedMultiViewExperimentKey,
+      multiViewpointIds: selectedMultiViewpointIds,
     });
   }, [
+    selectedMultiViewExperimentKey,
+    selectedMultiViewpointIds,
     selectedExportViewpointId,
     selectedFixedValueKeys,
     selectedXAxis,
@@ -378,6 +466,8 @@ export function PointCloudAblationTab({
     const files = Array.from(event.currentTarget.files ?? []);
     setParseResult(parseSelectedExperimentFiles(files));
     setPreviewLoadError(null);
+    setExportError(null);
+    setMultiViewExportError(null);
     event.currentTarget.value = "";
   };
 
@@ -496,6 +586,34 @@ export function PointCloudAblationTab({
       );
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const exportAblationViewpoints = async (): Promise<void> => {
+    if (
+      onExportAblationViewpoints === undefined ||
+      selectedMultiViewExperiment === null ||
+      selectedMultiViewpoints.length === 0
+    ) {
+      return;
+    }
+
+    setMultiViewExportError(null);
+    setIsExportingMultiView(true);
+    try {
+      await onExportAblationViewpoints({
+        file: selectedMultiViewExperiment.file.file,
+        sourceLabel: selectedMultiViewExperiment.file.sourceLabel,
+        viewpoints: selectedMultiViewpoints,
+      });
+    } catch (error) {
+      setMultiViewExportError(
+        error instanceof Error
+          ? error.message
+          : "Unable to export the saved viewpoints.",
+      );
+    } finally {
+      setIsExportingMultiView(false);
     }
   };
 
@@ -919,6 +1037,178 @@ export function PointCloudAblationTab({
         >
           Select at least two parsed dimensions to build the ablation matrix.
         </p>
+      ) : null}
+
+      {parseResult.files.length > 0 ? (
+        <section
+          className="mt-5 rounded-[0.95rem] border border-white/10 bg-slate-900/75 p-4"
+          data-testid="pointcloud-ablation-multi-view-export"
+        >
+          <div>
+            <h3 className="text-lg font-semibold text-white">
+              One setting, multiple viewpoints
+            </h3>
+            <p className="mt-1 text-sm text-slate-400">
+              Choose one unique experiment setting and export it from your
+              selected saved viewpoints as a labelled PNG.
+            </p>
+          </div>
+
+          <label className="mt-4 flex min-w-0 flex-col gap-1 text-sm font-medium text-slate-200">
+            <span>Experiment setting</span>
+            <select
+              className="min-w-0 rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
+              data-testid="pointcloud-ablation-multi-view-setting-select"
+              value={selectedMultiViewExperiment?.key ?? ""}
+              disabled={
+                selectableExperiments.length === 0 || isExportingMultiView
+              }
+              onChange={(event) =>
+                setSelectedMultiViewExperimentKey(event.currentTarget.value)
+              }
+            >
+              {selectableExperiments.length === 0 ? (
+                <option value="">No unique experiment settings</option>
+              ) : null}
+              {selectableExperiments.map((experiment) => (
+                <option key={experiment.key} value={experiment.key}>
+                  {experiment.file.sourceLabel}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {ambiguousExperimentCount > 0 ? (
+            <p
+              className="mt-3 text-sm text-amber-100"
+              data-testid="pointcloud-ablation-multi-view-ambiguous"
+            >
+              {ambiguousExperimentCount} duplicate{" "}
+              {pluralize(
+                ambiguousExperimentCount,
+                "setting is",
+                "settings are",
+              )}{" "}
+              excluded because more than one file matches.
+            </p>
+          ) : null}
+
+          {savedViewpoints.length > 0 ? (
+            <>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <span
+                  className="text-sm font-semibold text-slate-200"
+                  data-testid="pointcloud-ablation-multi-view-selected-count"
+                >
+                  {selectedMultiViewpoints.length} of {savedViewpoints.length}{" "}
+                  selected
+                </span>
+                <button
+                  className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+                  type="button"
+                  data-testid="pointcloud-ablation-multi-view-select-all"
+                  disabled={isExportingMultiView}
+                  onClick={() =>
+                    setSelectedMultiViewpointIds(
+                      selectedMultiViewpoints.length === savedViewpoints.length
+                        ? []
+                        : null,
+                    )
+                  }
+                >
+                  {selectedMultiViewpoints.length === savedViewpoints.length
+                    ? "Clear all"
+                    : "Select all"}
+                </button>
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                {savedViewpoints.map((viewpoint) => (
+                  <label
+                    key={viewpoint.id}
+                    className="flex cursor-pointer items-center gap-3 rounded-lg border border-white/10 bg-slate-950/65 px-4 py-3 text-sm text-slate-100"
+                  >
+                    <input
+                      className="accent-amber-300"
+                      type="checkbox"
+                      data-testid={
+                        "pointcloud-ablation-multi-view-viewpoint-" +
+                        viewpoint.id
+                      }
+                      disabled={isExportingMultiView}
+                      checked={effectiveMultiViewpointIds.includes(
+                        viewpoint.id,
+                      )}
+                      onChange={(event) => {
+                        const isChecked = event.currentTarget.checked;
+                        setSelectedMultiViewpointIds((currentIds) => {
+                          const concreteIds =
+                            currentIds ??
+                            savedViewpoints.map(
+                              (savedViewpoint) => savedViewpoint.id,
+                            );
+                          return isChecked
+                            ? Array.from(
+                                new Set([...concreteIds, viewpoint.id]),
+                              )
+                            : concreteIds.filter((id) => id !== viewpoint.id);
+                        });
+                      }}
+                    />
+                    <span className="min-w-0 flex-1 truncate font-semibold">
+                      {viewpoint.label}
+                    </span>
+                    {viewpoint.swapYZ ? (
+                      <span className="text-xs font-semibold uppercase tracking-[0.15em] text-amber-200">
+                        Y/Z
+                      </span>
+                    ) : null}
+                  </label>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p
+              className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100"
+              data-testid="pointcloud-ablation-multi-view-empty"
+            >
+              Save at least one viewpoint on the Preview tab before exporting.
+            </p>
+          )}
+
+          <div className="mt-4 flex justify-end">
+            <button
+              className="inline-flex items-center justify-center rounded-lg bg-amber-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+              type="button"
+              data-testid="pointcloud-ablation-multi-view-export-button"
+              disabled={!canExportMultiView}
+              onClick={() => {
+                void exportAblationViewpoints();
+              }}
+            >
+              {isExportingMultiView
+                ? "Exporting viewpoints..."
+                : "Export viewpoint sheet PNG"}
+            </button>
+          </div>
+
+          {selectedMultiViewpoints.length === 0 &&
+          savedViewpoints.length > 0 ? (
+            <p
+              className="mt-3 text-sm text-amber-100"
+              data-testid="pointcloud-ablation-multi-view-selection-empty"
+            >
+              Select at least one saved viewpoint to export.
+            </p>
+          ) : null}
+          {multiViewExportError !== null ? (
+            <p
+              className="mt-3 rounded-lg border border-rose-300/15 bg-rose-400/10 px-4 py-3 text-sm text-rose-100"
+              data-testid="pointcloud-ablation-multi-view-export-error"
+            >
+              {multiViewExportError}
+            </p>
+          ) : null}
+        </section>
       ) : null}
 
       {parseResult.failures.length > 0 ? (
