@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { gotoStableApp } from "./helpers/appPage";
@@ -141,6 +141,95 @@ const saturatedPointUploadJson = JSON.stringify({
   ],
 });
 
+const fragmentKnnMesh = {
+  m_verts: [
+    [-1, -1, 0],
+    [1, -1, 0],
+    [1, 1, 0],
+    [-1, 1, 0],
+  ],
+  m_faces: [
+    [0, 1, 2],
+    [0, 2, 3],
+  ],
+} as const;
+
+const weightedFragmentKnnPoints = [
+  [1, 0, 0],
+  [2, 0, 0],
+  [4, 0, 0],
+] as const;
+
+const weightedFragmentKnnColors = [
+  [0.25, 0.04, 0.16],
+  [0.36, 0.49, 0.09],
+  [0.64, 0.16, 0.81],
+] as const;
+
+const weightedFragmentKnnUploadJson = JSON.stringify({
+  pc_xyz: weightedFragmentKnnPoints,
+  pc_rgb: weightedFragmentKnnColors,
+  ...fragmentKnnMesh,
+});
+
+const translatedFragmentKnnMin = -6_131_334;
+const translatedFragmentKnnMax = 2_051_648.625;
+const translatedFragmentKnnTarget = -8_013.668_945_312_5;
+const translatedFragmentKnnExactColor = [0.95, 0.05, 0.1] as const;
+const translatedFragmentKnnNearColor = [0.05, 0.2, 0.95] as const;
+const translatedFragmentKnnFillerCount = 1_166;
+const translatedFragmentKnnPoints: readonly (readonly [
+  number,
+  number,
+  number,
+])[] = [
+  [translatedFragmentKnnTarget, 0, 0],
+  [translatedFragmentKnnTarget + 0.03125, 0, 0],
+  [translatedFragmentKnnTarget + 0.0625, 0, 0],
+  [translatedFragmentKnnTarget + 0.09375, 0, 0],
+  ...Array.from(
+    { length: translatedFragmentKnnFillerCount },
+    (_, index) =>
+      [
+        Math.fround(
+          translatedFragmentKnnMin +
+            ((translatedFragmentKnnMax - translatedFragmentKnnMin) * index) /
+              (translatedFragmentKnnFillerCount - 1),
+        ),
+        0,
+        0,
+      ] as const,
+  ),
+];
+const translatedFragmentKnnColors: readonly (readonly [
+  number,
+  number,
+  number,
+])[] = [
+  translatedFragmentKnnExactColor,
+  translatedFragmentKnnNearColor,
+  translatedFragmentKnnNearColor,
+  translatedFragmentKnnNearColor,
+  ...Array.from(
+    { length: translatedFragmentKnnFillerCount },
+    () => [0.1, 0.1, 0.1] as const,
+  ),
+];
+const translatedFragmentKnnUploadJson = JSON.stringify({
+  pc_xyz: translatedFragmentKnnPoints,
+  pc_rgb: translatedFragmentKnnColors,
+  m_verts: [
+    [translatedFragmentKnnTarget - 1, -1, 0],
+    [translatedFragmentKnnTarget + 1, -1, 0],
+    [translatedFragmentKnnTarget + 1, 1, 0],
+    [translatedFragmentKnnTarget - 1, 1, 0],
+  ],
+  m_faces: [
+    [0, 1, 2],
+    [0, 2, 3],
+  ],
+});
+
 const largeUploadJson = JSON.stringify({
   pc_xyz: Array.from({ length: 513 }, (_, index) => [
     (index % 19) / 18,
@@ -218,6 +307,153 @@ const readPreviewBackgroundPixel = async (
     context.readPixels(1, 1, 1, 1, context.RGBA, context.UNSIGNED_BYTE, pixel);
     return Array.from(pixel);
   });
+
+type FragmentKnnCanvasSample = {
+  readonly pixel: readonly [number, number];
+  readonly position: readonly [number, number, number];
+};
+
+const snapCameraToPositiveZ = async (page: Page): Promise<void> => {
+  await page.getByTestId("snap-axis-pos-z").click();
+  await expect
+    .poll(async () => {
+      const state = await readCameraState(page.getByTestId("camera-state"));
+      if (state === null) {
+        return false;
+      }
+      const offset = state.position.map(
+        (value, index) => value - state.target[index],
+      );
+      return (
+        offset[2] > 0 &&
+        Math.abs(offset[0]) <= 1e-5 &&
+        Math.abs(offset[1]) <= 1e-5
+      );
+    })
+    .toBe(true);
+};
+
+const fragmentKnnCanvasSample = async (
+  page: Page,
+  previewCanvas: Locator,
+  cameraDistance?: number,
+): Promise<FragmentKnnCanvasSample> => {
+  const { width, height } = await previewCanvas
+    .locator("canvas")
+    .evaluate((canvas) => ({
+      width: (canvas as HTMLCanvasElement).width,
+      height: (canvas as HTMLCanvasElement).height,
+    }));
+  const pixel = [Math.floor(width / 2), Math.floor(height / 2)] as const;
+  const cameraState = await readCameraState(page.getByTestId("camera-state"));
+  if (cameraState === null) {
+    throw new Error("Point-cloud preview camera state is unavailable.");
+  }
+
+  const distance =
+    cameraDistance ?? cameraState.position[2] - cameraState.target[2];
+  const halfHeightAtTarget = distance * Math.tan((42 * Math.PI) / 360);
+  const normalizedX = ((pixel[0] + 0.5) / width) * 2 - 1;
+  const normalizedY = ((pixel[1] + 0.5) / height) * 2 - 1;
+  return {
+    pixel,
+    position: [
+      cameraState.target[0] +
+        normalizedX * halfHeightAtTarget * (width / height),
+      cameraState.target[1] + normalizedY * halfHeightAtTarget,
+      cameraState.target[2],
+    ],
+  };
+};
+
+const readPreviewPixel = async (
+  previewCanvas: Locator,
+  pixel: readonly [number, number],
+): Promise<readonly [number, number, number]> =>
+  previewCanvas.locator("canvas").evaluate((canvas, [x, y]) => {
+    const context =
+      (canvas as HTMLCanvasElement).getContext("webgl2") ??
+      (canvas as HTMLCanvasElement).getContext("webgl");
+    if (context === null) {
+      throw new Error("Point-cloud preview WebGL context is unavailable.");
+    }
+
+    const color = new Uint8Array(4);
+    context.readPixels(x, y, 1, 1, context.RGBA, context.UNSIGNED_BYTE, color);
+    return [color[0], color[1], color[2]] as const;
+  }, pixel);
+
+const encodeGammaChannel = (value: number): number =>
+  value <= 0.0031308
+    ? value * 12.92
+    : 1.055 * Math.pow(Math.max(value, 0), 1 / 2.4) - 0.055;
+
+const expectedFragmentKnnColor = ({
+  position,
+  points,
+  colors,
+  gammaDecodingEnabled,
+  brightness,
+}: {
+  readonly position: readonly [number, number, number];
+  readonly points: readonly (readonly [number, number, number])[];
+  readonly colors: readonly (readonly [number, number, number])[];
+  readonly gammaDecodingEnabled: boolean;
+  readonly brightness: number;
+}): readonly [number, number, number] => {
+  const neighbors = points
+    .map((point, index) => ({
+      color: colors[index]!,
+      squaredDistance:
+        Math.pow(point[0] - position[0], 2) +
+        Math.pow(point[1] - position[1], 2) +
+        Math.pow(point[2] - position[2], 2),
+    }))
+    .sort((left, right) => left.squaredDistance - right.squaredDistance)
+    .slice(0, 3);
+  const adjustedColors = neighbors.map(({ color }) =>
+    color.map((value) =>
+      Math.min(
+        1,
+        (gammaDecodingEnabled ? value : encodeGammaChannel(value)) * brightness,
+      ),
+    ),
+  );
+  if (neighbors[0]!.squaredDistance <= 1e-12) {
+    return adjustedColors[0] as [number, number, number];
+  }
+
+  const weights = neighbors.map(
+    ({ squaredDistance }) => 1 / Math.max(squaredDistance, 1e-12),
+  );
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  return [0, 1, 2].map(
+    (channel) =>
+      neighbors.reduce(
+        (sum, _, index) =>
+          sum + adjustedColors[index]![channel]! * weights[index]!,
+        0,
+      ) / totalWeight,
+  ) as [number, number, number];
+};
+
+const expectPreviewPixelColor = async (
+  previewCanvas: Locator,
+  pixel: readonly [number, number],
+  expectedColor: readonly [number, number, number],
+): Promise<void> => {
+  const expectedBytes = expectedColor.map((value) => Math.round(value * 255));
+  await expect
+    .poll(async () => {
+      const actual = await readPreviewPixel(previewCanvas, pixel);
+      return Math.max(
+        ...actual.map((value, index) =>
+          Math.abs(value - (expectedBytes[index] ?? 0)),
+        ),
+      );
+    })
+    .toBeLessThanOrEqual(3);
+};
 
 const readPreviewColorPixelCount = async (
   previewCanvas: Locator,
@@ -1399,6 +1635,243 @@ test("point-cloud preview keeps fragment shading active for larger uploads via s
   );
 });
 
+test("point-cloud preview renders point spheres with point colors", async ({
+  page,
+}) => {
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await page.getByTestId("pointcloud-upload-input").setInputFiles({
+    name: "saturated-points.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(saturatedPointUploadJson, "utf8"),
+  });
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+
+  await page.getByTestId("toggle-mesh-button").click();
+  await page.getByTestId("toggle-points-button").click();
+  await page.getByTestId("toggle-point-spheres-button").click();
+  await page.getByTestId("point-size-slider").fill("0.12");
+
+  const previewCanvas = page.getByTestId("pointcloud-preview-canvas");
+  await expect
+    .poll(() => readPreviewColorPixelCount(previewCanvas), { timeout: 10_000 })
+    .toBeGreaterThan(100);
+});
+
+test("point-cloud fragment KNN renders the inverse-squared blend and survives repeated display updates", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await page.getByTestId("pointcloud-upload-input").setInputFiles({
+    name: "weighted-fragment-knn.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(weightedFragmentKnnUploadJson, "utf8"),
+  });
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+  await expect(page.getByTestId("mesh-color-mode-status")).toContainText(
+    /Spatial-hash fragment KNN shading active/i,
+  );
+
+  await snapCameraToPositiveZ(page);
+  const previewCanvas = page.getByTestId("pointcloud-preview-canvas");
+  const sample = await fragmentKnnCanvasSample(page, previewCanvas);
+  const gammaCheckbox = page.getByLabel("Disable gamma decoding");
+  const brightnessSlider = page.getByLabel(/^Brightness:/);
+  const expectedColor = (gammaDecodingEnabled: boolean, brightness: number) =>
+    expectedFragmentKnnColor({
+      position: sample.position,
+      points: weightedFragmentKnnPoints,
+      colors: weightedFragmentKnnColors,
+      gammaDecodingEnabled,
+      brightness,
+    });
+
+  await expectPreviewPixelColor(
+    previewCanvas,
+    sample.pixel,
+    expectedColor(true, 1),
+  );
+
+  await gammaCheckbox.check();
+  await expectPreviewPixelColor(
+    previewCanvas,
+    sample.pixel,
+    expectedColor(false, 1),
+  );
+
+  await brightnessSlider.fill("0.5");
+  await expectPreviewPixelColor(
+    previewCanvas,
+    sample.pixel,
+    expectedColor(false, 0.5),
+  );
+
+  await gammaCheckbox.uncheck();
+  await expectPreviewPixelColor(
+    previewCanvas,
+    sample.pixel,
+    expectedColor(true, 0.5),
+  );
+
+  await brightnessSlider.fill("1.25");
+  await expectPreviewPixelColor(
+    previewCanvas,
+    sample.pixel,
+    expectedColor(true, 1.25),
+  );
+
+  await gammaCheckbox.check();
+  await expectPreviewPixelColor(
+    previewCanvas,
+    sample.pixel,
+    expectedColor(false, 1.25),
+  );
+
+  await brightnessSlider.fill("1");
+  await gammaCheckbox.uncheck();
+  await expectPreviewPixelColor(
+    previewCanvas,
+    sample.pixel,
+    expectedColor(true, 1),
+  );
+});
+
+test("point-cloud fragment KNN returns the exact sample color on an exact hit", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  const fileInput = page.getByTestId("pointcloud-upload-input");
+  const previewCanvas = page.getByTestId("pointcloud-preview-canvas");
+  await expect
+    .poll(() => readCameraState(page.getByTestId("camera-state")))
+    .not.toBeNull();
+  const cameraState = await readCameraState(page.getByTestId("camera-state"));
+  if (cameraState === null) {
+    throw new Error("Point-cloud preview camera state is unavailable.");
+  }
+  const cameraDistance = Math.hypot(
+    cameraState.position[0] - cameraState.target[0],
+    cameraState.position[1] - cameraState.target[1],
+    cameraState.position[2] - cameraState.target[2],
+  );
+  const sample = await fragmentKnnCanvasSample(
+    page,
+    previewCanvas,
+    cameraDistance,
+  );
+  const exactColor = [0.12, 0.46, 0.78] as const;
+  const points = [sample.position, [2, 0, 0], [4, 0, 0]] as const;
+  const colors = [exactColor, [1, 0, 0], [0, 1, 0]] as const;
+  await fileInput.setInputFiles({
+    name: "exact-hit-fragment-knn.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(
+      JSON.stringify({
+        pc_xyz: points,
+        pc_rgb: colors,
+        ...fragmentKnnMesh,
+      }),
+      "utf8",
+    ),
+  });
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "exact-hit-fragment-knn.json",
+  );
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+  await expect(page.getByTestId("mesh-color-mode-status")).toContainText(
+    /Spatial-hash fragment KNN shading active/i,
+  );
+  await snapCameraToPositiveZ(page);
+
+  await expectPreviewPixelColor(previewCanvas, sample.pixel, exactColor);
+});
+
+test("point-cloud fragment KNN keeps translated boundary cells conservative", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await gotoStableApp(page, "/pointcloud-preview");
+
+  await page.getByTestId("pointcloud-upload-input").setInputFiles({
+    name: "translated-boundary-fragment-knn.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(translatedFragmentKnnUploadJson, "utf8"),
+  });
+  await expect(page.getByTestId("pointcloud-source-label")).toHaveText(
+    "translated-boundary-fragment-knn.json",
+  );
+  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
+  await expect(page.getByTestId("point-sample-count")).toHaveText("1170");
+  await expect(page.getByTestId("mesh-color-mode-status")).toContainText(
+    /1170 points across 147 cells/i,
+  );
+
+  await page.getByRole("button", { name: "Reset camera" }).click();
+  await expect
+    .poll(async () => {
+      const state = await readCameraState(page.getByTestId("camera-state"));
+      return state === null
+        ? Number.POSITIVE_INFINITY
+        : Math.abs(state.target[0] - translatedFragmentKnnTarget);
+    })
+    .toBeLessThanOrEqual(1e-3);
+  await snapCameraToPositiveZ(page);
+
+  const previewCanvas = page.getByTestId("pointcloud-preview-canvas");
+  const sample = await fragmentKnnCanvasSample(page, previewCanvas);
+  expect(
+    Math.abs(sample.position[0] - translatedFragmentKnnTarget),
+  ).toBeLessThan(0.02);
+
+  const gridDimension = 147;
+  const gridExtent = translatedFragmentKnnMax - translatedFragmentKnnMin;
+  const exactPointCell = Math.floor(
+    ((translatedFragmentKnnTarget - translatedFragmentKnnMin) / gridExtent) *
+      gridDimension,
+  );
+  const shaderCellSize = Math.fround(Math.fround(gridExtent) / gridDimension);
+  const shaderQueryCell = Math.floor(
+    Math.fround(
+      Math.fround(sample.position[0] - translatedFragmentKnnMin) /
+        shaderCellSize,
+    ),
+  );
+  expect(exactPointCell).toBe(109);
+  expect(shaderQueryCell).toBe(110);
+
+  const unpaddedNeighborMin = Math.fround(
+    Math.fround(translatedFragmentKnnMin) +
+      Math.fround(Math.fround(exactPointCell) * shaderCellSize),
+  );
+  const unpaddedNeighborMax = Math.fround(unpaddedNeighborMin + shaderCellSize);
+  const unpaddedMinimumSquaredDistance = Math.pow(
+    sample.position[0] - unpaddedNeighborMax,
+    2,
+  );
+  const centerCellThirdSquaredDistance =
+    Math.pow(translatedFragmentKnnPoints[3]![0] - sample.position[0], 2) +
+    Math.pow(sample.position[1], 2) +
+    Math.pow(sample.position[2], 2);
+  expect(unpaddedMinimumSquaredDistance).toBeGreaterThan(
+    centerCellThirdSquaredDistance,
+  );
+
+  const expectedColor = expectedFragmentKnnColor({
+    position: sample.position,
+    points: translatedFragmentKnnPoints,
+    colors: translatedFragmentKnnColors,
+    gammaDecodingEnabled: true,
+    brightness: 1,
+  });
+  expect(expectedColor[0]).toBeGreaterThan(0.9);
+
+  await expectPreviewPixelColor(previewCanvas, sample.pixel, expectedColor);
+});
+
 test("point-cloud preview falls back to baked colours when one spatial-hash cell is too dense", async ({
   page,
 }) => {
@@ -1551,29 +2024,6 @@ test("point-cloud preview disables dependent controls and saves viewpoints", asy
 
   await page.reload();
   await expect(page.getByTestId("viewpoint-go-1")).toHaveCount(0);
-});
-
-test("point-cloud preview renders point spheres with point colors", async ({
-  page,
-}) => {
-  await gotoStableApp(page, "/pointcloud-preview");
-
-  await page.getByTestId("pointcloud-upload-input").setInputFiles({
-    name: "saturated-points.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(saturatedPointUploadJson, "utf8"),
-  });
-  await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
-
-  await page.getByTestId("toggle-mesh-button").click();
-  await page.getByTestId("toggle-points-button").click();
-  await page.getByTestId("toggle-point-spheres-button").click();
-  await page.getByTestId("point-size-slider").fill("0.12");
-
-  const previewCanvas = page.getByTestId("pointcloud-preview-canvas");
-  await expect
-    .poll(() => readPreviewColorPixelCount(previewCanvas), { timeout: 10_000 })
-    .toBeGreaterThan(100);
 });
 
 test("point-cloud preview shows and copies saved viewpoint camera details", async ({

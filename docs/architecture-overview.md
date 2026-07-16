@@ -93,7 +93,9 @@ The route currently provides:
   `math/interpolation.ts`;
 - fragment-space mesh colouring backed by a feature-local spatial hash in
   `math/spatialHash3d.ts`, with fallback to baked vertex colours when a dense
-  cell would exceed current shader bounds;
+  cell would exceed current shader bounds; see
+  [Fragment KNN mesh shading](fragment-knn-shading.md) for its algorithm,
+  performance design, and correctness limits;
 - a route-local Kernels render mode for convolution exports, where the scene
   renders mesh geometry plus selected-level kernel anchors and hover-selected
   geodesic path traces without using the worker pipeline;
@@ -303,7 +305,12 @@ Playwright is used for integration, worker, and WebGPU parity coverage. The suit
 - Full style-transfer endpoint checks when optional fixtures/model packs are present.
 - LBFGS utility tests in the default correctness suite.
 
-Performance-oriented benchmark specs, including pack-acceptance threshold helpers and kernel-lab smoke checks, live under `benchmarks/` and run with `npm run benchmark` instead of default CI. The tests are designed to skip optional large-fixture paths rather than fail a fresh checkout.
+Performance-oriented benchmark specs, including pack-acceptance threshold
+helpers, kernel-lab smoke checks, and a warmed fixed-viewport point-cloud
+fragment-KNN frame-time comparison with baked shading as its control, live under
+`benchmarks/` and run with `npm run benchmark` instead of default CI. The tests
+are designed to skip optional large-fixture paths rather than fail a fresh
+checkout.
 
 ## Known follow-ups
 

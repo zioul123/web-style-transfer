@@ -172,6 +172,9 @@ assertion layer.
 - `README.md`: user and contributor setup, commands, testing, and deployment.
 - `docs/architecture.md`: short architectural contract.
 - `docs/architecture-overview.md`: detailed current data flow and module roles.
+- `docs/fragment-knn-shading.md`: fragment-space point-cloud mesh shading
+  algorithm, original design, optimized data path, correctness limits, and
+  performance evidence.
 - `docs/webgpu-style-transfer-plan.md`: project phase status and follow-ups.
 - `docs/pointcloud-ablation-plan.md`: current staged plan and remaining
   follow-ups for the point-cloud ablation browser.
