@@ -1,5 +1,12 @@
 import type { KdTree3DNode } from "../../ml/geometry/kdTree3d";
 
+export const convolutionKernelDirectionIndices = [
+  0, 1, 2, 3, 4, 5, 6, 7,
+] as const;
+
+export type ConvolutionKernelDirectionIndex =
+  (typeof convolutionKernelDirectionIndices)[number];
+
 export type ConvolutionKernelPathPoint = readonly [number, number, number];
 
 export type ConvolutionKernelPath = readonly ConvolutionKernelPathPoint[];
@@ -130,6 +137,8 @@ export type PointCloudPreviewViewSettings = {
   readonly showGroundPlane: boolean;
   readonly meshColorMode: MeshColorMode;
   readonly kernelLevelIndex: number;
+  readonly showKernelDirections: boolean;
+  readonly kernelDirectionIndex: ConvolutionKernelDirectionIndex;
   readonly pointSize: number;
   readonly backgroundColor: PointCloudPreviewBackgroundColor;
   readonly disableGammaDecoding: boolean;

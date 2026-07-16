@@ -5,12 +5,14 @@ import {
 } from "./PreviewViewControls";
 import type { SavedViewpoint } from "./pointCloudPreviewModels";
 import type {
+  ConvolutionKernelDirectionIndex,
   PointCloudPreviewBackgroundColor,
   PointCloudPreviewRenderMode,
   PointCloudPreviewViewAxis,
   PointCloudPreviewViewSettings,
   PreviewCameraState,
 } from "./types";
+import { convolutionKernelDirectionIndices } from "./types";
 import type { NextPointCloudPreviewCameraCommand } from "./usePointCloudPreviewController";
 import {
   ArrowRightIcon,
@@ -24,6 +26,11 @@ import {
 
 const brightnessLabel = (brightness: number): string =>
   `${brightness.toFixed(2)}x`;
+
+const isKernelDirectionIndex = (
+  value: number,
+): value is ConvolutionKernelDirectionIndex =>
+  convolutionKernelDirectionIndices.some((index) => index === value);
 
 const cameraTupleText = (tuple: readonly [number, number, number]): string =>
   `(${tuple.map((value) => value.toFixed(1)).join(", ")})`;
@@ -228,25 +235,63 @@ export function PointCloudPreviewControlsPanel({
             </div>
           ) : null}
           {hasKernelPreview && viewSettings.renderMode === "kernels" ? (
-            <label className="block rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4">
-              <span className="mb-2 block text-slate-300">Kernel level</span>
-              <select
-                data-testid="kernel-level-select"
-                className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-slate-100"
-                value={viewSettings.kernelLevelIndex}
-                onChange={(event) =>
-                  updateViewSettings({
-                    kernelLevelIndex: Number(event.target.value),
-                  })
-                }
-              >
-                {kernelLevelOptions.map((level) => (
-                  <option key={level.levelIndex} value={level.levelIndex}>
-                    Level {level.levelIndex} ({level.groupCount} anchors)
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="space-y-3 rounded-[0.95rem] border border-white/10 bg-slate-900/75 px-4 py-4">
+              <label className="block">
+                <span className="mb-2 block text-slate-300">Kernel level</span>
+                <select
+                  data-testid="kernel-level-select"
+                  className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-slate-100"
+                  value={viewSettings.kernelLevelIndex}
+                  onChange={(event) =>
+                    updateViewSettings({
+                      kernelLevelIndex: Number(event.target.value),
+                    })
+                  }
+                >
+                  {kernelLevelOptions.map((level) => (
+                    <option key={level.levelIndex} value={level.levelIndex}>
+                      Level {level.levelIndex} ({level.groupCount} anchors)
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <PreviewVisibilityToggleButton
+                  label="View directions"
+                  testId="toggle-kernel-directions-button"
+                  visible={viewSettings.showKernelDirections}
+                  onClick={() =>
+                    updateViewSettings({
+                      showKernelDirections: !viewSettings.showKernelDirections,
+                    })
+                  }
+                />
+                <label className="block">
+                  <span className="mb-2 block text-slate-300">
+                    Direction index
+                  </span>
+                  <select
+                    data-testid="kernel-direction-index-select"
+                    className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-slate-100"
+                    value={viewSettings.kernelDirectionIndex}
+                    onChange={(event) => {
+                      const nextIndex = Number(event.target.value);
+                      if (isKernelDirectionIndex(nextIndex)) {
+                        updateViewSettings({
+                          kernelDirectionIndex: nextIndex,
+                        });
+                      }
+                    }}
+                  >
+                    {convolutionKernelDirectionIndices.map((directionIndex) => (
+                      <option key={directionIndex} value={directionIndex}>
+                        {directionIndex}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
           ) : null}
           <div className="grid gap-3 sm:grid-cols-2">
             <PreviewVisibilityToggleButton

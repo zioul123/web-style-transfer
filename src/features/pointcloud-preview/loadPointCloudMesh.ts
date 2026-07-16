@@ -11,9 +11,10 @@ import type {
   PointCloudMeshData,
   PointCloudMeshJson,
 } from "./types";
+import { convolutionKernelDirectionIndices } from "./types";
 
 const dimensionsPerEntry = 3;
-const pathsPerKernelGroup = 8;
+const pathsPerKernelGroup = convolutionKernelDirectionIndices.length;
 const kernelLevelKeyPattern = /^level_(\d+)_paths$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

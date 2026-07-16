@@ -97,8 +97,10 @@ The route currently provides:
   [Fragment KNN mesh shading](fragment-knn-shading.md) for its algorithm,
   performance design, and correctness limits;
 - a route-local Kernels render mode for convolution exports, where the scene
-  renders mesh geometry plus selected-level kernel anchors and hover-selected
-  geodesic path traces without using the worker pipeline;
+  renders mesh geometry plus selected-level kernel anchors, an optional
+  all-anchor overlay from each anchor to the selected 0-through-7 path
+  endpoint, and hover-selected full geodesic path traces without using the
+  worker pipeline;
 - browser-only view state such as mesh/point toggles, solid mesh occlusion,
   point sphere rendering, gamma and brightness controls, screenshots, and saved
   viewpoints persisted in local storage across datasets on this route.

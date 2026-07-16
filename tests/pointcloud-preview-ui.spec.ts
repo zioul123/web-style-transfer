@@ -1475,6 +1475,9 @@ test("point-cloud preview exposes kernel render mode for convolution uploads", a
   await gotoStableApp(page, "/pointcloud-preview");
 
   await expect(page.getByTestId("render-mode-kernels-button")).toHaveCount(0);
+  await expect(page.getByTestId("toggle-kernel-directions-button")).toHaveCount(
+    0,
+  );
 
   const fileInput = page.getByTestId("pointcloud-upload-input");
   await fileInput.setInputFiles({
@@ -1485,15 +1488,59 @@ test("point-cloud preview exposes kernel render mode for convolution uploads", a
 
   await expect(page.getByTestId("pointcloud-load-status")).toHaveText("ready");
   await expect(page.getByTestId("render-mode-kernels-button")).toBeVisible();
+  await expect(page.getByTestId("toggle-kernel-directions-button")).toHaveCount(
+    0,
+  );
   await page.getByTestId("render-mode-kernels-button").click();
   await expect(page.getByTestId("render-mode-kernels-button")).toHaveAttribute(
     "aria-pressed",
     "true",
   );
   await expect(page.getByTestId("kernel-level-select")).toHaveValue("0");
+  const directionToggle = page.getByTestId("toggle-kernel-directions-button");
+  const directionSelect = page.getByTestId("kernel-direction-index-select");
+  const canvas = page
+    .getByTestId("pointcloud-preview-canvas")
+    .locator("canvas");
+  await expect(directionToggle).toHaveAttribute("aria-pressed", "false");
+  await expect(directionSelect).toHaveValue("0");
+  await expect(directionSelect.locator("option")).toHaveText([
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+  ]);
   await expect(page.getByTestId("mesh-color-mode-status")).toContainText(
     /Kernel preview active.*2 anchors/i,
   );
+
+  const directionsHidden = await canvas.screenshot();
+  await directionToggle.click();
+  await expect(directionToggle).toHaveAttribute("aria-pressed", "true");
+  await expect
+    .poll(async () =>
+      Buffer.compare(directionsHidden, await canvas.screenshot()),
+    )
+    .not.toBe(0);
+
+  const directionZero = await canvas.screenshot();
+  await directionSelect.selectOption("7");
+  await expect(directionSelect).toHaveValue("7");
+  await expect
+    .poll(async () => Buffer.compare(directionZero, await canvas.screenshot()))
+    .not.toBe(0);
+
+  await directionToggle.click();
+  await expect(directionToggle).toHaveAttribute("aria-pressed", "false");
+  await expect
+    .poll(async () =>
+      Buffer.compare(directionsHidden, await canvas.screenshot()),
+    )
+    .toBe(0);
 
   await page.getByTestId("kernel-level-select").selectOption("1");
   await expect(page.getByTestId("kernel-level-select")).toHaveValue("1");
@@ -1503,6 +1550,8 @@ test("point-cloud preview exposes kernel render mode for convolution uploads", a
 
   await page.getByTestId("render-mode-surface-button").click();
   await expect(page.getByTestId("kernel-level-select")).toHaveCount(0);
+  await expect(directionToggle).toHaveCount(0);
+  await expect(directionSelect).toHaveCount(0);
 
   await fileInput.setInputFiles({
     name: "legacy-upload.json",

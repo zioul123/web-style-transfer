@@ -14,6 +14,7 @@ import {
 } from "../src/features/pointcloud-preview/ablation/experimentFilenames";
 import { buildAblationMatrix } from "../src/features/pointcloud-preview/ablation/ablationMatrix";
 import { sampleInterpolatedColor } from "../src/features/pointcloud-preview/math/interpolation";
+import { buildKernelDirectionOverlayPositions } from "../src/features/pointcloud-preview/kernelDirectionOverlay";
 import {
   buildKdTree3d,
   findKNearestNeighbors,
@@ -40,6 +41,9 @@ const buildKernelPathGroup = (
     anchor,
     [anchor[0] + (pathIndex + 1) * 0.1, anchor[1], anchor[2] + 0.25] as const,
   ]);
+
+const float32Values = (values: readonly number[]): number[] =>
+  Array.from(new Float32Array(values));
 
 test("point-cloud preview parser converts the tiny fixture into typed arrays", () => {
   const data = buildPointCloudMeshData(tinyFixture);
@@ -98,6 +102,48 @@ test("point-cloud preview parser rejects malformed convolution kernel groups", (
 
   expect(() => parsePointCloudMeshText(invalidText)).toThrow(
     /must contain exactly 8 geodesic paths/i,
+  );
+});
+
+test("point-cloud kernel direction overlay connects every anchor to the selected path endpoint", () => {
+  const groups = [
+    buildKernelPathGroup([0, 0, 0]),
+    buildKernelPathGroup([1, 0, 0]),
+  ];
+
+  const directionThree = buildKernelDirectionOverlayPositions(groups, 3);
+  expect(Array.from(directionThree.sourcePositions)).toEqual([
+    0, 0, 0, 1, 0, 0,
+  ]);
+  expect(Array.from(directionThree.targetPositions)).toEqual(
+    float32Values([0.4, 0, 0.25, 1.4, 0, 0.25]),
+  );
+  expect(Array.from(directionThree.linePositions)).toEqual(
+    float32Values([0, 0, 0, 0.4, 0, 0.25, 1, 0, 0, 1.4, 0, 0.25]),
+  );
+
+  const directionSeven = buildKernelDirectionOverlayPositions(groups, 7);
+  expect(Array.from(directionSeven.targetPositions)).toEqual(
+    float32Values([0.8, 0, 0.25, 1.8, 0, 0.25]),
+  );
+});
+
+test("point-cloud kernel direction overlay skips missing and non-finite paths", () => {
+  const missingDirectionGroup: ConvolutionKernelPathGroup = [[[0, 0, 0]]];
+  const nonFiniteTargetGroup = buildKernelPathGroup([Number.NaN, 0, 0]);
+  const validGroup = buildKernelPathGroup([1, 0, 0]);
+
+  const overlay = buildKernelDirectionOverlayPositions(
+    [missingDirectionGroup, nonFiniteTargetGroup, validGroup],
+    7,
+  );
+
+  expect(Array.from(overlay.sourcePositions)).toEqual([1, 0, 0]);
+  expect(Array.from(overlay.targetPositions)).toEqual(
+    float32Values([1.8, 0, 0.25]),
+  );
+  expect(Array.from(overlay.linePositions)).toEqual(
+    float32Values([1, 0, 0, 1.8, 0, 0.25]),
   );
 });
 
