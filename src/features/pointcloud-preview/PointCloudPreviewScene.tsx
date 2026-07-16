@@ -76,7 +76,6 @@ type SceneContentProps = Omit<
 };
 
 const minimumSquaredDistance = 1e-16;
-const fragmentShaderNeighborCellRadius = 1;
 const textureMaxWidth = 2048;
 const cameraStateEpsilon = 1e-5;
 const backgroundColors: Record<PointCloudPreviewBackgroundColor, string> = {
@@ -86,7 +85,7 @@ const backgroundColors: Record<PointCloudPreviewBackgroundColor, string> = {
 };
 
 const fragmentKnnVertexShader = `
-  varying vec3 vSamplePosition;
+  out vec3 vSamplePosition;
 
   void main() {
     vSamplePosition = position;
@@ -95,36 +94,61 @@ const fragmentKnnVertexShader = `
 `;
 
 const buildFragmentKnnFragmentShader = (maxPointsPerCell: number): string => `
-  precision highp float;
-
   uniform sampler2D pointPositionTexture;
   uniform sampler2D pointColorTexture;
-  uniform sampler2D cellOffsetTexture;
-  uniform float pointTextureWidth;
-  uniform float pointTextureHeight;
-  uniform float cellOffsetTextureWidth;
-  uniform float cellOffsetTextureHeight;
+  uniform usampler2D cellRangeTexture;
   uniform float brightness;
   uniform float gammaDecodeEnabled;
   uniform vec3 gridMin;
   uniform vec3 gridCellSize;
   uniform vec3 gridDimensions;
 
-  varying vec3 vSamplePosition;
+  in vec3 vSamplePosition;
+  out vec4 fragmentColor;
 
-  vec4 readTextureValue(
-    sampler2D textureSampler,
-    int index,
-    float textureWidth,
-    float textureHeight
-  ) {
-    float row = floor(float(index) / textureWidth);
-    float column = float(index) - (row * textureWidth);
-    vec2 uv = vec2(
-      (column + 0.5) / textureWidth,
-      (row + 0.5) / textureHeight
-    );
-    return texture2D(textureSampler, uv);
+  const int neighborCellCount = 27;
+  const float floatUnitRoundoff = 5.960464477539063e-8;
+  const float inverseFloatRoundingBound =
+    floatUnitRoundoff / (1.0 - floatUnitRoundoff);
+  const float boundaryPaddingEvaluationGuard =
+    1.0 + (8.0 * floatUnitRoundoff);
+
+  const ivec3 neighborCellOffsets[27] = ivec3[27](
+    ivec3( 0,  0,  0),
+    ivec3(-1,  0,  0),
+    ivec3( 1,  0,  0),
+    ivec3( 0, -1,  0),
+    ivec3( 0,  1,  0),
+    ivec3( 0,  0, -1),
+    ivec3( 0,  0,  1),
+    ivec3(-1, -1,  0),
+    ivec3(-1,  1,  0),
+    ivec3( 1, -1,  0),
+    ivec3( 1,  1,  0),
+    ivec3(-1,  0, -1),
+    ivec3(-1,  0,  1),
+    ivec3( 1,  0, -1),
+    ivec3( 1,  0,  1),
+    ivec3( 0, -1, -1),
+    ivec3( 0, -1,  1),
+    ivec3( 0,  1, -1),
+    ivec3( 0,  1,  1),
+    ivec3(-1, -1, -1),
+    ivec3(-1, -1,  1),
+    ivec3(-1,  1, -1),
+    ivec3(-1,  1,  1),
+    ivec3( 1, -1, -1),
+    ivec3( 1, -1,  1),
+    ivec3( 1,  1, -1),
+    ivec3( 1,  1,  1)
+  );
+
+  ivec2 linearTextureCoordinate(int index, int textureWidth) {
+    if (index < textureWidth) {
+      return ivec2(index, 0);
+    }
+    int row = index / textureWidth;
+    return ivec2(index - (row * textureWidth), row);
   }
 
   int clampCellCoordinate(float value, float minValue, float cellSizeValue, int dimension) {
@@ -137,6 +161,48 @@ const buildFragmentKnnFragmentShader = (maxPointsPerCell: number): string => `
 
   int flattenCellIndex(ivec3 coordinate, ivec3 dimensions) {
     return coordinate.x + (coordinate.y * dimensions.x) + (coordinate.z * dimensions.x * dimensions.y);
+  }
+
+  void conservativeCellBoundary(
+    ivec3 coordinate,
+    out vec3 boundary,
+    out vec3 padding
+  ) {
+    vec3 scaledCellSize = vec3(coordinate) * gridCellSize;
+    boundary = gridMin + scaledCellSize;
+
+    // For a rounded value f, the source differs by at most
+    // u / (1 - u) * abs(f). The terms cover grid-min conversion,
+    // cell-size and integer-coordinate conversion, multiplication, boundary
+    // addition, and the final outward padding addition. This float bound also
+    // dominates the preceding CPU double arithmetic. The guard covers rounding
+    // while evaluating the bound itself, including second-order u * padding.
+    vec3 errorMagnitude =
+      abs(gridMin) +
+      (3.0 * abs(scaledCellSize)) +
+      (2.0 * abs(boundary));
+    padding =
+      inverseFloatRoundingBound *
+      errorMagnitude *
+      boundaryPaddingEvaluationGuard;
+  }
+
+  float cellMinimumSquaredDistance(ivec3 coordinate) {
+    vec3 cellMin;
+    vec3 cellMinPadding;
+    vec3 cellMax;
+    vec3 cellMaxPadding;
+    conservativeCellBoundary(coordinate, cellMin, cellMinPadding);
+    conservativeCellBoundary(
+      coordinate + ivec3(1),
+      cellMax,
+      cellMaxPadding
+    );
+    vec3 outsideDistance = max(
+      max((cellMin - cellMinPadding) - vSamplePosition, vec3(0.0)),
+      vSamplePosition - (cellMax + cellMaxPadding)
+    );
+    return dot(outsideDistance, outsideDistance);
   }
 
   vec3 encodeGamma(vec3 color) {
@@ -157,33 +223,33 @@ const buildFragmentKnnFragmentShader = (maxPointsPerCell: number): string => `
 
   void insertNeighbor(
     in float squaredDistance,
-    in vec3 color,
+    in int pointIndex,
     inout float distance0,
     inout float distance1,
     inout float distance2,
-    inout vec3 color0,
-    inout vec3 color1,
-    inout vec3 color2
+    inout int index0,
+    inout int index1,
+    inout int index2
   ) {
     if (squaredDistance < distance0) {
       distance2 = distance1;
-      color2 = color1;
+      index2 = index1;
       distance1 = distance0;
-      color1 = color0;
+      index1 = index0;
       distance0 = squaredDistance;
-      color0 = color;
+      index0 = pointIndex;
       return;
     }
     if (squaredDistance < distance1) {
       distance2 = distance1;
-      color2 = color1;
+      index2 = index1;
       distance1 = squaredDistance;
-      color1 = color;
+      index1 = pointIndex;
       return;
     }
     if (squaredDistance < distance2) {
       distance2 = squaredDistance;
-      color2 = color;
+      index2 = pointIndex;
     }
   }
 
@@ -191,9 +257,12 @@ const buildFragmentKnnFragmentShader = (maxPointsPerCell: number): string => `
     float distance0 = 1.0e20;
     float distance1 = 1.0e20;
     float distance2 = 1.0e20;
-    vec3 color0 = vec3(0.0);
-    vec3 color1 = vec3(0.0);
-    vec3 color2 = vec3(0.0);
+    int index0 = -1;
+    int index1 = -1;
+    int index2 = -1;
+    int pointPositionTextureWidth = textureSize(pointPositionTexture, 0).x;
+    int pointColorTextureWidth = textureSize(pointColorTexture, 0).x;
+    int cellRangeTextureWidth = textureSize(cellRangeTexture, 0).x;
 
     ivec3 dimensions = ivec3(
       int(gridDimensions.x + 0.5),
@@ -205,85 +274,106 @@ const buildFragmentKnnFragmentShader = (maxPointsPerCell: number): string => `
       clampCellCoordinate(vSamplePosition.y, gridMin.y, gridCellSize.y, dimensions.y),
       clampCellCoordinate(vSamplePosition.z, gridMin.z, gridCellSize.z, dimensions.z)
     );
+    int activeNeighborCellCount = all(equal(dimensions, ivec3(1)))
+      ? 1
+      : neighborCellCount;
 
-    for (int cellOffsetZ = -${fragmentShaderNeighborCellRadius}; cellOffsetZ <= ${fragmentShaderNeighborCellRadius}; cellOffsetZ += 1) {
-      for (int cellOffsetY = -${fragmentShaderNeighborCellRadius}; cellOffsetY <= ${fragmentShaderNeighborCellRadius}; cellOffsetY += 1) {
-        for (int cellOffsetX = -${fragmentShaderNeighborCellRadius}; cellOffsetX <= ${fragmentShaderNeighborCellRadius}; cellOffsetX += 1) {
-          ivec3 cellCoordinate = queryCell + ivec3(cellOffsetX, cellOffsetY, cellOffsetZ);
-          if (
-            cellCoordinate.x < 0 || cellCoordinate.x >= dimensions.x ||
-            cellCoordinate.y < 0 || cellCoordinate.y >= dimensions.y ||
-            cellCoordinate.z < 0 || cellCoordinate.z >= dimensions.z
-          ) {
-            continue;
-          }
+    for (int cellOffsetIndex = 0; cellOffsetIndex < neighborCellCount; cellOffsetIndex += 1) {
+      if (cellOffsetIndex >= activeNeighborCellCount) {
+        break;
+      }
+      ivec3 cellCoordinate = queryCell + neighborCellOffsets[cellOffsetIndex];
+      if (
+        cellCoordinate.x < 0 || cellCoordinate.x >= dimensions.x ||
+        cellCoordinate.y < 0 || cellCoordinate.y >= dimensions.y ||
+        cellCoordinate.z < 0 || cellCoordinate.z >= dimensions.z
+      ) {
+        continue;
+      }
 
-          int cellIndex = flattenCellIndex(cellCoordinate, dimensions);
-          int rangeStart = int(
-            readTextureValue(
-              cellOffsetTexture,
-              cellIndex,
-              cellOffsetTextureWidth,
-              cellOffsetTextureHeight
-            ).x + 0.5
-          );
-          int rangeEnd = int(
-            readTextureValue(
-              cellOffsetTexture,
-              cellIndex + 1,
-              cellOffsetTextureWidth,
-              cellOffsetTextureHeight
-            ).x + 0.5
-          );
+      if (
+        cellOffsetIndex > 0 &&
+        cellMinimumSquaredDistance(cellCoordinate) > distance2
+      ) {
+        continue;
+      }
 
-          for (int pointOffset = 0; pointOffset < ${maxPointsPerCell}; pointOffset += 1) {
-            int pointIndex = rangeStart + pointOffset;
-            if (pointIndex >= rangeEnd) {
-              break;
-            }
+      int cellIndex = flattenCellIndex(cellCoordinate, dimensions);
+      uvec2 cellRange = texelFetch(
+        cellRangeTexture,
+        linearTextureCoordinate(cellIndex, cellRangeTextureWidth),
+        0
+      ).rg;
+      int rangeStart = int(cellRange.x);
+      int rangeCount = int(cellRange.y);
 
-            vec3 pointPosition = readTextureValue(
-              pointPositionTexture,
-              pointIndex,
-              pointTextureWidth,
-              pointTextureHeight
-            ).xyz;
-            vec3 pointColor = readTextureValue(
-              pointColorTexture,
-              pointIndex,
-              pointTextureWidth,
-              pointTextureHeight
-            ).xyz;
-            vec3 delta = pointPosition - vSamplePosition;
-            float squaredDistance = dot(delta, delta);
-
-            insertNeighbor(
-              squaredDistance,
-              adjustDisplayColor(pointColor),
-              distance0,
-              distance1,
-              distance2,
-              color0,
-              color1,
-              color2
-            );
-          }
+      for (int pointOffset = 0; pointOffset < ${maxPointsPerCell}; pointOffset += 1) {
+        if (pointOffset >= rangeCount) {
+          break;
         }
+
+        int pointIndex = rangeStart + pointOffset;
+        vec3 pointPosition = texelFetch(
+          pointPositionTexture,
+          linearTextureCoordinate(pointIndex, pointPositionTextureWidth),
+          0
+        ).xyz;
+        vec3 delta = pointPosition - vSamplePosition;
+        float squaredDistance = dot(delta, delta);
+
+        insertNeighbor(
+          squaredDistance,
+          pointIndex,
+          distance0,
+          distance1,
+          distance2,
+          index0,
+          index1,
+          index2
+        );
       }
     }
 
-    vec3 color = vec3(0.0);
-    if (distance0 <= ${minimumSquaredDistance.toExponential(1)}) {
-      color = color0;
-    } else {
-      float weight0 = 1.0 / max(distance0, ${minimumSquaredDistance.toExponential(1)});
-      float weight1 = 1.0 / max(distance1, ${minimumSquaredDistance.toExponential(1)});
-      float weight2 = 1.0 / max(distance2, ${minimumSquaredDistance.toExponential(1)});
-      float totalWeight = weight0 + weight1 + weight2;
-      color = ((color0 * weight0) + (color1 * weight1) + (color2 * weight2)) / totalWeight;
+    if (index0 < 0) {
+      fragmentColor = vec4(0.0, 0.0, 0.0, 1.0);
+      return;
     }
 
-    gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+    vec3 color0 = adjustDisplayColor(texelFetch(
+      pointColorTexture,
+      linearTextureCoordinate(index0, pointColorTextureWidth),
+      0
+    ).xyz);
+    if (distance0 <= ${minimumSquaredDistance.toExponential(1)}) {
+      fragmentColor = vec4(color0, 1.0);
+      return;
+    }
+
+    float weight0 = 1.0 / max(distance0, ${minimumSquaredDistance.toExponential(1)});
+    float totalWeight = weight0;
+    vec3 weightedColor = color0 * weight0;
+    if (index1 >= 0) {
+      vec3 color1 = adjustDisplayColor(texelFetch(
+        pointColorTexture,
+        linearTextureCoordinate(index1, pointColorTextureWidth),
+        0
+      ).xyz);
+      float weight1 = 1.0 / max(distance1, ${minimumSquaredDistance.toExponential(1)});
+      totalWeight += weight1;
+      weightedColor += color1 * weight1;
+    }
+    if (index2 >= 0) {
+      vec3 color2 = adjustDisplayColor(texelFetch(
+        pointColorTexture,
+        linearTextureCoordinate(index2, pointColorTextureWidth),
+        0
+      ).xyz);
+      float weight2 = 1.0 / max(distance2, ${minimumSquaredDistance.toExponential(1)});
+      totalWeight += weight2;
+      weightedColor += color2 * weight2;
+    }
+
+    fragmentColor = vec4(clamp(weightedColor / totalWeight, 0.0, 1.0), 1.0);
   }
 `;
 
@@ -416,21 +506,26 @@ const buildPointTexture = (values: Float32Array): PackedTexture => {
   return { texture, width, height };
 };
 
-const buildScalarTexture = (values: Uint32Array): PackedTexture => {
-  const width = Math.min(Math.max(values.length, 1), textureMaxWidth);
-  const height = Math.max(1, Math.ceil(values.length / width));
-  const textureData = new Float32Array(width * height * 4);
-  for (let valueIndex = 0; valueIndex < values.length; valueIndex += 1) {
-    textureData[valueIndex * 4] = values[valueIndex] ?? 0;
+const buildCellRangeTexture = (cellOffsets: Uint32Array): PackedTexture => {
+  const cellCount = Math.max(0, cellOffsets.length - 1);
+  const width = Math.min(Math.max(cellCount, 1), textureMaxWidth);
+  const height = Math.max(1, Math.ceil(cellCount / width));
+  const textureData = new Uint32Array(width * height * 2);
+  for (let cellIndex = 0; cellIndex < cellCount; cellIndex += 1) {
+    const rangeStart = cellOffsets[cellIndex] ?? 0;
+    const rangeEnd = cellOffsets[cellIndex + 1] ?? rangeStart;
+    textureData[cellIndex * 2] = rangeStart;
+    textureData[cellIndex * 2 + 1] = rangeEnd - rangeStart;
   }
 
   const texture = new THREE.DataTexture(
     textureData,
     width,
     height,
-    THREE.RGBAFormat,
-    THREE.FloatType,
+    THREE.RGIntegerFormat,
+    THREE.UnsignedIntType,
   );
+  texture.internalFormat = "RG32UI";
   texture.magFilter = THREE.NearestFilter;
   texture.minFilter = THREE.NearestFilter;
   texture.wrapS = THREE.ClampToEdgeWrapping;
@@ -832,14 +927,20 @@ function SceneContent({
   onHoverSampleChange,
   onHoverKernelSampleChange,
 }: SceneContentProps) {
+  const bakedMeshBrightness = meshColorMode === "baked" ? brightness : 1;
   const displayMeshVertexColors = useMemo(
     () =>
       adjustDisplayColors(
         data.meshVertexColors,
         pointGammaCorrection && meshColorMode === "baked",
-        brightness,
+        bakedMeshBrightness,
       ),
-    [brightness, data.meshVertexColors, meshColorMode, pointGammaCorrection],
+    [
+      bakedMeshBrightness,
+      data.meshVertexColors,
+      meshColorMode,
+      pointGammaCorrection,
+    ],
   );
 
   const displayPointColors = useMemo(
@@ -967,11 +1068,11 @@ function SceneContent({
     return buildPointTexture(data.spatialHash.sortedPointColors);
   }, [data.spatialHash.sortedPointColors, meshColorMode]);
 
-  const fragmentShaderCellOffsetTexture = useMemo(() => {
+  const fragmentShaderCellRangeTexture = useMemo(() => {
     if (meshColorMode !== "fragment-knn") {
       return null;
     }
-    return buildScalarTexture(data.spatialHash.cellOffsets);
+    return buildCellRangeTexture(data.spatialHash.cellOffsets);
   }, [data.spatialHash.cellOffsets, meshColorMode]);
 
   const fragmentShaderMaterial = useMemo(() => {
@@ -979,7 +1080,7 @@ function SceneContent({
       meshColorMode !== "fragment-knn" ||
       fragmentShaderPointPositionTexture === null ||
       fragmentShaderPointColorTexture === null ||
-      fragmentShaderCellOffsetTexture === null
+      fragmentShaderCellRangeTexture === null
     ) {
       return null;
     }
@@ -990,17 +1091,7 @@ function SceneContent({
           value: fragmentShaderPointPositionTexture.texture,
         },
         pointColorTexture: { value: fragmentShaderPointColorTexture.texture },
-        cellOffsetTexture: { value: fragmentShaderCellOffsetTexture.texture },
-        pointTextureWidth: { value: fragmentShaderPointPositionTexture.width },
-        pointTextureHeight: {
-          value: fragmentShaderPointPositionTexture.height,
-        },
-        cellOffsetTextureWidth: {
-          value: fragmentShaderCellOffsetTexture.width,
-        },
-        cellOffsetTextureHeight: {
-          value: fragmentShaderCellOffsetTexture.height,
-        },
+        cellRangeTexture: { value: fragmentShaderCellRangeTexture.texture },
         gridMin: { value: new THREE.Vector3(...data.spatialHash.min) },
         gridCellSize: {
           value: new THREE.Vector3(...data.spatialHash.cellSize),
@@ -1008,17 +1099,16 @@ function SceneContent({
         gridDimensions: {
           value: new THREE.Vector3(...data.spatialHash.dimensions),
         },
-        brightness: { value: brightness },
-        gammaDecodeEnabled: {
-          value: pointGammaCorrection ? 1 : 0,
-        },
+        brightness: { value: 1 },
+        gammaDecodeEnabled: { value: 1 },
       },
       vertexShader: fragmentKnnVertexShader,
       fragmentShader: buildFragmentKnnFragmentShader(
         data.spatialHash.maxPointsPerCell,
       ),
+      glslVersion: THREE.GLSL3,
       side: THREE.DoubleSide,
-      wireframe: showWireframe && !showSolidMesh,
+      wireframe: false,
       polygonOffset: true,
       polygonOffsetFactor: 1,
       polygonOffsetUnits: 1,
@@ -1028,37 +1118,66 @@ function SceneContent({
     data.spatialHash.dimensions,
     data.spatialHash.maxPointsPerCell,
     data.spatialHash.min,
-    brightness,
-    fragmentShaderCellOffsetTexture,
+    fragmentShaderCellRangeTexture,
     fragmentShaderPointColorTexture,
     fragmentShaderPointPositionTexture,
     meshColorMode,
-    pointGammaCorrection,
-    showSolidMesh,
-    showWireframe,
   ]);
+  const fragmentShaderMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
 
+  useEffect(() => {
+    fragmentShaderMaterialRef.current = fragmentShaderMaterial;
+    return () => {
+      if (fragmentShaderMaterialRef.current === fragmentShaderMaterial) {
+        fragmentShaderMaterialRef.current = null;
+      }
+    };
+  }, [fragmentShaderMaterial]);
+
+  useEffect(() => {
+    const material = fragmentShaderMaterialRef.current;
+    if (material === null) {
+      return;
+    }
+    const brightnessUniform = material.uniforms.brightness;
+    const gammaDecodeUniform = material.uniforms.gammaDecodeEnabled;
+    if (brightnessUniform !== undefined) {
+      brightnessUniform.value = brightness;
+    }
+    if (gammaDecodeUniform !== undefined) {
+      gammaDecodeUniform.value = pointGammaCorrection ? 1 : 0;
+    }
+  }, [brightness, fragmentShaderMaterial, pointGammaCorrection]);
+
+  useEffect(() => {
+    const material = fragmentShaderMaterialRef.current;
+    if (material !== null) {
+      material.wireframe = showWireframe && !showSolidMesh;
+    }
+  }, [fragmentShaderMaterial, showSolidMesh, showWireframe]);
+
+  useEffect(() => () => meshGeometry.dispose(), [meshGeometry]);
+  useEffect(() => () => pointGeometry.dispose(), [pointGeometry]);
+  useEffect(() => () => debugLineGeometry?.dispose(), [debugLineGeometry]);
   useEffect(
-    () => () => {
-      meshGeometry.dispose();
-      pointGeometry.dispose();
-      debugLineGeometry?.dispose();
-      kernelAnchorGeometry?.dispose();
-      fragmentShaderPointPositionTexture?.texture.dispose();
-      fragmentShaderPointColorTexture?.texture.dispose();
-      fragmentShaderCellOffsetTexture?.texture.dispose();
-      fragmentShaderMaterial?.dispose();
-    },
-    [
-      debugLineGeometry,
-      fragmentShaderCellOffsetTexture,
-      fragmentShaderMaterial,
-      fragmentShaderPointColorTexture,
-      fragmentShaderPointPositionTexture,
-      kernelAnchorGeometry,
-      meshGeometry,
-      pointGeometry,
-    ],
+    () => () => kernelAnchorGeometry?.dispose(),
+    [kernelAnchorGeometry],
+  );
+  useEffect(
+    () => () => fragmentShaderPointPositionTexture?.texture.dispose(),
+    [fragmentShaderPointPositionTexture],
+  );
+  useEffect(
+    () => () => fragmentShaderPointColorTexture?.texture.dispose(),
+    [fragmentShaderPointColorTexture],
+  );
+  useEffect(
+    () => () => fragmentShaderCellRangeTexture?.texture.dispose(),
+    [fragmentShaderCellRangeTexture],
+  );
+  useEffect(
+    () => () => fragmentShaderMaterial?.dispose(),
+    [fragmentShaderMaterial],
   );
 
   const sceneRadius = Math.max(data.bounds.radius, 0.25);
