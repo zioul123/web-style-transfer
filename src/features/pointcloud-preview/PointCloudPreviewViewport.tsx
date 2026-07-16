@@ -106,6 +106,8 @@ export function PointCloudPreviewViewport({
             showGroundPlane={viewSettings.showGroundPlane}
             meshColorMode={effectiveMeshColorMode}
             kernelLevelIndex={viewSettings.kernelLevelIndex}
+            showKernelDirections={viewSettings.showKernelDirections}
+            kernelDirectionIndex={viewSettings.kernelDirectionIndex}
             showNeighborDebug
             pointSize={viewSettings.pointSize}
             backgroundColor={viewSettings.backgroundColor}

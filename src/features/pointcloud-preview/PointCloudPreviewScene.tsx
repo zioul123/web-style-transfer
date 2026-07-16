@@ -12,7 +12,9 @@ import {
   pointPositionAt,
   sampleInterpolatedColor,
 } from "./math/interpolation";
+import { buildKernelDirectionOverlayPositions } from "./kernelDirectionOverlay";
 import type {
+  ConvolutionKernelDirectionIndex,
   ConvolutionKernelHitSample,
   ConvolutionKernelLevelData,
   ConvolutionKernelPathGroup,
@@ -39,6 +41,8 @@ type PointCloudPreviewSceneProps = {
   readonly showGroundPlane: boolean;
   readonly meshColorMode: MeshColorMode;
   readonly kernelLevelIndex: number;
+  readonly showKernelDirections: boolean;
+  readonly kernelDirectionIndex: ConvolutionKernelDirectionIndex;
   readonly showNeighborDebug: boolean;
   readonly pointSize: number;
   readonly backgroundColor: PointCloudPreviewBackgroundColor;
@@ -915,6 +919,8 @@ function SceneContent({
   showGroundPlane,
   meshColorMode,
   kernelLevelIndex,
+  showKernelDirections,
+  kernelDirectionIndex,
   showNeighborDebug,
   pointSize,
   backgroundColor,
@@ -1021,6 +1027,17 @@ function SceneContent({
           }
         : buildKernelPathPositions(selectedKernelGroup),
     [selectedKernelGroup],
+  );
+
+  const kernelDirectionOverlayPositions = useMemo(
+    () =>
+      !showKernelDirections || activeKernelLevel === null
+        ? buildKernelDirectionOverlayPositions([], kernelDirectionIndex)
+        : buildKernelDirectionOverlayPositions(
+            activeKernelLevel.groups,
+            kernelDirectionIndex,
+          ),
+    [activeKernelLevel, kernelDirectionIndex, showKernelDirections],
   );
 
   const debugLinePositions = useMemo(() => {
@@ -1191,6 +1208,12 @@ function SceneContent({
   const effectiveKernelPathSphereRadius = effectiveKernelPathPointSize * 0.5;
   const effectiveKernelPathCylinderRadius =
     effectiveKernelPathSphereRadius * 0.45;
+  const effectiveKernelDirectionSourceRadius =
+    effectiveKernelAnchorSphereRadius * 1.15;
+  const effectiveKernelDirectionTargetRadius =
+    effectiveKernelAnchorSphereRadius * 0.72;
+  const effectiveKernelDirectionCylinderRadius =
+    effectiveKernelDirectionTargetRadius * 0.42;
   const sceneBackgroundColor = backgroundColors[backgroundColor];
   const displayHighlightColor = useMemo(
     () =>
@@ -1352,6 +1375,34 @@ function SceneContent({
                 </points>
               )
             ) : null}
+            {showKernelDirections &&
+            kernelDirectionOverlayPositions.sourcePositions.length > 0 ? (
+              <>
+                <InstancedCylinderSegments
+                  linePositions={kernelDirectionOverlayPositions.linePositions}
+                  color="#06b6d4"
+                  radius={effectiveKernelDirectionCylinderRadius}
+                  depthTest={showSolidMesh}
+                  renderOrder={3}
+                />
+                <InstancedSphereMarkers
+                  positions={kernelDirectionOverlayPositions.sourcePositions}
+                  color="#f59e0b"
+                  radius={effectiveKernelDirectionSourceRadius}
+                  depthWrite={false}
+                  depthTest={showSolidMesh}
+                  renderOrder={3}
+                />
+                <InstancedSphereMarkers
+                  positions={kernelDirectionOverlayPositions.targetPositions}
+                  color="#f8fafc"
+                  radius={effectiveKernelDirectionTargetRadius}
+                  depthWrite={false}
+                  depthTest={showSolidMesh}
+                  renderOrder={3}
+                />
+              </>
+            ) : null}
             {highlightKernelSample !== null ? (
               <>
                 <mesh position={highlightKernelSample.point} renderOrder={4}>
@@ -1494,6 +1545,8 @@ export function PointCloudPreviewScene({
   showGroundPlane,
   meshColorMode,
   kernelLevelIndex,
+  showKernelDirections,
+  kernelDirectionIndex,
   showNeighborDebug,
   pointSize,
   backgroundColor,
@@ -1594,6 +1647,8 @@ export function PointCloudPreviewScene({
           showGroundPlane={showGroundPlane}
           meshColorMode={meshColorMode}
           kernelLevelIndex={kernelLevelIndex}
+          showKernelDirections={showKernelDirections}
+          kernelDirectionIndex={kernelDirectionIndex}
           showNeighborDebug={showNeighborDebug}
           pointSize={pointSize}
           backgroundColor={backgroundColor}

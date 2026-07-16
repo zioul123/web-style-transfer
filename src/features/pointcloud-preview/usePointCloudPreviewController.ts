@@ -28,6 +28,8 @@ export const defaultPointCloudPreviewViewSettings: PointCloudPreviewViewSettings
     showGroundPlane: false,
     meshColorMode: "fragment-knn",
     kernelLevelIndex: 0,
+    showKernelDirections: false,
+    kernelDirectionIndex: 0,
     pointSize: defaultPointCloudPreviewPointSize,
     backgroundColor: "white",
     disableGammaDecoding: false,
